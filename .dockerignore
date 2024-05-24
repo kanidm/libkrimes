@@ -1,0 +1,9 @@
+.git
+.github
+.gitignore
+.mypy_cache
+.vscode
+*.md
+**/__pycache__/**
+Makefile
+target

@@ -1,0 +1,20 @@
+FROM opensuse/tumbleweed:latest AS ref_repo
+
+RUN zypper mr -d repo-openh264 && \
+    zypper --gpg-auto-import-keys ref --force
+
+RUN zypper install -y krb5-client krb5-server vim tcpdump iputils iproute2
+
+COPY kdc_test/kadm5.acl /var/lib/kerberos/krb5kdc/kadm5.acl
+COPY kdc_test/kdc.conf /var/lib/kerberos/krb5kdc/kdc.conf
+COPY kdc_test/krb5.conf /etc/krb5.conf
+
+RUN id
+
+RUN bash -c 'yes master_password | kdb5_util create -s && yes admin_password | kadmin.local -q "addprinc root/admin" && yes password | kadmin.local -q "addprinc testuser"'
+
+EXPOSE 88/tcp
+EXPOSE 88/udp
+
+CMD ["/usr/sbin/krb5kdc", "-n"]
+
