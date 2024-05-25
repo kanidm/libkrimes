@@ -12,3 +12,11 @@ homepage = "https://github.com/Firstyear/libkrimes"
 repository = "https://github.com/Firstyear/libkrimes"
 
 [dependencies]
+clap = { version = "4.1", features = ["derive", "env"] }
+tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }
+
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3" }
+
+der = { version = "0.7.9", features = ["alloc", "derive"] }
+
