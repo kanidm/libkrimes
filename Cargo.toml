@@ -18,5 +18,9 @@ tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
 
-der = { version = "0.7.9", features = ["alloc", "derive"] }
+# der = { version = "0.7.9", features = ["alloc", "derive"] }
+der = { git = "https://github.com/scabrero/formats.git", branch="der-tag-generalstring", features = ["alloc", "derive", "flagset"] }
 
+
+[dev-dependencies]
+base64 = "0.22.0"
