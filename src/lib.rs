@@ -69,6 +69,7 @@ impl<'a> EncodeValue for KerberosString {
     fn value_len(&self) -> der::Result<der::Length> {
         Ia5String::value_len(&self.0)
     }
+
     fn encode_value(&self, encoder: &mut impl der::Writer) -> der::Result<()> {
         Ia5String::encode_value(&self.0, encoder)
     }
@@ -287,6 +288,16 @@ impl<'a> ::der::Decode<'a> for KrbKdcReq {
     }
 }
 
+impl<'a> ::der::Encode for KrbKdcReq {
+    fn encoded_len(&self) -> ::der::Result<::der::Length> {
+        todo!();
+    }
+
+    fn encode(&self, encoder: &mut impl ::der::Writer) -> ::der::Result<()> {
+        todo!();
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Sequence)]
 pub struct KdcProxyMessage {
     #[asn1(context_specific = "0")]
@@ -302,7 +313,8 @@ mod tests {
     use super::*;
     use base64::prelude::BASE64_STANDARD;
     use base64::{engine::general_purpose::URL_SAFE, Engine as _};
-    use der::Decode;
+    use der::{Decode, Encode};
+    use std::time::SystemTime;
 
     #[tokio::test]
     async fn basic_klient_to_kdc() {
@@ -319,15 +331,80 @@ mod tests {
             .await
             .expect("Unable to connect to kdc.");
 
+        /*
+        KdcReq {
+            pvno: 5,
+            msg_type: 10,
+            padata: Some([PaData { padata_type: 150, padata_value: OctetString { inner: [] } },
+            PaData { padata_type: 149, padata_value: OctetString { inner: [] } }]),
+            req_body: KdcReqBody {
+                kdc_options: FlagSet(Reserved),
+                cname: Some(PrincipalName { name_type: 1, name_string: [KerberosString(Ia5String("william"))] }),
+                realm: KerberosString(Ia5String("KKDCP.DEV")),
+                sname: Some(PrincipalName { name_type: 2, name_string: [KerberosString(Ia5String("krbtgt")), KerberosString(Ia5String("KKDCP.DEV"))] }),
+                from: None,
+                till: GeneralizedTime(DateTime { year: 2024, month: 4, day: 17, hour: 4, minutes: 15, seconds: 49, unix_duration: 1713327349s }),
+                rtime: None,
+                nonce: 2143135662,
+                etype: [18, 17, 20, 19, 16, 23, 25, 26],
+                addresses: None,
+                enc_authorization_data: None,
+                additional_tickets: None
+            }
+        }
+        */
+
+        let till = Some(
+            GeneralizedTime::from_system_time(SystemTime::now() + Duration::from_secs(3600))
+                .unwrap(),
+        );
+
         // Build an AS-REQ
-        // let as_req =
+        let as_req = KrbKdcReq::AsReq(KdcReq {
+            pvno: 5,
+            // I think it's 10 on asreq?
+            msg_type: 10,
+            padata: None,
+            req_body: KdcReqBody {
+                // No flags
+                kdc_options: KerberosFlags::Reserved.into(),
+                cname: Some(PrincipalName {
+                    // Should be some kind of enum probably?
+                    name_type: 1,
+                    name_string: vec![KerberosString(Ia5String::new("testuser").unwrap())],
+                }),
+                realm: KerberosString(Ia5String::new("EXAMPLE.COM").unwrap()),
+                sname: Some(PrincipalName {
+                    name_type: 2,
+                    name_string: vec![KerberosString(Ia5String::new("testuser").unwrap())],
+                }),
+                from: None,
+                till: None,
+                rtime: None,
+                nonce: 12345,
+                // What enc types we support, also should be an enum.
+                etype: vec![18, 17, 20, 19, 16, 23, 25, 26],
+                addresses: None,
+                enc_authorization_data: None,
+                additional_tickets: None,
+            },
+        });
+
+        let enc_len = as_req.encoded_len().unwrap();
+
+        let mut as_req_bytes = Vec::with_capacity(enc_len + 4);
 
         // First four bytes are length of the AS-REQ
+        let (l, d) = as_req_bytes.split_at_mut(4);
+
+        let enc_len_bytes = u32::from(enc_len).to_be_bytes();
+        l.copy_from_slice(&enc_len_bytes);
 
         // Remaining bytes are the AS-REQ
+        as_req.encode_to_slice(d).unwrap();
 
         stream
-            .write_all(b"hello world!")
+            .write_all(as_req_bytes.as_slice())
             .await
             .expect("Unable to send as-req.");
 
@@ -384,6 +461,7 @@ mod tests {
         let message = KrbKdcReq::from_der(&sample).expect("Failed to decode");
         match message {
             KrbKdcReq::AsReq(asreq) => {
+                info!("{:?}", asreq);
                 assert_eq!(asreq.pvno, 5);
                 let ref cname = &asreq.req_body.cname.as_ref().unwrap();
                 assert_eq!(cname.name_type, 1);
