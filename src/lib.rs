@@ -38,6 +38,8 @@ impl Encoder<KerberosRequest> for KerberosCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosRequest, buf: &mut BytesMut) -> io::Result<()> {
+        debug_assert!(buf.is_empty());
+
         msg.write_to(buf);
 
         todo!();
@@ -62,7 +64,6 @@ mod tests {
     #[tokio::test]
     async fn test_localhost_kdc() {
         let _ = tracing_subscriber::fmt::try_init();
-
 
         let mut stream = TcpStream::connect("127.0.0.1:55000").await
             .expect("Unable to connect to localhost:55000");

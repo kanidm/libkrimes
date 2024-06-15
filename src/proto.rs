@@ -16,6 +16,8 @@ use crate::asn1::{
     DateTime,
 };
 
+use bytes::BytesMut;
+
 use std::time::SystemTime;
 
 
@@ -63,7 +65,7 @@ impl KerberosRequest {
         }
     }
 
-    pub(crate) fn write_to(&self, buf: &mut [u8]) -> Result<(), ()> {
+    pub(crate) fn write_to(&self, buf: &mut BytesMut) -> Result<(), ()> {
         let asn_struct = match self {
             KerberosRequest::AsReq(as_req) =>
                 KrbKdcReq::AsReq(
@@ -73,11 +75,16 @@ impl KerberosRequest {
 
         trace!(?asn_struct);
 
-        todo!();
+        let length = asn_struct.encoded_len().unwrap();
+        let length = u32::try_from(length).unwrap();
 
-        // Encode to der
+        // We need to fit a u32 in here too because of how krb works.
+        buf.resize(4 + length, 0);
 
-        // Write it to the buffer.
+        buf.extend_from_slice(&length.to_be_bytes());
+        asn_struct.encode_to_slice(&mut buf).unwrap();
+
+        Ok(())
     }
 }
 
