@@ -75,6 +75,8 @@ impl KerberosRequest {
 
         trace!(?asn_struct);
 
+        todo!();
+        /*
         let length = asn_struct.encoded_len().unwrap();
         let length = u32::try_from(length).unwrap();
 
@@ -85,6 +87,7 @@ impl KerberosRequest {
         asn_struct.encode_to_slice(&mut buf).unwrap();
 
         Ok(())
+        */
     }
 }
 

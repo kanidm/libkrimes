@@ -87,6 +87,3 @@ mod tests {
         trace!(?response);
     }
 }
-
-
-
