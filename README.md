@@ -12,8 +12,8 @@ docker run -p 55000:88 -i -t libkrime
 Password is `password`
 
 ```
-KRB5_TRACE=/dev/stdout KRB5_CONFIG=krb5.conf /opt/homebrew/opt/krb5/bin/kinit testuser
-KRB5_TRACE=/dev/stdout KRB5_CONFIG=krb5.conf /opt/homebrew/opt/krb5/bin/klist
+KRB5_TRACE=/dev/stdout KRB5_CONFIG=kdc_test/krb5.conf /opt/homebrew/opt/krb5/bin/kinit testuser
+KRB5_TRACE=/dev/stdout KRB5_CONFIG=kdc_test/krb5.conf /opt/homebrew/opt/krb5/bin/klist
 ```
 
 ```
