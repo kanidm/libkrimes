@@ -12,8 +12,15 @@ homepage = "https://github.com/Firstyear/libkrimes"
 repository = "https://github.com/Firstyear/libkrimes"
 
 [dependencies]
+bytes = "^1.1.0"
 clap = { version = "4.1", features = ["derive", "env"] }
+futures = "^0.3.21"
+
+hex = "0.4.3"
+num_enum = "^0.5.11"
 tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }
+
+tokio-util = { version = "^0.7.1", features = ["codec"] }
 
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
@@ -24,3 +31,5 @@ der = { git = "https://github.com/scabrero/formats.git", branch="der-tag-general
 
 [dev-dependencies]
 base64 = "0.22.0"
+
+kerberos_crypto = "0.3.6"

@@ -1,0 +1,74 @@
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+
+#[derive(Debug, TryFromPrimitive, IntoPrimitive)]
+#[repr(i32)]
+pub enum KrbErrorCode {
+    KdcErrNone = 0,                         // No error
+    KdcErrNameExp = 1,                      // Client's entry in database has expired
+    KdcErrServiceExp = 2,                   // Server's entry in database has expired
+    KdcErrBadPvno = 3,                      // Requested protocol version number not supported
+    KdcErrCOldMastKvno = 4,                 // Client's key encrypted in old master key
+    KdcErrSOldMastKvno = 5,                 // Server's key encrypted in old master key
+    KdcErrCPrincipalUnknown = 6,            // Client not found in Kerberos database
+    KdcErrSPrincipalUnknown = 7,            // Server not found in Kerberos database
+    KdcErrPrincipalNotUnique = 8,           // Multiple principal entries in database
+    KdcErrNullKey = 9,                      // The client or server has a null key
+    KdcErrCannotPostdate = 10,              // Ticket not eligible for postdating
+    KdcErrNeverValid = 11,                  // Requested starttime is later than end time
+    KdcErrPolicy = 12,                      // KDC policy rejects request
+    KdcErrBadoption = 13,                   // KDC cannot accommodate requested option
+    KdcErrEtypeNosupp = 14,                 // KDC has no support for encryption type
+    KdcErrSumtypeNosupp = 15,               // KDC has no support for checksum type
+    KdcErrPadataTypeNosupp = 16,            // KDC has no support for padata type
+    KdcErrTrtypeNosupp = 17,                // KDC has no support for transited type
+    KdcErrClientRevoked = 18,               // Clients credentials have been revoked
+    KdcErrServiceRevoked = 19,              // Credentials for server have been revoked
+    KdcErrTgtRevoked = 20,                  // TGT has been revoked
+    KdcErrClientNotyet = 21,                // Client not yet valid; try again later
+    KdcErrServiceNotyet = 22,               // Server not yet valid; try again later
+    KdcErrKeyExpired = 23,                  // Password has expired; change password to reset
+    KdcErrPreauthFailed = 24,               // Pre-authentication information was invalid
+    KdcErrPreauthRequired = 25,             // Additional pre- authentication required
+    KdcErrServerNomatch = 26,               // Requested server and ticket don't match
+    KdcErrMustUseUser2User = 27,            // Server principal valid for user2user only
+    KdcErrPathNotAccepted = 28,             // KDC Policy rejects transited path
+    KdcErrSvcUnavailable = 29,              // A service is not available
+    KrbApErrBadIntegrity = 31,              // Integrity check on decrypted field failed
+    KrbApErrTktExpired = 32,                // Ticket expired
+    KrbApErrTktNyv = 33,                    // Ticket not yet valid
+    KrbApErrRepeat = 34,                    // Request is a replay
+    KrbApErrNotUs = 35,                     // The ticket isn't for us
+    KrbApErrBadmatch = 36,                  // Ticket and authenticator don't match
+    KrbApErrSkew = 37,                      // Clock skew too great
+    KrbApErrBadaddr = 38,                   // Incorrect net address
+    KrbApErrBadversion = 39,                // Protocol version mismatch
+    KrbApErrMsgType = 40,                   // Invalid msg type
+    KrbApErrModified = 41,                  // Message stream modified
+    KrbApErrBadorder = 42,                  // Message out of order
+    KrbApErrBadkeyver = 44,                 // Specified version of key is not available
+    KrbApErrNokey = 45,                     // Service key not available
+    KrbApErrMutFail = 46,                   // Mutual authentication failed
+    KrbApErrBaddirection = 47,              // Incorrect message direction
+    KrbApErrMethod = 48,                    // Alternative authentication method required
+    KrbApErrBadseq = 49,                    // Incorrect sequence number in message
+    KrbApErrInappCksum = 50,                // Inappropriate type of checksum in message
+    KrbApPathNotAccepted = 51,              // Policy rejects transited path
+    KrbErrResponseTooBig = 52,              // Response too big for UDP; retry with TCP
+    KrbErrGeneric = 60,                     // Generic error (description in e-text)
+    KrbErrFieldToolong = 61,                // Field is too long for this implementation
+    KdcErrorClientNotTrusted = 62,          // Reserved for PKINIT
+    KdcErrorKdcNotTrusted = 63,             // Reserved for PKINIT
+    KdcErrorInvalidSig = 64,                // Reserved for PKINIT
+    KdcErrKeyTooWeak = 65,                  // Reserved for PKINIT
+    KdcErrCertificateMismatch = 66,         // Reserved for PKINIT
+    KrbApErrNoTgt = 67,                     // No TGT available to validate USER-TO-USER
+    KdcErrWrongRealm = 68,                  // Reserved for future use
+    KrbApErrUserToUserRequired = 69,        // Ticket must be for USER-TO-USER
+    KdcErrCantVerifyCertificate = 70,       // Reserved for PKINIT
+    KdcErrInvalidCertificate = 71,          // Reserved for PKINIT
+    KdcErrRevokedCertificate = 72,          // Reserved for PKINIT
+    KdcErrRevocationStatusUnknown = 73,     // Reserved for PKINIT
+    KdcErrRevocationStatusUnavailable = 74, // Reserved for PKINIT
+    KdcErrClientNameMismatch = 75,          // Reserved for PKINIT
+    KdcErrKdcNameMismatch = 76,             // Reserved for PKINIT
+}
