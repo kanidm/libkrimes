@@ -1,7 +1,7 @@
 use super::encrypted_data::EncryptedData;
 use super::principal_name::PrincipalName;
 use super::realm::Realm;
-use der::{DecodeValue, EncodeValue, FixedTag, Sequence, Tag, TagNumber};
+use der::{DecodeValue, EncodeValue, FixedTag, Sequence, Tag, TagNumber, Decode};
 
 /// ```text
 /// Ticket          ::= [APPLICATION 1] SEQUENCE {
@@ -34,8 +34,8 @@ impl FixedTag for TaggedTicket {
 }
 
 impl<'a> DecodeValue<'a> for TaggedTicket {
-    fn decode_value<R: der::Reader<'a>>(reader: &mut R, header: der::Header) -> der::Result<Self> {
-        let t: Ticket = Ticket::decode_value(reader, header)?;
+    fn decode_value<R: der::Reader<'a>>(reader: &mut R, _header: der::Header) -> der::Result<Self> {
+        let t: Ticket = Ticket::decode(reader)?;
         Ok(Self(t))
     }
 }

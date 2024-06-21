@@ -20,8 +20,6 @@ pub(crate) struct EncryptedData {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use crate::asn1::constants::EncryptionType;
     use crate::asn1::encrypted_data::EncryptedData;
     use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
