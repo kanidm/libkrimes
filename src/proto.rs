@@ -1,24 +1,28 @@
 use crate::asn1::{
-    constants::{
-        encryption_types::EncryptionType, message_types::KrbMessageType, pa_data_types::PaDataType,
-    },
+    constants::{encryption_types::EncryptionType, message_types::KrbMessageType},
     kdc_req::KdcReq,
     kdc_req_body::KdcReqBody,
     kerberos_flags::KerberosFlags,
     kerberos_string::KerberosString,
     kerberos_time::KerberosTime,
+    krb_kdc_rep::KrbKdcRep,
     krb_kdc_req::KrbKdcReq,
-    pa_data::PaData,
     principal_name::PrincipalName,
     Ia5String,
 };
-use der::{asn1::OctetString, Encode, flagset::FlagSet};
+use der::{flagset::FlagSet, Decode, Encode};
 
 use std::time::SystemTime;
 
 #[derive(Debug)]
 pub enum KerberosRequest {
     AsReq(KerberosAsReq),
+}
+
+#[derive(Debug)]
+pub enum KerberosResponse {
+    AsRep(KerberosAsRep),
+    TgsRep(KerberosTgsRep),
 }
 
 #[derive(Debug)]
@@ -30,12 +34,6 @@ pub struct KerberosAsReqBuilder {
     renew: Option<SystemTime>,
 }
 
-/*
-pub enum KerberosResponse {
-    AsRep(KerberosAsRep),
-}
-*/
-
 #[derive(Debug)]
 pub struct KerberosAsReq {
     client_name: String,
@@ -44,6 +42,12 @@ pub struct KerberosAsReq {
     until: SystemTime,
     renew: Option<SystemTime>,
 }
+
+#[derive(Debug)]
+pub struct KerberosAsRep {}
+
+#[derive(Debug)]
+pub struct KerberosTgsRep {}
 
 impl KerberosRequest {
     pub fn build_asreq(
@@ -60,6 +64,15 @@ impl KerberosRequest {
             until,
             renew,
         }
+    }
+
+    pub(crate) fn from_der(der: Vec<u8>) -> Result<KerberosResponse, der::Error> {
+        let response: KrbKdcRep = KrbKdcRep::from_der(&der)?;
+        let response = match response {
+            KrbKdcRep::AsRep(_as_rep) => KerberosResponse::AsRep(KerberosAsRep {} ),
+            KrbKdcRep::TgsRep(_tgs_rep) => KerberosResponse::TgsRep(KerberosTgsRep {} ),
+        };
+        Ok(response)
     }
 
     pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
@@ -99,7 +112,8 @@ impl KerberosAsReq {
             msg_type: KrbMessageType::KrbAsReq as u8,
             padata: None,
             req_body: KdcReqBody {
-                kdc_options: FlagSet::<KerberosFlags>::new(0b0).expect("Failed to build kdc_options"),
+                kdc_options: FlagSet::<KerberosFlags>::new(0b0)
+                    .expect("Failed to build kdc_options"),
                 cname: Some(PrincipalName {
                     // Should be some kind of enum probably?
                     name_type: 1,

@@ -27,7 +27,7 @@ tracing-subscriber = { version = "0.3" }
 
 # der = { version = "0.7.9", features = ["alloc", "derive"] }
 der = { git = "https://github.com/scabrero/formats.git", branch="der-tag-generalstring", features = ["alloc", "derive", "flagset", "std"] }
-xdr-codec = "0.4.4"
+xdr-codec = { git = "https://github.com/scabrero/rust-xdr.git", branch="implicit_eor" }
 
 
 [dev-dependencies]
