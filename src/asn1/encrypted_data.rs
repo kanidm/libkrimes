@@ -11,11 +11,11 @@ use der::Sequence;
 #[derive(Debug, Eq, PartialEq, Sequence)]
 pub(crate) struct EncryptedData {
     #[asn1(context_specific = "0")]
-    etype: i32,
+    pub(crate) etype: i32,
     #[asn1(context_specific = "1", optional = "true")]
-    kvno: Option<u32>,
+    pub(crate) kvno: Option<u32>,
     #[asn1(context_specific = "2")]
-    cipher: OctetString,
+    pub(crate) cipher: OctetString,
 }
 
 #[cfg(test)]

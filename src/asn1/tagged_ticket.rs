@@ -12,19 +12,25 @@ use der::{DecodeValue, EncodeValue, FixedTag, Sequence, Tag, TagNumber, Decode};
 /// }
 /// ````
 #[derive(Debug, Eq, PartialEq, Sequence)]
-struct Ticket {
+pub(crate) struct Ticket {
     #[asn1(context_specific = "0")]
-    tkt_vno: i8,
+    pub(crate) tkt_vno: i8,
     #[asn1(context_specific = "1")]
-    realm: Realm,
+    pub(crate) realm: Realm,
     #[asn1(context_specific = "2")]
-    sname: PrincipalName,
+    pub(crate) sname: PrincipalName,
     #[asn1(context_specific = "3")]
-    enc_part: EncryptedData,
+    pub(crate) enc_part: EncryptedData,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct TaggedTicket(Ticket);
+
+impl TaggedTicket {
+    pub fn new(tkt: Ticket) -> Self {
+        Self(tkt)
+    }
+}
 
 impl FixedTag for TaggedTicket {
     const TAG: Tag = Tag::Application {
