@@ -1,10 +1,13 @@
 mod asn1;
 pub mod proto;
 
+use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
+use proto::KerberosResponse;
 use std::io::{self};
 use tokio_util::codec::{Decoder, Encoder};
+use xdr_codec::record::XdrRecordReader;
 use xdr_codec::record::XdrRecordWriter;
 use xdr_codec::Write;
 
@@ -19,18 +22,37 @@ pub struct KerberosTcpCodec {
 impl Default for KerberosTcpCodec {
     fn default() -> Self {
         KerberosTcpCodec {
-            max_size: DEFAULT_MAX_SIZE
+            max_size: DEFAULT_MAX_SIZE,
         }
     }
 }
 
 impl Decoder for KerberosTcpCodec {
-    type Item = KerberosRequest;
+    type Item = KerberosResponse;
     type Error = io::Error;
 
-    fn decode(&mut self, _buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // How many bytes to consume?
-        todo!();
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let reader = buf.reader();
+        let mut xdr_reader = XdrRecordReader::new(reader);
+        xdr_reader.set_implicit_eor(true);
+
+        let record = xdr_reader
+            .into_iter()
+            .next();
+
+        let record: Vec<u8> = match record {
+            None => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "XDR reader returned EOF")),
+            Some(rr) => match rr {
+                Err(x) => return Err(x),
+                Ok(buf) => buf,
+            }
+        };
+
+        let rep = KerberosRequest::from_der(record)
+            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
+            .expect("Failed to decode");
+
+        Ok(Some(rep))
     }
 }
 
@@ -79,6 +101,7 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
 
 #[cfg(test)]
 mod tests {
+    use super::KerberosResponse;
     use futures::SinkExt;
     use tokio::net::TcpStream;
     use tokio_util::codec::Framed;
@@ -87,6 +110,8 @@ mod tests {
 
     use super::KerberosTcpCodec;
     use crate::proto::KerberosRequest;
+    use futures::StreamExt;
+    use tracing::trace;
 
     #[tokio::test]
     async fn test_localhost_kdc() {
@@ -113,9 +138,16 @@ mod tests {
             .await
             .expect("Failed to transmit request");
 
-        // What did we get back?
-        //let response = krb_stream.next().await;
+        let response = krb_stream.next().await;
 
-        //trace!(?response);
+        trace!(?response);
+        assert!(response.is_some());
+        let response = response.unwrap();
+        assert!(response.is_ok());
+        let response = response.unwrap();
+        match response {
+            KerberosResponse::AsRep(_) => {}
+            KerberosResponse::TgsRep(_) => {}
+        }
     }
 }
