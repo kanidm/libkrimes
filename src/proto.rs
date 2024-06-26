@@ -248,8 +248,10 @@ impl TryFrom<KdcEncryptedData> for EncryptedData {
     type Error = KrbError;
 
     fn try_from(enc_data: KdcEncryptedData) -> Result<Self, Self::Error> {
-        match enc_data.etype {
-            18 => {
+        let etype: EncryptionType = EncryptionType::try_from(enc_data.etype)
+            .map_err(|_| KrbError::UnsupportedEncryption)?;
+        match etype {
+            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
                 // todo! there is some way to get a number of rounds here
                 // but I can't obviously see it?
                 let kvno = enc_data.kvno;
