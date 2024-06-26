@@ -63,6 +63,8 @@ pub enum EncryptedData {
 
 #[derive(Debug)]
 pub struct KerberosAsRep {
+    pub(crate) client_realm: String,
+    pub(crate) client_name: String,
     pub(crate) enc_part: EncryptedData,
 }
 
@@ -206,7 +208,14 @@ impl TryFrom<KdcRep> for KerberosAsRep {
         let enc_part = EncryptedData::try_from(rep.enc_part)?;
         trace!(?enc_part);
 
-        Ok(KerberosAsRep { enc_part })
+        let client_realm: String = rep.crealm.into();
+        let client_name: String = rep.cname.into();
+
+        Ok(KerberosAsRep {
+            client_realm,
+            client_name,
+            enc_part,
+        })
     }
 }
 

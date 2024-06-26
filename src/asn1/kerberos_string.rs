@@ -29,3 +29,15 @@ impl<'a> EncodeValue for KerberosString {
         Ia5String::encode_value(&self.0, encoder)
     }
 }
+
+impl Into<String> for KerberosString {
+    fn into(self) -> String {
+        self.0.to_string().clone()
+    }
+}
+
+impl KerberosString {
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
