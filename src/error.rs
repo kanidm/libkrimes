@@ -7,4 +7,5 @@ pub enum KrbError {
     PlaintextEmpty,
     CtsCiphertextInvalid,
     UnsupportedEncryption,
+    InvalidMessageType(i32, i32),
 }

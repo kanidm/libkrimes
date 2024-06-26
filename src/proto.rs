@@ -191,26 +191,19 @@ impl TryFrom<KdcRep> for KerberosAsRep {
     type Error = KrbError;
 
     fn try_from(rep: KdcRep) -> Result<Self, Self::Error> {
-        let KdcRep {
-            pvno,
-            msg_type,
-            padata,
-            crealm,
-            cname,
-            ticket,
-            enc_part,
-        } = rep;
-
         // assert the pvno and msg_type
-        if pvno != 5 {
+        if rep.pvno != 5 {
             todo!();
         }
 
-        if msg_type != 11 {
+        let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
+            KrbError::InvalidMessageType(rep.msg_type as i32, KrbMessageType::KrbAsRep as i32)
+        })?;
+        if !matches!(msg_type, KrbMessageType::KrbAsRep) {
             todo!();
         }
 
-        let enc_part = EncryptedData::try_from(enc_part)?;
+        let enc_part = EncryptedData::try_from(rep.enc_part)?;
         trace!(?enc_part);
 
         Ok(KerberosAsRep { enc_part })
