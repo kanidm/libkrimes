@@ -19,5 +19,6 @@ pub mod pa_enc_ts_enc;
 pub mod principal_name;
 pub mod realm;
 pub mod tagged_ticket;
+pub mod ticket_flags;
 
 pub use der::asn1::Ia5String;
