@@ -1,5 +1,6 @@
 pub mod constants;
 pub mod encrypted_data;
+pub mod encryption_key;
 pub mod etype_info2;
 pub mod host_address;
 pub mod host_addresses;
