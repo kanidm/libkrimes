@@ -20,5 +20,6 @@ pub mod principal_name;
 pub mod realm;
 pub mod tagged_ticket;
 pub mod ticket_flags;
+pub mod transited_encoding;
 
 pub use der::asn1::Ia5String;
