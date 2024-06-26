@@ -1,7 +1,7 @@
 use super::encrypted_data::EncryptedData;
 use super::principal_name::PrincipalName;
 use super::realm::Realm;
-use der::{DecodeValue, EncodeValue, FixedTag, Sequence, Tag, TagNumber, Decode};
+use der::{Decode, DecodeValue, EncodeValue, FixedTag, Sequence, Tag, TagNumber};
 
 /// ```text
 /// Ticket          ::= [APPLICATION 1] SEQUENCE {
