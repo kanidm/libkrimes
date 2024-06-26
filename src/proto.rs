@@ -235,11 +235,9 @@ impl EncryptedData {
         }
     }
 
-    pub fn decrypt_data(&self, base_key: &BaseKey) -> Result<Vec<u8>, KrbError> {
+    pub fn decrypt_data(&self, base_key: &BaseKey, key_usage: i32) -> Result<Vec<u8>, KrbError> {
         match (self, base_key) {
             (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, BaseKey::Aes256 { k }) => {
-                // todo! where is key_usage from?
-                let key_usage = 1;
                 decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)
             }
         }
