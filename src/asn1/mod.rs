@@ -1,5 +1,6 @@
 pub mod authorization_data;
 pub mod constants;
+pub mod enc_ticket_part;
 pub mod encrypted_data;
 pub mod encryption_key;
 pub mod etype_info2;
