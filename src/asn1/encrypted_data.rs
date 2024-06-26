@@ -23,7 +23,7 @@ mod tests {
     use crate::asn1::constants::EncryptionType;
     use crate::asn1::encrypted_data::EncryptedData;
     use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
-    use der::{Decode, DateTime};
+    use der::{DateTime, Decode};
 
     #[test]
     fn encrypted_data_parse() {
@@ -37,11 +37,20 @@ mod tests {
         let key = kerberos_crypto::aes_hmac_sha1::generate_key_from_string(
             "Suse1234",
             b"AFOREST.ADuser1",
-            &kerberos_crypto::AesSizes::Aes256
+            &kerberos_crypto::AesSizes::Aes256,
         );
-        let plain = kerberos_crypto::aes_hmac_sha1::decrypt(&key, 1, edata.cipher.as_bytes(), &kerberos_crypto::AesSizes::Aes256).expect("Failed to decrypt");
+        let plain = kerberos_crypto::aes_hmac_sha1::decrypt(
+            &key,
+            1,
+            edata.cipher.as_bytes(),
+            &kerberos_crypto::AesSizes::Aes256,
+        )
+        .expect("Failed to decrypt");
         let paenctsenc = PaEncTsEnc::from_der(&plain).expect("Failed to decode");
-        assert_eq!(paenctsenc.patimestamp.to_date_time(), DateTime::new(2024, 6, 12, 11, 48, 7).expect("Failed to build datetime"));
+        assert_eq!(
+            paenctsenc.patimestamp.to_date_time(),
+            DateTime::new(2024, 6, 12, 11, 48, 7).expect("Failed to build datetime")
+        );
         assert_eq!(paenctsenc.pausec, Some(751259));
     }
 }

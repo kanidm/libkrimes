@@ -1,4 +1,26 @@
+// #![deny(warnings)]
+
+#![warn(unused_extern_crates)]
+// Enable some groups of clippy lints.
+#![deny(clippy::suspicious)]
+#![deny(clippy::perf)]
+// Specific lints to enforce.
+#![deny(clippy::todo)]
+#![deny(clippy::unimplemented)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![deny(clippy::await_holding_lock)]
+#![deny(clippy::needless_pass_by_value)]
+#![deny(clippy::trivially_copy_pass_by_ref)]
+#![deny(clippy::disallowed_types)]
+#![deny(clippy::manual_let_else)]
+#![allow(clippy::unreachable)]
+
 mod asn1;
+pub(crate) mod constants;
+pub(crate) mod crypto;
+pub mod error;
 pub mod proto;
 
 use bytes::Buf;
@@ -11,9 +33,8 @@ use xdr_codec::record::XdrRecordReader;
 use xdr_codec::record::XdrRecordWriter;
 use xdr_codec::Write;
 
+use crate::constants::DEFAULT_IO_MAX_SIZE;
 use crate::proto::KerberosRequest;
-
-const DEFAULT_MAX_SIZE: usize = 32 * 1024;
 
 pub struct KerberosTcpCodec {
     max_size: usize,
@@ -22,7 +43,7 @@ pub struct KerberosTcpCodec {
 impl Default for KerberosTcpCodec {
     fn default() -> Self {
         KerberosTcpCodec {
-            max_size: DEFAULT_MAX_SIZE,
+            max_size: DEFAULT_IO_MAX_SIZE,
         }
     }
 }
@@ -36,19 +57,22 @@ impl Decoder for KerberosTcpCodec {
         let mut xdr_reader = XdrRecordReader::new(reader);
         xdr_reader.set_implicit_eor(true);
 
-        let record = xdr_reader
-            .into_iter()
-            .next();
+        let record = xdr_reader.into_iter().next();
 
         let record: Vec<u8> = match record {
-            None => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "XDR reader returned EOF")),
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "XDR reader returned EOF",
+                ))
+            }
             Some(rr) => match rr {
                 Err(x) => return Err(x),
                 Ok(buf) => buf,
-            }
+            },
         };
 
-        let rep = KerberosRequest::from_der(record)
+        let rep = KerberosResponse::from_der(record)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
@@ -145,9 +169,16 @@ mod tests {
         let response = response.unwrap();
         assert!(response.is_ok());
         let response = response.unwrap();
-        match response {
-            KerberosResponse::AsRep(_) => {}
-            KerberosResponse::TgsRep(_) => {}
-        }
+        let asrep = match response {
+            KerberosResponse::AsRep(asrep) => asrep,
+            KerberosResponse::TgsRep(_) => unreachable!(),
+        };
+
+        let base_key = asrep
+            .enc_part
+            .derive_key(b"password", b"EXAMPLE.COM", b"testuser")
+            .unwrap();
+
+        let cleartext = asrep.enc_part.decrypt_data(&base_key).unwrap();
     }
 }
