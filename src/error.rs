@@ -8,4 +8,5 @@ pub enum KrbError {
     CtsCiphertextInvalid,
     UnsupportedEncryption,
     InvalidMessageType(i32, i32),
+    InvalidEnumValue(String, i32),
 }

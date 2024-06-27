@@ -213,23 +213,31 @@ impl TryFrom<KdcRep> for KerberosAsRep {
         }
 
         let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidMessageType(rep.msg_type as i32, KrbMessageType::KrbAsRep as i32)
+            KrbError::InvalidEnumValue(
+                std::any::type_name::<KrbMessageType>().to_string(),
+                rep.msg_type as i32,
+            )
         })?;
-        if !matches!(msg_type, KrbMessageType::KrbAsRep) {
-            todo!();
+
+        match msg_type {
+            KrbMessageType::KrbAsRep => {
+                let enc_part = EncryptedData::try_from(rep.enc_part)?;
+                trace!(?enc_part);
+
+                let client_realm: String = rep.crealm.into();
+                let client_name: String = rep.cname.into();
+
+                Ok(KerberosAsRep {
+                    client_realm,
+                    client_name,
+                    enc_part,
+                })
+            }
+            _ => Err(KrbError::InvalidMessageType(
+                rep.msg_type as i32,
+                KrbMessageType::KrbAsRep as i32,
+            )),
         }
-
-        let enc_part = EncryptedData::try_from(rep.enc_part)?;
-        trace!(?enc_part);
-
-        let client_realm: String = rep.crealm.into();
-        let client_name: String = rep.cname.into();
-
-        Ok(KerberosAsRep {
-            client_realm,
-            client_name,
-            enc_part,
-        })
     }
 }
 
@@ -243,13 +251,19 @@ impl TryFrom<KdcRep> for KerberosTgsRep {
         }
 
         let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidMessageType(rep.msg_type as i32, KrbMessageType::KrbTgsRep as i32)
+            KrbError::InvalidEnumValue(
+                std::any::type_name::<KrbMessageType>().to_string(),
+                rep.msg_type as i32,
+            )
         })?;
-        if !matches!(msg_type, KrbMessageType::KrbTgsRep) {
-            todo!();
-        }
 
-        Ok(KerberosTgsRep {})
+        match msg_type {
+            KrbMessageType::KrbTgsRep => Ok(KerberosTgsRep {}),
+            _ => Err(KrbError::InvalidMessageType(
+                rep.msg_type as i32,
+                KrbMessageType::KrbTgsRep as i32,
+            )),
+        }
     }
 }
 
