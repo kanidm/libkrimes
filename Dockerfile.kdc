@@ -11,7 +11,7 @@ COPY kdc_test/krb5.conf /etc/krb5.conf
 
 RUN id
 
-RUN bash -c 'yes master_password | kdb5_util create -s && yes admin_password | kadmin.local -q "addprinc root/admin" && yes password | kadmin.local -q "addprinc testuser"'
+RUN bash -c 'yes master_password | kdb5_util create -s && yes admin_password | kadmin.local -q "addprinc root/admin" && yes password | kadmin.local -q "addprinc testuser" && yes password | kadmin.local -q "addprinc +requires_preauth testuser_preauth"'
 
 EXPOSE 88/tcp
 EXPOSE 88/udp
