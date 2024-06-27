@@ -15,7 +15,7 @@ use crate::asn1::{
 use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96};
 use crate::error::KrbError;
-use der::{flagset::FlagSet, Decode, Encode};
+use der::{flagset::FlagSet, Decode, Encode, Tag, TagNumber};
 
 use std::time::SystemTime;
 use tracing::trace;
@@ -99,22 +99,36 @@ impl KerberosRequest {
     }
 }
 
-impl KerberosResponse {
-    pub(crate) fn from_der(der: Vec<u8>) -> Result<Self, der::Error> {
-        let response: KrbKdcRep = KrbKdcRep::from_der(&der)?;
-        trace!(?response);
-        let response = match response {
-            KrbKdcRep::AsRep(as_rep) => {
-                let as_rep = KerberosAsRep::try_from(as_rep).expect("Failed to parse as rep");
-                KerberosResponse::AsRep(as_rep)
-            }
-            KrbKdcRep::TgsRep(_tgs_rep) => KerberosResponse::TgsRep(KerberosTgsRep {}),
-        };
-        Ok(response)
-    }
+impl<'a> ::der::Decode<'a> for KerberosResponse {
+    fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
+        let tag: der::Tag = decoder.decode()?;
+        let _len: der::Length = decoder.decode()?;
 
-    pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
-        todo!();
+        match tag {
+            Tag::Application {
+                constructed: true,
+                number: TagNumber::N11,
+            } => {
+                let kdc_rep: KdcRep = decoder.decode()?;
+                //let kdc_rep: KrbKdcRep = KrbKdcRep::AsRep(kdc_rep);
+                let as_rep: KerberosAsRep =
+                    KerberosAsRep::try_from(kdc_rep).expect("Failed to parse as rep");
+                Ok(KerberosResponse::AsRep(as_rep))
+            }
+            Tag::Application {
+                constructed: true,
+                number: TagNumber::N13,
+            } => {
+                let kdc_rep: KdcRep = decoder.decode()?;
+                let tgs_rep: KerberosTgsRep =
+                    KerberosTgsRep::try_from(kdc_rep).expect("Failed to parse tgs rep");
+                Ok(KerberosResponse::TgsRep(tgs_rep))
+            }
+            _ => Err(der::Error::from(der::ErrorKind::TagUnexpected {
+                expected: None,
+                actual: tag,
+            })),
+        }
     }
 }
 
@@ -216,6 +230,26 @@ impl TryFrom<KdcRep> for KerberosAsRep {
             client_name,
             enc_part,
         })
+    }
+}
+
+impl TryFrom<KdcRep> for KerberosTgsRep {
+    type Error = KrbError;
+
+    fn try_from(rep: KdcRep) -> Result<Self, Self::Error> {
+        // assert the pvno and msg_type
+        if rep.pvno != 5 {
+            todo!();
+        }
+
+        let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
+            KrbError::InvalidMessageType(rep.msg_type as i32, KrbMessageType::KrbTgsRep as i32)
+        })?;
+        if !matches!(msg_type, KrbMessageType::KrbTgsRep) {
+            todo!();
+        }
+
+        Ok(KerberosTgsRep {})
     }
 }
 

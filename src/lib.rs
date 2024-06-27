@@ -32,6 +32,7 @@ use tokio_util::codec::{Decoder, Encoder};
 use xdr_codec::record::XdrRecordReader;
 use xdr_codec::record::XdrRecordWriter;
 use xdr_codec::Write;
+use der::Decode;
 
 use crate::constants::DEFAULT_IO_MAX_SIZE;
 use crate::proto::KerberosRequest;
@@ -72,7 +73,7 @@ impl Decoder for KerberosTcpCodec {
             },
         };
 
-        let rep = KerberosResponse::from_der(record)
+        let rep = KerberosResponse::from_der(&record)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
