@@ -28,6 +28,7 @@ pub(crate) fn derive_key_aes256_cts_hmac_sha1_96(
     iter_count: Option<u32>,
 ) -> Result<[u8; AES_256_KEY_LEN], KrbError> {
     // Salt is the concatenation of realm + cname.
+    // NOTE: Salt may come in AS-REP padata ETYPE-INFO2
     let mut salt = Vec::with_capacity(realm.len() + cname.len());
     salt.extend_from_slice(realm);
     salt.extend_from_slice(cname);

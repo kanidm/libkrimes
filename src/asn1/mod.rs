@@ -1,5 +1,8 @@
+pub mod authorization_data;
 pub mod constants;
+pub mod enc_ticket_part;
 pub mod encrypted_data;
+pub mod encryption_key;
 pub mod etype_info2;
 pub mod host_address;
 pub mod host_addresses;
@@ -19,5 +22,7 @@ pub mod pa_enc_ts_enc;
 pub mod principal_name;
 pub mod realm;
 pub mod tagged_ticket;
+pub mod ticket_flags;
+pub mod transited_encoding;
 
 pub use der::asn1::Ia5String;

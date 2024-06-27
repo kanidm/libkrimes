@@ -179,6 +179,9 @@ mod tests {
             .derive_key(b"password", b"EXAMPLE.COM", b"testuser")
             .unwrap();
 
-        let cleartext = asrep.enc_part.decrypt_data(&base_key).unwrap();
+        // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
+        // message, using the client's long-term key or another key selected
+        // via pre-authentication mechanisms.
+        let cleartext = asrep.enc_part.decrypt_data(&base_key, 3).unwrap();
     }
 }

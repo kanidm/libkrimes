@@ -63,6 +63,8 @@ pub enum EncryptedData {
 
 #[derive(Debug)]
 pub struct KerberosAsRep {
+    pub(crate) client_realm: String,
+    pub(crate) client_name: String,
     pub(crate) enc_part: EncryptedData,
 }
 
@@ -191,29 +193,29 @@ impl TryFrom<KdcRep> for KerberosAsRep {
     type Error = KrbError;
 
     fn try_from(rep: KdcRep) -> Result<Self, Self::Error> {
-        let KdcRep {
-            pvno,
-            msg_type,
-            padata,
-            crealm,
-            cname,
-            ticket,
-            enc_part,
-        } = rep;
-
         // assert the pvno and msg_type
-        if pvno != 5 {
+        if rep.pvno != 5 {
             todo!();
         }
 
-        if msg_type != 11 {
+        let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
+            KrbError::InvalidMessageType(rep.msg_type as i32, KrbMessageType::KrbAsRep as i32)
+        })?;
+        if !matches!(msg_type, KrbMessageType::KrbAsRep) {
             todo!();
         }
 
-        let enc_part = EncryptedData::try_from(enc_part)?;
+        let enc_part = EncryptedData::try_from(rep.enc_part)?;
         trace!(?enc_part);
 
-        Ok(KerberosAsRep { enc_part })
+        let client_realm: String = rep.crealm.into();
+        let client_name: String = rep.cname.into();
+
+        Ok(KerberosAsRep {
+            client_realm,
+            client_name,
+            enc_part,
+        })
     }
 }
 
@@ -235,11 +237,9 @@ impl EncryptedData {
         }
     }
 
-    pub fn decrypt_data(&self, base_key: &BaseKey) -> Result<Vec<u8>, KrbError> {
+    pub fn decrypt_data(&self, base_key: &BaseKey, key_usage: i32) -> Result<Vec<u8>, KrbError> {
         match (self, base_key) {
             (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, BaseKey::Aes256 { k }) => {
-                // todo! where is key_usage from?
-                let key_usage = 1;
                 decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)
             }
         }
@@ -250,8 +250,10 @@ impl TryFrom<KdcEncryptedData> for EncryptedData {
     type Error = KrbError;
 
     fn try_from(enc_data: KdcEncryptedData) -> Result<Self, Self::Error> {
-        match enc_data.etype {
-            18 => {
+        let etype: EncryptionType = EncryptionType::try_from(enc_data.etype)
+            .map_err(|_| KrbError::UnsupportedEncryption)?;
+        match etype {
+            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
                 // todo! there is some way to get a number of rounds here
                 // but I can't obviously see it?
                 let kvno = enc_data.kvno;
