@@ -134,6 +134,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::KerberosTcpCodec;
+    use crate::asn1::constants::PaDataType;
     use crate::asn1::constants::errors::KrbErrorCode;
     use crate::proto::{KerberosErrRep, KerberosRequest};
     use futures::StreamExt;
@@ -229,5 +230,24 @@ mod tests {
             err.error_code as i32,
             KrbErrorCode::KdcErrPreauthRequired as i32
         );
+
+        // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
+        let padata = err.pa_data.unwrap();
+        assert!(padata.iter().any(|y| y.pa_type == (PaDataType::PaEncTimestamp as u32)));
+
+        // Assert returned preauth data contains PA-ETYPE-INFO2
+        assert!(padata.iter().any(|y| y.pa_type == (PaDataType::PaEncTimestamp as u32)));
+
+        // The PA-ENC-TIMESTAMP method MUST be supported by
+        // clients, but whether it is enabled by default MAY be determined on
+        // a realm-by-realm basis.
+        // If the method is not used in the initial request and the error
+        // KDC_ERR_PREAUTH_REQUIRED is returned specifying PA-ENC-TIMESTAMP
+        // as an acceptable method, the client SHOULD retry the initial
+        // request using the PA-ENC-TIMESTAMP pre- authentication method.
+        //
+        // The ETYPE-INFO2 method MUST be supported; this method is used to
+        // communicate the set of supported encryption types, and
+        // corresponding salt and string to key parameters.
     }
 }

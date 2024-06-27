@@ -9,7 +9,9 @@ use crate::asn1::{
     kerberos_flags::KerberosFlags,
     kerberos_string::KerberosString,
     kerberos_time::KerberosTime,
+    krb_error::MethodData,
     krb_kdc_req::KrbKdcReq,
+    pa_data::PaData,
     principal_name::PrincipalName,
     Ia5String,
 };
@@ -74,8 +76,15 @@ pub struct KerberosAsRep {
 pub struct KerberosTgsRep {}
 
 #[derive(Debug)]
+pub struct PreAuthData {
+    pub(crate) pa_type: u32,
+    pub(crate) pa_value: Vec<u8>,
+}
+
+#[derive(Debug)]
 pub struct KerberosErrRep {
     pub(crate) error_code: KrbErrorCode,
+    pub(crate) pa_data: Option<Vec<PreAuthData>>,
 }
 
 impl KerberosRequest {
@@ -300,14 +309,39 @@ impl TryFrom<crate::asn1::krb_error::KrbError> for KerberosErrRep {
         })?;
 
         match msg_type {
-            KrbMessageType::KrbError => Ok(KerberosErrRep {
-                error_code: KrbErrorCode::try_from(rep.error_code).map_err(|_| {
+            KrbMessageType::KrbError => {
+                let error_code = KrbErrorCode::try_from(rep.error_code).map_err(|_| {
                     KrbError::InvalidEnumValue(
                         std::any::type_name::<KrbErrorCode>().to_string(),
                         rep.error_code,
                     )
-                })?,
-            }),
+                })?;
+
+                let pa_data: Option<Vec<PreAuthData>> = match error_code {
+                    KrbErrorCode::KdcErrPreauthRequired => {
+                        if let Some(edata) = rep.error_data {
+                            let pavec: Vec<PaData> =
+                                MethodData::from_der(edata.as_bytes()).expect("Failed to decode");
+                            let pavec: Vec<PreAuthData> = pavec
+                                .iter()
+                                .map(|pa| PreAuthData {
+                                    pa_type: pa.padata_type,
+                                    pa_value: pa.padata_value.as_bytes().into(),
+                                })
+                                .collect();
+                            Some(pavec)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                Ok(KerberosErrRep {
+                    error_code,
+                    pa_data,
+                })
+            }
             _ => Err(KrbError::InvalidMessageType(
                 rep.msg_type as i32,
                 KrbMessageType::KrbError as i32,
