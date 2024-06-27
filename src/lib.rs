@@ -26,13 +26,13 @@ pub mod proto;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
+use der::Decode;
 use proto::KerberosResponse;
 use std::io::{self};
 use tokio_util::codec::{Decoder, Encoder};
 use xdr_codec::record::XdrRecordReader;
 use xdr_codec::record::XdrRecordWriter;
 use xdr_codec::Write;
-use der::Decode;
 
 use crate::constants::DEFAULT_IO_MAX_SIZE;
 use crate::proto::KerberosRequest;
@@ -173,6 +173,7 @@ mod tests {
         let asrep = match response {
             KerberosResponse::AsRep(asrep) => asrep,
             KerberosResponse::TgsRep(_) => unreachable!(),
+            KerberosResponse::ErrRep(_) => unreachable!(),
         };
 
         let base_key = asrep
