@@ -421,6 +421,8 @@ fn decrypt_aes256_cts(key: &[u8; AES_256_KEY_LEN], ciphertext: &[u8]) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
+    use der::Decode;
 
     #[test]
     fn test_hmac_sha1_96_kerbeiros() {
@@ -629,5 +631,28 @@ mod tests {
         let data = decrypt_aes256_cts_hmac_sha1_96(&out_key, &enc_data, key_usage).unwrap();
 
         assert_eq!(data, input_data);
+    }
+
+    #[test]
+    fn test_aes256_cts_hmac_sha1_pa_enc_timestamp_decrypt() {
+        let enc_data = hex::decode("b736f4dba847718b9f634b7ac94d5d691663164d877a0d875b94f786222ae9dca8cf68a972cfe6b5bec1c29682ec3c507307e7c32eedc032")
+            .unwrap();
+
+        let out_key = derive_key_external_salt_aes256_cts_hmac_sha1_96(
+            "password".as_bytes(),
+            "EXAMPLE.COMtestuser_preauth".as_bytes(),
+            None,
+        )
+        .unwrap();
+
+        let key_usage = 1;
+
+        let data = decrypt_aes256_cts_hmac_sha1_96(&out_key, &enc_data, key_usage).unwrap();
+
+        eprintln!("{:?}", data);
+
+        let pa_enc_ts_enc = PaEncTsEnc::from_der(&data).unwrap();
+
+        eprintln!("{:?}", pa_enc_ts_enc);
     }
 }

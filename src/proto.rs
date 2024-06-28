@@ -68,8 +68,9 @@ pub struct KerberosAsReq {
 }
 
 #[derive(Debug)]
-pub enum PreAuth {
-    EncTimestamp { enc_data: Vec<u8> },
+pub struct PreAuth {
+    enc_timestamp: Option<Vec<u8>>,
+    pa_fx_cookie: Option<Vec<u8>>,
 }
 
 pub enum BaseKey {
@@ -272,17 +273,25 @@ impl KerberosAsReqBuilder {
 impl KerberosAsReq {
     fn to_asn(&self) -> Result<KdcReq, der::Error> {
         let padata = if let Some(preauth) = &self.preauth {
-            // In future we may need to send multiple data here.
-            let padata_inner = match preauth {
-                PreAuth::EncTimestamp { enc_data } => {
-                    let padata_value = OctetString::new(enc_data.clone())?;
-                    PaData {
-                        padata_type: PaDataType::PaEncTimestamp as u32,
-                        padata_value,
-                    }
-                }
-            };
-            Some(vec![padata_inner])
+            let mut padata_inner = Vec::with_capacity(2);
+
+            if let Some(enc_data) = &preauth.enc_timestamp {
+                let padata_value = OctetString::new(enc_data.clone())?;
+                padata_inner.push(PaData {
+                    padata_type: PaDataType::PaEncTimestamp as u32,
+                    padata_value,
+                })
+            }
+
+            if let Some(fx_cookie) = &preauth.pa_fx_cookie {
+                let padata_value = OctetString::new(fx_cookie.clone())?;
+                padata_inner.push(PaData {
+                    padata_type: PaDataType::PaFxCookie as u32,
+                    padata_value,
+                })
+            }
+
+            Some(padata_inner)
         } else {
             None
         };
@@ -592,11 +601,13 @@ impl KerberosPaRep {
             pausec: None,
         };
 
+        eprintln!("{:?}", paenctsenc);
+
         let data = paenctsenc
             .to_der()
             .map_err(|_| KrbError::DerEncodePaEncTsEnc)?;
 
-        let enc_data = match einfo2.etype {
+        let enc_timestamp = match einfo2.etype {
             EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
                 let iter_count = if let Some(s2kparams) = &einfo2.s2kparams {
                     if s2kparams.len() != 4 {
@@ -631,6 +642,12 @@ impl KerberosPaRep {
             _ => return Err(KrbError::UnsupportedEncryption),
         };
 
-        Ok(PreAuth::EncTimestamp { enc_data })
+        // fx cookie always has to be sent.
+        let pa_fx_cookie = self.pa_fx_cookie.clone();
+
+        Ok(PreAuth {
+            enc_timestamp: Some(enc_timestamp),
+            pa_fx_cookie,
+        })
     }
 }
