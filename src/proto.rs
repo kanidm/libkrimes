@@ -21,6 +21,7 @@ use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96};
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode, Tag, TagNumber};
+use rand::{thread_rng, Rng};
 
 use std::time::SystemTime;
 use tracing::trace;
@@ -51,6 +52,7 @@ pub struct KerberosAsReqBuilder {
 
 #[derive(Debug)]
 pub struct KerberosAsReq {
+    nonce: u32,
     client_name: String,
     service_name: String,
     from: Option<SystemTime>,
@@ -100,6 +102,14 @@ pub struct EtypeInfo2 {
     etype: EncryptionType,
     // Should probably be vecu8 ...
     salt: Option<String>,
+
+    // For AES HMAC SHA1:
+    //   The number of iterations is specified by the string-to-key parameters
+    //   supplied.  The parameter string is four octets indicating an unsigned
+    //   number in big-endian order.  This is the number of iterations to be
+    //   performed.  If the value is 00 00 00 00, the number of iterations to
+    //   be performed is 4,294,967,296 (2**32).  (Thus the minimum expressible
+    //   iteration count is 1.)
     s2kparams: Option<Vec<u8>>,
 }
 
@@ -195,7 +205,10 @@ impl KerberosAsReqBuilder {
             renew,
         } = self;
 
+        let nonce = thread_rng().gen();
+
         KerberosRequest::AsReq(KerberosAsReq {
+            nonce,
             client_name,
             service_name,
             from,
@@ -207,9 +220,6 @@ impl KerberosAsReqBuilder {
 
 impl KerberosAsReq {
     fn to_asn(&self) -> KdcReq {
-        // TODO MAKE THIS RANDOM
-        let nonce = 12345;
-
         KdcReq {
             pvno: 5,
             msg_type: KrbMessageType::KrbAsReq as u8,
@@ -240,7 +250,7 @@ impl KerberosAsReq {
                     KerberosTime::from_system_time(t)
                         .expect("Failed to build KerberosTime from SystemTime")
                 }),
-                nonce,
+                nonce: self.nonce,
                 etype: vec![
                     EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
                     // MIT KRB5 claims to support these values, but if they are provided then MIT
