@@ -13,8 +13,8 @@ use der::Sequence;
 pub(crate) struct ETypeInfo2Entry {
     #[asn1(context_specific = "0")]
     pub(crate) etype: i32,
-    #[asn1(context_specific = "1")]
-    pub(crate) salt: KerberosString,
+    #[asn1(context_specific = "1", optional = "true")]
+    pub(crate) salt: Option<KerberosString>,
     #[asn1(context_specific = "2", optional = "true")]
     pub(crate) s2kparams: Option<OctetString>,
 }
@@ -22,7 +22,6 @@ pub(crate) struct ETypeInfo2Entry {
 /// ```text
 /// ETYPE-INFO2             ::= SEQUENCE SIZE (1..MAX) OF ETYPE-INFO2-ENTRY
 /// ```
-#[cfg(test)]
 pub(crate) type ETypeInfo2 = Vec<ETypeInfo2Entry>;
 
 #[cfg(test)]
@@ -37,7 +36,7 @@ mod tests {
         let blob = hex::decode(&blob).expect("Failed to decode sample");
         let info2 = ETypeInfo2Entry::from_der(&blob).expect("Failed to decode");
         assert_eq!(info2.etype, EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32);
-        assert_eq!(info2.salt.0.to_string(), "AFOREST.ADuser1");
+        assert_eq!(info2.salt.unwrap().0.to_string(), "AFOREST.ADuser1");
         assert!(info2.s2kparams.is_none());
     }
 }

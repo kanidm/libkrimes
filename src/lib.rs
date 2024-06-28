@@ -134,9 +134,9 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::KerberosTcpCodec;
-    use crate::asn1::constants::PaDataType;
     use crate::asn1::constants::errors::KrbErrorCode;
-    use crate::proto::{KerberosErrRep, KerberosRequest};
+    use crate::asn1::constants::PaDataType;
+    use crate::proto::KerberosRequest;
     use futures::StreamExt;
     use tracing::trace;
 
@@ -174,8 +174,7 @@ mod tests {
         let response = response.unwrap();
         let asrep = match response {
             KerberosResponse::AsRep(asrep) => asrep,
-            KerberosResponse::TgsRep(_) => unreachable!(),
-            KerberosResponse::ErrRep(_) => unreachable!(),
+            _ => unreachable!(),
         };
 
         let base_key = asrep
@@ -221,22 +220,10 @@ mod tests {
         let response = response.unwrap();
         assert!(response.is_ok());
         let response = response.unwrap();
-        let err: KerberosErrRep = match response {
-            KerberosResponse::AsRep(_) => unreachable!(),
-            KerberosResponse::TgsRep(_) => unreachable!(),
-            KerberosResponse::ErrRep(err) => err,
+        let pa_rep = match response {
+            KerberosResponse::PaRep(pa_rep) => pa_rep,
+            _ => unreachable!(),
         };
-        assert_eq!(
-            err.error_code as i32,
-            KrbErrorCode::KdcErrPreauthRequired as i32
-        );
-
-        // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
-        let padata = err.pa_data.unwrap();
-        assert!(padata.iter().any(|y| y.pa_type == (PaDataType::PaEncTimestamp as u32)));
-
-        // Assert returned preauth data contains PA-ETYPE-INFO2
-        assert!(padata.iter().any(|y| y.pa_type == (PaDataType::PaEncTimestamp as u32)));
 
         // The PA-ENC-TIMESTAMP method MUST be supported by
         // clients, but whether it is enabled by default MAY be determined on
@@ -249,5 +236,20 @@ mod tests {
         // The ETYPE-INFO2 method MUST be supported; this method is used to
         // communicate the set of supported encryption types, and
         // corresponding salt and string to key parameters.
+
+        // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
+        assert!(pa_rep.enc_timestamp);
+
+        // Assert returned preauth data contains PA-ETYPE-INFO2
+        assert!(!pa_rep.etype_info2.is_empty());
+
+        // Compute the pre-authentication.
+
+        /*
+                PreAuthData { pa_type: 136, pa_value: [] } // PA-FX-FAST
+        PreAuthData { pa_type: 19, pa_value: [48, 38, 48, 36, 160, 3, 2, 1, 18, 161, 29, 27, 27, 69, 88, 65, 77, 80, 76, 69, 46, 67, 79, 77, 116, 101, 115, 116, 117, 115, 101, 114, 95, 112, 114, 101, 97, 117, 116, 104] } // etype-info-2
+        PreAuthData { pa_type: 2, pa_value: [] } // enc ts
+        PreAuthData { pa_type: 133, pa_value: [77, 73, 84] } // PA-FX-COOKIE
+                */
     }
 }

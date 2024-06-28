@@ -7,6 +7,10 @@ pub enum KrbError {
     PlaintextEmpty,
     CtsCiphertextInvalid,
     UnsupportedEncryption,
+    MissingPaData,
+    DerDecodePaData,
+    DerDecodeEtypeInfo2,
+
     InvalidMessageType(i32, i32),
     InvalidEnumValue(String, i32),
 }
