@@ -1,5 +1,7 @@
 use crate::asn1::{
-    constants::{encryption_types::EncryptionType, message_types::KrbMessageType},
+    constants::{
+        encryption_types::EncryptionType, errors::KrbErrorCode, message_types::KrbMessageType,
+    },
     encrypted_data::EncryptedData as KdcEncryptedData,
     kdc_rep::KdcRep,
     kdc_req::KdcReq,
@@ -7,15 +9,16 @@ use crate::asn1::{
     kerberos_flags::KerberosFlags,
     kerberos_string::KerberosString,
     kerberos_time::KerberosTime,
-    krb_kdc_rep::KrbKdcRep,
+    krb_error::MethodData,
     krb_kdc_req::KrbKdcReq,
+    pa_data::PaData,
     principal_name::PrincipalName,
     Ia5String,
 };
 use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96};
 use crate::error::KrbError;
-use der::{flagset::FlagSet, Decode, Encode};
+use der::{flagset::FlagSet, Decode, Encode, Tag, TagNumber};
 
 use std::time::SystemTime;
 use tracing::trace;
@@ -29,6 +32,7 @@ pub enum KerberosRequest {
 pub enum KerberosResponse {
     AsRep(KerberosAsRep),
     TgsRep(KerberosTgsRep),
+    ErrRep(KerberosErrRep),
 }
 
 #[derive(Debug)]
@@ -71,6 +75,18 @@ pub struct KerberosAsRep {
 #[derive(Debug)]
 pub struct KerberosTgsRep {}
 
+#[derive(Debug)]
+pub struct PreAuthData {
+    pub(crate) pa_type: u32,
+    pub(crate) pa_value: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct KerberosErrRep {
+    pub(crate) error_code: KrbErrorCode,
+    pub(crate) pa_data: Option<Vec<PreAuthData>>,
+}
+
 impl KerberosRequest {
     pub fn build_asreq(
         client_name: String,
@@ -99,22 +115,45 @@ impl KerberosRequest {
     }
 }
 
-impl KerberosResponse {
-    pub(crate) fn from_der(der: Vec<u8>) -> Result<Self, der::Error> {
-        let response: KrbKdcRep = KrbKdcRep::from_der(&der)?;
-        trace!(?response);
-        let response = match response {
-            KrbKdcRep::AsRep(as_rep) => {
-                let as_rep = KerberosAsRep::try_from(as_rep).expect("Failed to parse as rep");
-                KerberosResponse::AsRep(as_rep)
-            }
-            KrbKdcRep::TgsRep(_tgs_rep) => KerberosResponse::TgsRep(KerberosTgsRep {}),
-        };
-        Ok(response)
-    }
+impl<'a> ::der::Decode<'a> for KerberosResponse {
+    fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
+        let tag: der::Tag = decoder.decode()?;
+        let _len: der::Length = decoder.decode()?;
 
-    pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
-        todo!();
+        match tag {
+            Tag::Application {
+                constructed: true,
+                number: TagNumber::N11,
+            } => {
+                let kdc_rep: KdcRep = decoder.decode()?;
+                //let kdc_rep: KrbKdcRep = KrbKdcRep::AsRep(kdc_rep);
+                let as_rep: KerberosAsRep =
+                    KerberosAsRep::try_from(kdc_rep).expect("Failed to parse as rep");
+                Ok(KerberosResponse::AsRep(as_rep))
+            }
+            Tag::Application {
+                constructed: true,
+                number: TagNumber::N13,
+            } => {
+                let kdc_rep: KdcRep = decoder.decode()?;
+                let tgs_rep: KerberosTgsRep =
+                    KerberosTgsRep::try_from(kdc_rep).expect("Failed to parse tgs rep");
+                Ok(KerberosResponse::TgsRep(tgs_rep))
+            }
+            Tag::Application {
+                constructed: true,
+                number: TagNumber::N30,
+            } => {
+                let kdc_rep: crate::asn1::krb_error::KrbError = decoder.decode()?;
+                let err_rep: KerberosErrRep =
+                    KerberosErrRep::try_from(kdc_rep).expect("Failed to parse err rep");
+                Ok(KerberosResponse::ErrRep(err_rep))
+            }
+            _ => Err(der::Error::from(der::ErrorKind::TagUnexpected {
+                expected: None,
+                actual: tag,
+            })),
+        }
     }
 }
 
@@ -199,23 +238,115 @@ impl TryFrom<KdcRep> for KerberosAsRep {
         }
 
         let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidMessageType(rep.msg_type as i32, KrbMessageType::KrbAsRep as i32)
+            KrbError::InvalidEnumValue(
+                std::any::type_name::<KrbMessageType>().to_string(),
+                rep.msg_type as i32,
+            )
         })?;
-        if !matches!(msg_type, KrbMessageType::KrbAsRep) {
+
+        match msg_type {
+            KrbMessageType::KrbAsRep => {
+                let enc_part = EncryptedData::try_from(rep.enc_part)?;
+                trace!(?enc_part);
+
+                let client_realm: String = rep.crealm.into();
+                let client_name: String = rep.cname.into();
+
+                Ok(KerberosAsRep {
+                    client_realm,
+                    client_name,
+                    enc_part,
+                })
+            }
+            _ => Err(KrbError::InvalidMessageType(
+                rep.msg_type as i32,
+                KrbMessageType::KrbAsRep as i32,
+            )),
+        }
+    }
+}
+
+impl TryFrom<KdcRep> for KerberosTgsRep {
+    type Error = KrbError;
+
+    fn try_from(rep: KdcRep) -> Result<Self, Self::Error> {
+        // assert the pvno and msg_type
+        if rep.pvno != 5 {
             todo!();
         }
 
-        let enc_part = EncryptedData::try_from(rep.enc_part)?;
-        trace!(?enc_part);
+        let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
+            KrbError::InvalidEnumValue(
+                std::any::type_name::<KrbMessageType>().to_string(),
+                rep.msg_type as i32,
+            )
+        })?;
 
-        let client_realm: String = rep.crealm.into();
-        let client_name: String = rep.cname.into();
+        match msg_type {
+            KrbMessageType::KrbTgsRep => Ok(KerberosTgsRep {}),
+            _ => Err(KrbError::InvalidMessageType(
+                rep.msg_type as i32,
+                KrbMessageType::KrbTgsRep as i32,
+            )),
+        }
+    }
+}
 
-        Ok(KerberosAsRep {
-            client_realm,
-            client_name,
-            enc_part,
-        })
+impl TryFrom<crate::asn1::krb_error::KrbError> for KerberosErrRep {
+    type Error = KrbError;
+
+    fn try_from(rep: crate::asn1::krb_error::KrbError) -> Result<Self, Self::Error> {
+        // assert the pvno and msg_type
+        if rep.pvno != 5 {
+            todo!();
+        }
+
+        let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
+            KrbError::InvalidEnumValue(
+                std::any::type_name::<KrbMessageType>().to_string(),
+                rep.msg_type as i32,
+            )
+        })?;
+
+        match msg_type {
+            KrbMessageType::KrbError => {
+                let error_code = KrbErrorCode::try_from(rep.error_code).map_err(|_| {
+                    KrbError::InvalidEnumValue(
+                        std::any::type_name::<KrbErrorCode>().to_string(),
+                        rep.error_code,
+                    )
+                })?;
+
+                let pa_data: Option<Vec<PreAuthData>> = match error_code {
+                    KrbErrorCode::KdcErrPreauthRequired => {
+                        if let Some(edata) = rep.error_data {
+                            let pavec: Vec<PaData> =
+                                MethodData::from_der(edata.as_bytes()).expect("Failed to decode");
+                            let pavec: Vec<PreAuthData> = pavec
+                                .iter()
+                                .map(|pa| PreAuthData {
+                                    pa_type: pa.padata_type,
+                                    pa_value: pa.padata_value.as_bytes().into(),
+                                })
+                                .collect();
+                            Some(pavec)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                Ok(KerberosErrRep {
+                    error_code,
+                    pa_data,
+                })
+            }
+            _ => Err(KrbError::InvalidMessageType(
+                rep.msg_type as i32,
+                KrbMessageType::KrbError as i32,
+            )),
+        }
     }
 }
 

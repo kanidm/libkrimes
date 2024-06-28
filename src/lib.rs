@@ -26,6 +26,7 @@ pub mod proto;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
+use der::Decode;
 use proto::KerberosResponse;
 use std::io::{self};
 use tokio_util::codec::{Decoder, Encoder};
@@ -72,7 +73,7 @@ impl Decoder for KerberosTcpCodec {
             },
         };
 
-        let rep = KerberosResponse::from_der(record)
+        let rep = KerberosResponse::from_der(&record)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
@@ -133,7 +134,9 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::KerberosTcpCodec;
-    use crate::proto::KerberosRequest;
+    use crate::asn1::constants::PaDataType;
+    use crate::asn1::constants::errors::KrbErrorCode;
+    use crate::proto::{KerberosErrRep, KerberosRequest};
     use futures::StreamExt;
     use tracing::trace;
 
@@ -172,6 +175,7 @@ mod tests {
         let asrep = match response {
             KerberosResponse::AsRep(asrep) => asrep,
             KerberosResponse::TgsRep(_) => unreachable!(),
+            KerberosResponse::ErrRep(_) => unreachable!(),
         };
 
         let base_key = asrep
@@ -183,5 +187,67 @@ mod tests {
         // message, using the client's long-term key or another key selected
         // via pre-authentication mechanisms.
         let cleartext = asrep.enc_part.decrypt_data(&base_key, 3).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_localhost_kdc_preauth() {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let stream = TcpStream::connect("127.0.0.1:55000")
+            .await
+            .expect("Unable to connect to localhost:55000");
+
+        let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
+
+        let as_req = KerberosRequest::build_asreq(
+            "testuser_preauth".to_string(),
+            "krbtgt".to_string(),
+            None,
+            SystemTime::now() + Duration::from_secs(3600),
+            None,
+        )
+        .build();
+
+        // Write a request
+        krb_stream
+            .send(as_req)
+            .await
+            .expect("Failed to transmit request");
+
+        let response = krb_stream.next().await;
+
+        trace!(?response);
+        assert!(response.is_some());
+        let response = response.unwrap();
+        assert!(response.is_ok());
+        let response = response.unwrap();
+        let err: KerberosErrRep = match response {
+            KerberosResponse::AsRep(_) => unreachable!(),
+            KerberosResponse::TgsRep(_) => unreachable!(),
+            KerberosResponse::ErrRep(err) => err,
+        };
+        assert_eq!(
+            err.error_code as i32,
+            KrbErrorCode::KdcErrPreauthRequired as i32
+        );
+
+        // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
+        let padata = err.pa_data.unwrap();
+        assert!(padata.iter().any(|y| y.pa_type == (PaDataType::PaEncTimestamp as u32)));
+
+        // Assert returned preauth data contains PA-ETYPE-INFO2
+        assert!(padata.iter().any(|y| y.pa_type == (PaDataType::PaEncTimestamp as u32)));
+
+        // The PA-ENC-TIMESTAMP method MUST be supported by
+        // clients, but whether it is enabled by default MAY be determined on
+        // a realm-by-realm basis.
+        // If the method is not used in the initial request and the error
+        // KDC_ERR_PREAUTH_REQUIRED is returned specifying PA-ENC-TIMESTAMP
+        // as an acceptable method, the client SHOULD retry the initial
+        // request using the PA-ENC-TIMESTAMP pre- authentication method.
+        //
+        // The ETYPE-INFO2 method MUST be supported; this method is used to
+        // communicate the set of supported encryption types, and
+        // corresponding salt and string to key parameters.
     }
 }
