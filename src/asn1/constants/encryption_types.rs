@@ -1,7 +1,7 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, TryFromPrimitive, IntoPrimitive)]
+#[derive(Debug, TryFromPrimitive, IntoPrimitive, PartialEq, Eq)]
 #[repr(i32)]
 pub enum EncryptionType {
     DES_CBC_CRC = 1,

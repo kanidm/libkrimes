@@ -134,9 +134,9 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::KerberosTcpCodec;
-    use crate::asn1::constants::PaDataType;
     use crate::asn1::constants::errors::KrbErrorCode;
-    use crate::proto::{KerberosErrRep, KerberosRequest};
+    use crate::asn1::constants::PaDataType;
+    use crate::proto::KerberosRequest;
     use futures::StreamExt;
     use tracing::trace;
 
@@ -174,8 +174,7 @@ mod tests {
         let response = response.unwrap();
         let asrep = match response {
             KerberosResponse::AsRep(asrep) => asrep,
-            KerberosResponse::TgsRep(_) => unreachable!(),
-            KerberosResponse::ErrRep(_) => unreachable!(),
+            _ => unreachable!(),
         };
 
         let base_key = asrep
@@ -221,22 +220,10 @@ mod tests {
         let response = response.unwrap();
         assert!(response.is_ok());
         let response = response.unwrap();
-        let err: KerberosErrRep = match response {
-            KerberosResponse::AsRep(_) => unreachable!(),
-            KerberosResponse::TgsRep(_) => unreachable!(),
-            KerberosResponse::ErrRep(err) => err,
+        let pa_rep = match response {
+            KerberosResponse::PaRep(pa_rep) => pa_rep,
+            _ => unreachable!(),
         };
-        assert_eq!(
-            err.error_code as i32,
-            KrbErrorCode::KdcErrPreauthRequired as i32
-        );
-
-        // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
-        let padata = err.pa_data.unwrap();
-        assert!(padata.iter().any(|y| y.pa_type == (PaDataType::PaEncTimestamp as u32)));
-
-        // Assert returned preauth data contains PA-ETYPE-INFO2
-        assert!(padata.iter().any(|y| y.pa_type == (PaDataType::PaEncTimestamp as u32)));
 
         // The PA-ENC-TIMESTAMP method MUST be supported by
         // clients, but whether it is enabled by default MAY be determined on
@@ -249,5 +236,45 @@ mod tests {
         // The ETYPE-INFO2 method MUST be supported; this method is used to
         // communicate the set of supported encryption types, and
         // corresponding salt and string to key parameters.
+
+        // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
+        assert!(pa_rep.enc_timestamp);
+
+        // Assert returned preauth data contains PA-ETYPE-INFO2
+        assert!(!pa_rep.etype_info2.is_empty());
+
+        // Compute the pre-authentication.
+        let now = SystemTime::now();
+        let password = "password";
+        let seconds_since_epoch = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
+
+        let pre_auth = pa_rep
+            .perform_enc_timestamp(
+                password,
+                "EXAMPLE.COM",
+                "testuser_preauth",
+                seconds_since_epoch,
+            )
+            .unwrap();
+
+        let as_req = KerberosRequest::build_asreq(
+            "testuser_preauth".to_string(),
+            "krbtgt".to_string(),
+            None,
+            now + Duration::from_secs(3600),
+            None,
+        )
+        .add_preauthentication(pre_auth)
+        .build();
+
+        // Write a request
+        krb_stream
+            .send(as_req)
+            .await
+            .expect("Failed to transmit request");
+
+        let response = krb_stream.next().await;
+
+        trace!(?response);
     }
 }

@@ -39,6 +39,8 @@ pub enum PaDataType {
     TdReqNonce = 107,              // Integer
     TdReqSeq = 108,                // Integer
     PaPacRequest = 128,            // Include Windows PAC
+    PaFxCookie = 133,              // RFC6113 FAST Cookie
+    PaFxFast = 136,                // RFC6113 FAST
     EncpadataReqEncPaRep = 149,    // RFC 6806
     PadataAsFreshness = 150,       // RFC 8070
     PadataSpake = 151,             // draft-ietf-kitten-krb-spake-preauth-13

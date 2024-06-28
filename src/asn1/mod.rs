@@ -26,3 +26,4 @@ pub mod ticket_flags;
 pub mod transited_encoding;
 
 pub use der::asn1::Ia5String;
+pub use der::asn1::OctetString;

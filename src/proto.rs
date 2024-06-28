@@ -1,8 +1,10 @@
 use crate::asn1::{
     constants::{
         encryption_types::EncryptionType, errors::KrbErrorCode, message_types::KrbMessageType,
+        pa_data_types::PaDataType,
     },
     encrypted_data::EncryptedData as KdcEncryptedData,
+    etype_info2::ETypeInfo2 as KdcETypeInfo2,
     kdc_rep::KdcRep,
     kdc_req::KdcReq,
     kdc_req_body::KdcReqBody,
@@ -12,15 +14,21 @@ use crate::asn1::{
     krb_error::MethodData,
     krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
+    pa_enc_ts_enc::PaEncTsEnc,
     principal_name::PrincipalName,
-    Ia5String,
+    Ia5String, OctetString,
 };
 use crate::constants::AES_256_KEY_LEN;
-use crate::crypto::{decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96};
+use crate::crypto::{
+    decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
+    derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
+};
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode, Tag, TagNumber};
+use rand::{thread_rng, Rng};
 
-use std::time::SystemTime;
+use std::cmp::Ordering;
+use std::time::{Duration, SystemTime};
 use tracing::trace;
 
 #[derive(Debug)]
@@ -32,7 +40,10 @@ pub enum KerberosRequest {
 pub enum KerberosResponse {
     AsRep(KerberosAsRep),
     TgsRep(KerberosTgsRep),
-    ErrRep(KerberosErrRep),
+    // This is it's own valid state, not an error, so we return it
+    // as a valid response instead.
+    PaRep(KerberosPaRep),
+    ErrRep(KrbErrorCode),
 }
 
 #[derive(Debug)]
@@ -42,15 +53,24 @@ pub struct KerberosAsReqBuilder {
     from: Option<SystemTime>,
     until: SystemTime,
     renew: Option<SystemTime>,
+    preauth: Option<PreAuth>,
 }
 
 #[derive(Debug)]
 pub struct KerberosAsReq {
+    nonce: u32,
     client_name: String,
     service_name: String,
     from: Option<SystemTime>,
     until: SystemTime,
     renew: Option<SystemTime>,
+    preauth: Option<PreAuth>,
+}
+
+#[derive(Debug)]
+pub struct PreAuth {
+    enc_timestamp: Option<Vec<u8>>,
+    pa_fx_cookie: Option<Vec<u8>>,
 }
 
 pub enum BaseKey {
@@ -82,9 +102,57 @@ pub struct PreAuthData {
 }
 
 #[derive(Debug)]
-pub struct KerberosErrRep {
-    pub(crate) error_code: KrbErrorCode,
-    pub(crate) pa_data: Option<Vec<PreAuthData>>,
+pub struct KerberosPaRep {
+    pub(crate) pa_fx_fast: bool,
+    pub(crate) enc_timestamp: bool,
+    pub(crate) pa_fx_cookie: Option<Vec<u8>>,
+    pub(crate) etype_info2: Vec<EtypeInfo2>,
+}
+
+#[derive(Debug)]
+pub struct EtypeInfo2 {
+    // The type of encryption for enc ts.
+    etype: EncryptionType,
+    // Should probably be vecu8 ...
+    salt: Option<String>,
+
+    // For AES HMAC SHA1:
+    //   The number of iterations is specified by the string-to-key parameters
+    //   supplied.  The parameter string is four octets indicating an unsigned
+    //   number in big-endian order.  This is the number of iterations to be
+    //   performed.  If the value is 00 00 00 00, the number of iterations to
+    //   be performed is 4,294,967,296 (2**32).  (Thus the minimum expressible
+    //   iteration count is 1.)
+    s2kparams: Option<Vec<u8>>,
+}
+
+fn sort_cryptographic_strength(a: &EtypeInfo2, b: &EtypeInfo2) -> Ordering {
+    if a.etype == EncryptionType::AES256_CTS_HMAC_SHA384_192 {
+        Ordering::Greater
+    } else if b.etype == EncryptionType::AES256_CTS_HMAC_SHA384_192 {
+        Ordering::Less
+    } else if a.etype == EncryptionType::AES128_CTS_HMAC_SHA256_128 {
+        Ordering::Greater
+    } else if b.etype == EncryptionType::AES128_CTS_HMAC_SHA256_128 {
+        Ordering::Less
+    } else if a.etype == EncryptionType::AES256_CTS_HMAC_SHA1_96 {
+        Ordering::Greater
+    } else if b.etype == EncryptionType::AES256_CTS_HMAC_SHA1_96 {
+        Ordering::Less
+    } else if a.etype == EncryptionType::AES128_CTS_HMAC_SHA1_96 {
+        Ordering::Greater
+    } else if b.etype == EncryptionType::AES128_CTS_HMAC_SHA1_96 {
+        Ordering::Less
+    } else {
+        // Everything else is trash.
+        Ordering::Equal
+    }
+}
+
+#[derive(Debug)]
+enum KerberosErrRep {
+    Err(KrbErrorCode),
+    Pa(KerberosPaRep),
 }
 
 impl KerberosRequest {
@@ -101,6 +169,7 @@ impl KerberosRequest {
             from,
             until,
             renew,
+            preauth: None,
         }
     }
 
@@ -110,7 +179,10 @@ impl KerberosRequest {
 
     pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
         match self {
-            KerberosRequest::AsReq(as_req) => KrbKdcReq::to_der(&KrbKdcReq::AsReq(as_req.to_asn())),
+            KerberosRequest::AsReq(as_req) => {
+                let asn_as_req = as_req.to_asn()?;
+                KrbKdcReq::to_der(&KrbKdcReq::AsReq(asn_as_req))
+            }
         }
     }
 }
@@ -145,9 +217,15 @@ impl<'a> ::der::Decode<'a> for KerberosResponse {
                 number: TagNumber::N30,
             } => {
                 let kdc_rep: crate::asn1::krb_error::KrbError = decoder.decode()?;
+                // Kerberos encodes state in some error resposes, and so we need to disambiguate
+                // that here.
                 let err_rep: KerberosErrRep =
                     KerberosErrRep::try_from(kdc_rep).expect("Failed to parse err rep");
-                Ok(KerberosResponse::ErrRep(err_rep))
+
+                Ok(match err_rep {
+                    KerberosErrRep::Pa(pa_rep) => KerberosResponse::PaRep(pa_rep),
+                    KerberosErrRep::Err(err_code) => KerberosResponse::ErrRep(err_code),
+                })
             }
             _ => Err(der::Error::from(der::ErrorKind::TagUnexpected {
                 expected: None,
@@ -158,6 +236,11 @@ impl<'a> ::der::Decode<'a> for KerberosResponse {
 }
 
 impl KerberosAsReqBuilder {
+    pub fn add_preauthentication(mut self, preauth: PreAuth) -> Self {
+        self.preauth = Some(preauth);
+        self
+    }
+
     pub fn build(self) -> KerberosRequest {
         let KerberosAsReqBuilder {
             client_name,
@@ -165,27 +248,58 @@ impl KerberosAsReqBuilder {
             from,
             until,
             renew,
+            preauth,
         } = self;
 
+        // let nonce: u32 = thread_rng().gen();
+        // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
+        //
+        // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
+        //
+        let nonce = 2_147_483_647;
+
         KerberosRequest::AsReq(KerberosAsReq {
+            nonce,
             client_name,
             service_name,
             from,
             until,
             renew,
+            preauth,
         })
     }
 }
 
 impl KerberosAsReq {
-    fn to_asn(&self) -> KdcReq {
-        // TODO MAKE THIS RANDOM
-        let nonce = 12345;
+    fn to_asn(&self) -> Result<KdcReq, der::Error> {
+        let padata = if let Some(preauth) = &self.preauth {
+            let mut padata_inner = Vec::with_capacity(2);
 
-        KdcReq {
+            if let Some(enc_data) = &preauth.enc_timestamp {
+                let padata_value = OctetString::new(enc_data.clone())?;
+                padata_inner.push(PaData {
+                    padata_type: PaDataType::PaEncTimestamp as u32,
+                    padata_value,
+                })
+            }
+
+            if let Some(fx_cookie) = &preauth.pa_fx_cookie {
+                let padata_value = OctetString::new(fx_cookie.clone())?;
+                padata_inner.push(PaData {
+                    padata_type: PaDataType::PaFxCookie as u32,
+                    padata_value,
+                })
+            }
+
+            Some(padata_inner)
+        } else {
+            None
+        };
+
+        Ok(KdcReq {
             pvno: 5,
             msg_type: KrbMessageType::KrbAsReq as u8,
-            padata: None,
+            padata,
             req_body: KdcReqBody {
                 kdc_options: FlagSet::<KerberosFlags>::new(0b0)
                     .expect("Failed to build kdc_options"),
@@ -212,7 +326,7 @@ impl KerberosAsReq {
                     KerberosTime::from_system_time(t)
                         .expect("Failed to build KerberosTime from SystemTime")
                 }),
-                nonce,
+                nonce: self.nonce,
                 etype: vec![
                     EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
                     // MIT KRB5 claims to support these values, but if they are provided then MIT
@@ -224,7 +338,7 @@ impl KerberosAsReq {
                 enc_authorization_data: None,
                 additional_tickets: None,
             },
-        }
+        })
     }
 }
 
@@ -317,36 +431,98 @@ impl TryFrom<crate::asn1::krb_error::KrbError> for KerberosErrRep {
                     )
                 })?;
 
-                let pa_data: Option<Vec<PreAuthData>> = match error_code {
+                let rep = match error_code {
                     KrbErrorCode::KdcErrPreauthRequired => {
-                        if let Some(edata) = rep.error_data {
-                            let pavec: Vec<PaData> =
-                                MethodData::from_der(edata.as_bytes()).expect("Failed to decode");
-                            let pavec: Vec<PreAuthData> = pavec
-                                .iter()
-                                .map(|pa| PreAuthData {
-                                    pa_type: pa.padata_type,
-                                    pa_value: pa.padata_value.as_bytes().into(),
-                                })
-                                .collect();
-                            Some(pavec)
-                        } else {
-                            None
-                        }
+                        let edata = rep.error_data.ok_or(KrbError::MissingPaData)?;
+
+                        let pavec: Vec<PaData> = MethodData::from_der(edata.as_bytes())
+                            .map_err(|_| KrbError::DerDecodePaData)?;
+
+                        let pa_rep = KerberosPaRep::try_from(pavec)?;
+                        KerberosErrRep::Pa(pa_rep)
                     }
-                    _ => None,
+                    err_code => KerberosErrRep::Err(err_code),
                 };
 
-                Ok(KerberosErrRep {
-                    error_code,
-                    pa_data,
-                })
+                Ok(rep)
             }
             _ => Err(KrbError::InvalidMessageType(
                 rep.msg_type as i32,
                 KrbMessageType::KrbError as i32,
             )),
         }
+    }
+}
+
+impl TryFrom<Vec<PaData>> for KerberosPaRep {
+    type Error = KrbError;
+
+    fn try_from(pavec: Vec<PaData>) -> Result<Self, Self::Error> {
+        // Per https://www.rfc-editor.org/rfc/rfc4120#section-7.5.2
+        // Build up the set of PaRep data
+        let mut pa_fx_fast = false;
+        let mut enc_timestamp = false;
+        let mut pa_fx_cookie = None;
+        let mut etype_info2 = Vec::with_capacity(0);
+
+        for PaData {
+            padata_type,
+            padata_value,
+        } in pavec
+        {
+            let Ok(padt) = padata_type.try_into() else {
+                // padatatype that we don't support
+                continue;
+            };
+
+            match padt {
+                PaDataType::PaEncTimestamp => enc_timestamp = true,
+                PaDataType::PaEtypeInfo2 => {
+                    // this is a sequence of etypeinfo2
+                    let einfo2_sequence = KdcETypeInfo2::from_der(padata_value.as_bytes())
+                        .map_err(|_| KrbError::DerDecodeEtypeInfo2)?;
+
+                    for einfo2 in einfo2_sequence {
+                        let Ok(etype) = EncryptionType::try_from(einfo2.etype) else {
+                            // Invalid etype or we don't support it.
+                            continue;
+                        };
+
+                        // Only proceed with what we support.
+                        match etype {
+                            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {}
+                            _ => continue,
+                        };
+
+                        // I think at this point we should ignore any etypes we don't support.
+
+                        let salt = einfo2.salt.map(|s| s.into());
+                        let s2kparams = einfo2.s2kparams.map(|v| v.as_bytes().to_vec());
+
+                        etype_info2.push(EtypeInfo2 {
+                            etype,
+                            salt,
+                            s2kparams,
+                        });
+                    }
+                }
+                PaDataType::PaFxFast => pa_fx_fast = true,
+                PaDataType::PaFxCookie => pa_fx_cookie = Some(padata_value.as_bytes().to_vec()),
+                _ => {
+                    // Ignore unsupported pa data types.
+                }
+            };
+        }
+
+        // Sort the etype_info by cryptographic strength.
+        etype_info2.sort_unstable_by(sort_cryptographic_strength);
+
+        Ok(KerberosPaRep {
+            pa_fx_fast,
+            pa_fx_cookie,
+            enc_timestamp,
+            etype_info2,
+        })
     }
 }
 
@@ -393,5 +569,85 @@ impl TryFrom<KdcEncryptedData> for EncryptedData {
             }
             _ => Err(KrbError::UnsupportedEncryption),
         }
+    }
+}
+
+impl KerberosPaRep {
+    pub fn perform_enc_timestamp(
+        &self,
+        passphrase: &str,
+        realm: &str,
+        cname: &str,
+        epoch_seconds: Duration,
+    ) -> Result<PreAuth, KrbError> {
+        // Major TODO: Can we actually use a reasonable amount of iterations?
+        if !self.enc_timestamp {
+            return Err(KrbError::PreAuthUnsupported);
+        }
+
+        // This gets the highest encryption strength item.
+        let Some(einfo2) = self.etype_info2.last() else {
+            return Err(KrbError::PreAuthMissingEtypeInfo2);
+        };
+
+        // https://www.rfc-editor.org/rfc/rfc4120#section-5.2.7.2
+        let key_usage = 1;
+
+        let patimestamp = KerberosTime::from_unix_duration(epoch_seconds)
+            .map_err(|_| KrbError::PreAuthInvalidUnixTs)?;
+
+        let paenctsenc = PaEncTsEnc {
+            patimestamp,
+            pausec: None,
+        };
+
+        eprintln!("{:?}", paenctsenc);
+
+        let data = paenctsenc
+            .to_der()
+            .map_err(|_| KrbError::DerEncodePaEncTsEnc)?;
+
+        let enc_timestamp = match einfo2.etype {
+            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
+                let iter_count = if let Some(s2kparams) = &einfo2.s2kparams {
+                    if s2kparams.len() != 4 {
+                        return Err(KrbError::PreAuthInvalidS2KParams);
+                    };
+                    let mut iter_count = [0u8; 4];
+                    iter_count.copy_from_slice(&s2kparams);
+
+                    Some(u32::from_be_bytes(iter_count))
+                } else {
+                    None
+                };
+
+                let base_key = if let Some(external_salt) = &einfo2.salt {
+                    derive_key_external_salt_aes256_cts_hmac_sha1_96(
+                        passphrase.as_bytes(),
+                        external_salt.as_bytes(),
+                        iter_count,
+                    )?
+                } else {
+                    derive_key_aes256_cts_hmac_sha1_96(
+                        passphrase.as_bytes(),
+                        realm.as_bytes(),
+                        cname.as_bytes(),
+                        iter_count,
+                    )?
+                };
+
+                encrypt_aes256_cts_hmac_sha1_96(&base_key, &data, key_usage)?
+            }
+            // Shouldn't be possible, we pre-vet all the etypes.
+            _ => return Err(KrbError::UnsupportedEncryption),
+        };
+
+        // fx cookie always has to be sent.
+        let pa_fx_cookie = self.pa_fx_cookie.clone();
+
+        Ok(PreAuth {
+            enc_timestamp: Some(enc_timestamp),
+            pa_fx_cookie,
+        })
     }
 }

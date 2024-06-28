@@ -45,6 +45,29 @@ pub(crate) fn derive_key_aes256_cts_hmac_sha1_96(
     Ok(dk_buf)
 }
 
+/// Given the users passphrase, an external salt and the iteration
+/// count then the users base key is derived. The iteration count is an optional value
+/// which defaults to the RFC3962 value of 0x1000 (4096). This *default value* is
+/// INSECURE and should not be used. This will become a hard error in the future!
+pub(crate) fn derive_key_external_salt_aes256_cts_hmac_sha1_96(
+    passphrase: &[u8],
+    external_salt: &[u8],
+    iter_count: Option<u32>,
+) -> Result<[u8; AES_256_KEY_LEN], KrbError> {
+    // Salt is the concatenation of realm + cname.
+    // NOTE: Salt may come in AS-REP padata ETYPE-INFO2
+    let iter_count = iter_count.unwrap_or(PKBDF2_SHA1_ITER);
+
+    let mut buf = [0u8; AES_256_KEY_LEN];
+    pbkdf2_hmac::<Sha1>(passphrase, external_salt, iter_count, &mut buf);
+
+    // It's unclear what this achieves cryptographically ...
+    let mut dk_buf = [0u8; AES_256_KEY_LEN];
+    dk_aes_256(&mut dk_buf, &buf);
+
+    Ok(dk_buf)
+}
+
 fn dk_aes_256(out_buf: &mut [u8; AES_256_KEY_LEN], buf: &[u8; AES_256_KEY_LEN]) {
     let (lower, upper) = out_buf.split_at_mut(AES_BLOCK_SIZE);
     debug_assert!(lower.len() == AES_BLOCK_SIZE);
@@ -398,6 +421,8 @@ fn decrypt_aes256_cts(key: &[u8; AES_256_KEY_LEN], ciphertext: &[u8]) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
+    use der::Decode;
 
     #[test]
     fn test_hmac_sha1_96_kerbeiros() {
@@ -606,5 +631,28 @@ mod tests {
         let data = decrypt_aes256_cts_hmac_sha1_96(&out_key, &enc_data, key_usage).unwrap();
 
         assert_eq!(data, input_data);
+    }
+
+    #[test]
+    fn test_aes256_cts_hmac_sha1_pa_enc_timestamp_decrypt() {
+        let enc_data = hex::decode("b736f4dba847718b9f634b7ac94d5d691663164d877a0d875b94f786222ae9dca8cf68a972cfe6b5bec1c29682ec3c507307e7c32eedc032")
+            .unwrap();
+
+        let out_key = derive_key_external_salt_aes256_cts_hmac_sha1_96(
+            "password".as_bytes(),
+            "EXAMPLE.COMtestuser_preauth".as_bytes(),
+            None,
+        )
+        .unwrap();
+
+        let key_usage = 1;
+
+        let data = decrypt_aes256_cts_hmac_sha1_96(&out_key, &enc_data, key_usage).unwrap();
+
+        eprintln!("{:?}", data);
+
+        let pa_enc_ts_enc = PaEncTsEnc::from_der(&data).unwrap();
+
+        eprintln!("{:?}", pa_enc_ts_enc);
     }
 }
