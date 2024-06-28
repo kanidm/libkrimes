@@ -59,7 +59,7 @@ pub(crate) fn derive_key_external_salt_aes256_cts_hmac_sha1_96(
     let iter_count = iter_count.unwrap_or(PKBDF2_SHA1_ITER);
 
     let mut buf = [0u8; AES_256_KEY_LEN];
-    pbkdf2_hmac::<Sha1>(passphrase, &salt, iter_count, &mut buf);
+    pbkdf2_hmac::<Sha1>(passphrase, external_salt, iter_count, &mut buf);
 
     // It's unclear what this achieves cryptographically ...
     let mut dk_buf = [0u8; AES_256_KEY_LEN];

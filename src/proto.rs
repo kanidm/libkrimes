@@ -14,16 +14,21 @@ use crate::asn1::{
     krb_error::MethodData,
     krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
+    pa_enc_ts_enc::PaEncTsEnc,
     principal_name::PrincipalName,
-    Ia5String,
+    Ia5String, OctetString,
 };
 use crate::constants::AES_256_KEY_LEN;
-use crate::crypto::{decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96};
+use crate::crypto::{
+    decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
+    derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
+};
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode, Tag, TagNumber};
 use rand::{thread_rng, Rng};
 
-use std::time::SystemTime;
+use std::cmp::Ordering;
+use std::time::{Duration, SystemTime};
 use tracing::trace;
 
 #[derive(Debug)]
@@ -48,6 +53,7 @@ pub struct KerberosAsReqBuilder {
     from: Option<SystemTime>,
     until: SystemTime,
     renew: Option<SystemTime>,
+    preauth: Option<PreAuth>,
 }
 
 #[derive(Debug)]
@@ -58,6 +64,12 @@ pub struct KerberosAsReq {
     from: Option<SystemTime>,
     until: SystemTime,
     renew: Option<SystemTime>,
+    preauth: Option<PreAuth>,
+}
+
+#[derive(Debug)]
+pub enum PreAuth {
+    EncTimestamp { enc_data: Vec<u8> },
 }
 
 pub enum BaseKey {
@@ -113,6 +125,29 @@ pub struct EtypeInfo2 {
     s2kparams: Option<Vec<u8>>,
 }
 
+fn sort_cryptographic_strength(a: &EtypeInfo2, b: &EtypeInfo2) -> Ordering {
+    if a.etype == EncryptionType::AES256_CTS_HMAC_SHA384_192 {
+        Ordering::Greater
+    } else if b.etype == EncryptionType::AES256_CTS_HMAC_SHA384_192 {
+        Ordering::Less
+    } else if a.etype == EncryptionType::AES128_CTS_HMAC_SHA256_128 {
+        Ordering::Greater
+    } else if b.etype == EncryptionType::AES128_CTS_HMAC_SHA256_128 {
+        Ordering::Less
+    } else if a.etype == EncryptionType::AES256_CTS_HMAC_SHA1_96 {
+        Ordering::Greater
+    } else if b.etype == EncryptionType::AES256_CTS_HMAC_SHA1_96 {
+        Ordering::Less
+    } else if a.etype == EncryptionType::AES128_CTS_HMAC_SHA1_96 {
+        Ordering::Greater
+    } else if b.etype == EncryptionType::AES128_CTS_HMAC_SHA1_96 {
+        Ordering::Less
+    } else {
+        // Everything else is trash.
+        Ordering::Equal
+    }
+}
+
 #[derive(Debug)]
 enum KerberosErrRep {
     Err(KrbErrorCode),
@@ -133,6 +168,7 @@ impl KerberosRequest {
             from,
             until,
             renew,
+            preauth: None,
         }
     }
 
@@ -142,7 +178,10 @@ impl KerberosRequest {
 
     pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
         match self {
-            KerberosRequest::AsReq(as_req) => KrbKdcReq::to_der(&KrbKdcReq::AsReq(as_req.to_asn())),
+            KerberosRequest::AsReq(as_req) => {
+                let asn_as_req = as_req.to_asn()?;
+                KrbKdcReq::to_der(&KrbKdcReq::AsReq(asn_as_req))
+            }
         }
     }
 }
@@ -196,6 +235,11 @@ impl<'a> ::der::Decode<'a> for KerberosResponse {
 }
 
 impl KerberosAsReqBuilder {
+    pub fn add_preauthentication(mut self, preauth: PreAuth) -> Self {
+        self.preauth = Some(preauth);
+        self
+    }
+
     pub fn build(self) -> KerberosRequest {
         let KerberosAsReqBuilder {
             client_name,
@@ -203,9 +247,15 @@ impl KerberosAsReqBuilder {
             from,
             until,
             renew,
+            preauth,
         } = self;
 
-        let nonce = thread_rng().gen();
+        // let nonce: u32 = thread_rng().gen();
+        // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
+        //
+        // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
+        //
+        let nonce = 2_147_483_647;
 
         KerberosRequest::AsReq(KerberosAsReq {
             nonce,
@@ -214,16 +264,33 @@ impl KerberosAsReqBuilder {
             from,
             until,
             renew,
+            preauth,
         })
     }
 }
 
 impl KerberosAsReq {
-    fn to_asn(&self) -> KdcReq {
-        KdcReq {
+    fn to_asn(&self) -> Result<KdcReq, der::Error> {
+        let padata = if let Some(preauth) = &self.preauth {
+            // In future we may need to send multiple data here.
+            let padata_inner = match preauth {
+                PreAuth::EncTimestamp { enc_data } => {
+                    let padata_value = OctetString::new(enc_data.clone())?;
+                    PaData {
+                        padata_type: PaDataType::PaEncTimestamp as u32,
+                        padata_value,
+                    }
+                }
+            };
+            Some(vec![padata_inner])
+        } else {
+            None
+        };
+
+        Ok(KdcReq {
             pvno: 5,
             msg_type: KrbMessageType::KrbAsReq as u8,
-            padata: None,
+            padata,
             req_body: KdcReqBody {
                 kdc_options: FlagSet::<KerberosFlags>::new(0b0)
                     .expect("Failed to build kdc_options"),
@@ -262,7 +329,7 @@ impl KerberosAsReq {
                 enc_authorization_data: None,
                 additional_tickets: None,
             },
-        }
+        })
     }
 }
 
@@ -438,6 +505,9 @@ impl TryFrom<Vec<PaData>> for KerberosPaRep {
             };
         }
 
+        // Sort the etype_info by cryptographic strength.
+        etype_info2.sort_unstable_by(sort_cryptographic_strength);
+
         Ok(KerberosPaRep {
             pa_fx_fast,
             pa_fx_cookie,
@@ -490,5 +560,77 @@ impl TryFrom<KdcEncryptedData> for EncryptedData {
             }
             _ => Err(KrbError::UnsupportedEncryption),
         }
+    }
+}
+
+impl KerberosPaRep {
+    pub fn perform_enc_timestamp(
+        &self,
+        passphrase: &str,
+        realm: &str,
+        cname: &str,
+        epoch_seconds: Duration,
+    ) -> Result<PreAuth, KrbError> {
+        // Major TODO: Can we actually use a reasonable amount of iterations?
+        if !self.enc_timestamp {
+            return Err(KrbError::PreAuthUnsupported);
+        }
+
+        // This gets the highest encryption strength item.
+        let Some(einfo2) = self.etype_info2.last() else {
+            return Err(KrbError::PreAuthMissingEtypeInfo2);
+        };
+
+        // https://www.rfc-editor.org/rfc/rfc4120#section-5.2.7.2
+        let key_usage = 1;
+
+        let patimestamp = KerberosTime::from_unix_duration(epoch_seconds)
+            .map_err(|_| KrbError::PreAuthInvalidUnixTs)?;
+
+        let paenctsenc = PaEncTsEnc {
+            patimestamp,
+            pausec: None,
+        };
+
+        let data = paenctsenc
+            .to_der()
+            .map_err(|_| KrbError::DerEncodePaEncTsEnc)?;
+
+        let enc_data = match einfo2.etype {
+            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
+                let iter_count = if let Some(s2kparams) = &einfo2.s2kparams {
+                    if s2kparams.len() != 4 {
+                        return Err(KrbError::PreAuthInvalidS2KParams);
+                    };
+                    let mut iter_count = [0u8; 4];
+                    iter_count.copy_from_slice(&s2kparams);
+
+                    Some(u32::from_be_bytes(iter_count))
+                } else {
+                    None
+                };
+
+                let base_key = if let Some(external_salt) = &einfo2.salt {
+                    derive_key_external_salt_aes256_cts_hmac_sha1_96(
+                        passphrase.as_bytes(),
+                        external_salt.as_bytes(),
+                        iter_count,
+                    )?
+                } else {
+                    derive_key_aes256_cts_hmac_sha1_96(
+                        passphrase.as_bytes(),
+                        realm.as_bytes(),
+                        cname.as_bytes(),
+                        iter_count,
+                    )?
+                };
+
+                encrypt_aes256_cts_hmac_sha1_96(&base_key, &data, key_usage)?
+            }
+            // Shouldn't be possible, we pre-vet all the etypes.
+            _ => return Err(KrbError::UnsupportedEncryption),
+        };
+
+        Ok(PreAuth::EncTimestamp { enc_data })
     }
 }

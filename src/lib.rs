@@ -244,12 +244,37 @@ mod tests {
         assert!(!pa_rep.etype_info2.is_empty());
 
         // Compute the pre-authentication.
+        let now = SystemTime::now();
+        let password = "password";
+        let seconds_since_epoch = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
 
-        /*
-                PreAuthData { pa_type: 136, pa_value: [] } // PA-FX-FAST
-        PreAuthData { pa_type: 19, pa_value: [48, 38, 48, 36, 160, 3, 2, 1, 18, 161, 29, 27, 27, 69, 88, 65, 77, 80, 76, 69, 46, 67, 79, 77, 116, 101, 115, 116, 117, 115, 101, 114, 95, 112, 114, 101, 97, 117, 116, 104] } // etype-info-2
-        PreAuthData { pa_type: 2, pa_value: [] } // enc ts
-        PreAuthData { pa_type: 133, pa_value: [77, 73, 84] } // PA-FX-COOKIE
-                */
+        let pre_auth = pa_rep
+            .perform_enc_timestamp(
+                password,
+                "EXAMPLE.COM",
+                "testuser_preauth",
+                seconds_since_epoch,
+            )
+            .unwrap();
+
+        let as_req = KerberosRequest::build_asreq(
+            "testuser_preauth".to_string(),
+            "krbtgt".to_string(),
+            None,
+            now + Duration::from_secs(3600),
+            None,
+        )
+        .add_preauthentication(pre_auth)
+        .build();
+
+        // Write a request
+        krb_stream
+            .send(as_req)
+            .await
+            .expect("Failed to transmit request");
+
+        let response = krb_stream.next().await;
+
+        trace!(?response);
     }
 }
