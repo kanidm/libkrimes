@@ -113,14 +113,8 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
         * (Note that this record specification is NOT in XDR standard form!)
         */
         let mut w = XdrRecordWriter::new(buf.writer());
-        w.write_all(&der_bytes)?;
-
-        // XdrRecordWriter flushess on drop with end of record bit set (bit 32 in header)
-        // MIT KDC interpret this bit as part of record length and produces the
-        // following error:
-        //  krb5kdc[1](Error): TCP client 172.17.0.1.41668 wants 2147483817 bytes, cap is 1048572
-        // Explicitly flush without EOR bit
-        w.flush_eor(false)
+        w.set_implicit_eor(true);
+        w.write_all(&der_bytes)
     }
 }
 
