@@ -16,6 +16,7 @@ use crate::asn1::{
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
     principal_name::PrincipalName,
+    tagged_ticket::TaggedTicket,
     BitString, Ia5String, OctetString,
 };
 use crate::constants::AES_256_KEY_LEN;
@@ -78,6 +79,14 @@ pub enum BaseKey {
         // Todo zeroizing.
         k: [u8; AES_256_KEY_LEN],
     },
+}
+
+#[derive(Debug)]
+pub struct Ticket {
+    tkt_vno: i8,
+    realm: String,
+    service_name: String,
+    enc_part: EncryptedData,
 }
 
 #[derive(Debug)]
@@ -387,6 +396,7 @@ impl TryFrom<KdcRep> for KerberosAsRep {
 
                 let client_realm: String = rep.crealm.into();
                 let client_name: String = rep.cname.into();
+                let ticket = Ticket::try_from(rep.ticket);
 
                 Ok(KerberosAsRep {
                     client_realm,
@@ -591,6 +601,27 @@ impl TryFrom<KdcEncryptedData> for EncryptedData {
             }
             _ => Err(KrbError::UnsupportedEncryption),
         }
+    }
+}
+
+impl TryFrom<TaggedTicket> for Ticket {
+    type Error = KrbError;
+
+    fn try_from(tkt: TaggedTicket) -> Result<Self, Self::Error> {
+        let TaggedTicket(tkt) = tkt;
+
+        let tkt_vno = tkt.tkt_vno;
+        let realm: String = tkt.realm.into();
+        let service_name: String = tkt.sname.into();
+
+        let enc_part = EncryptedData::try_from(tkt.enc_part)?;
+
+        Ok(Ticket{
+            tkt_vno,
+            realm,
+            service_name,
+            enc_part,
+        })
     }
 }
 
