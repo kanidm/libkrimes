@@ -616,7 +616,7 @@ impl TryFrom<TaggedTicket> for Ticket {
 
         let enc_part = EncryptedData::try_from(tkt.enc_part)?;
 
-        Ok(Ticket{
+        Ok(Ticket {
             tkt_vno,
             realm,
             service_name,
