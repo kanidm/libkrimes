@@ -395,16 +395,15 @@ impl TryFrom<KdcRep> for KerberosAsRep {
                 let enc_part = EncryptedData::try_from(rep.enc_part)?;
                 trace!(?enc_part);
 
-                let pa_data = rep.padata.map(|pavec| {
-                    KerberosPaRep::try_from(pavec)
-                })
-                .transpose()?;
+                let pa_data = rep
+                    .padata
+                    .map(|pavec| KerberosPaRep::try_from(pavec))
+                    .transpose()?;
                 trace!(?pa_data);
 
                 let client_realm: String = rep.crealm.into();
                 let client_name: String = rep.cname.into();
                 let ticket = Ticket::try_from(rep.ticket);
-
 
                 Ok(KerberosAsRep {
                     client_realm,
@@ -576,9 +575,7 @@ impl EncryptedData {
     ) -> Result<BaseKey, KrbError> {
         match self {
             EncryptedData::Aes256CtsHmacSha196 { .. } => {
-
                 // TODO: check the padata.
-
 
                 let iter_count = None;
                 derive_key_aes256_cts_hmac_sha1_96(passphrase, realm, cname, iter_count)

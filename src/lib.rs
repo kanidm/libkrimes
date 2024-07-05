@@ -54,27 +54,6 @@ impl Decoder for KerberosTcpCodec {
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if buf.len() < 4 {
-            // Need more data.
-            return Ok(None);
-        }
-
-        let mut rec_len = [0u8; 4];
-        let buf_view = &buf[..4];
-        rec_len.copy_from_slice(buf_view);
-        let rec_len = u32::from_be_bytes(rec_len);
-
-        // Mask the top bit,
-        let rec_len = (rec_len & 0x7fffffff) as usize;
-
-        if buf.len() < rec_len {
-            // Need more data.
-            return Ok(None);
-        }
-
-        let record = &buf[4..];
-
-        /*
         let reader = buf.reader();
         let mut xdr_reader = XdrRecordReader::new(reader);
         xdr_reader.set_implicit_eor(true);
@@ -93,9 +72,8 @@ impl Decoder for KerberosTcpCodec {
                 Ok(buf) => buf,
             },
         };
-        */
 
-        let rep = KerberosResponse::from_der(record)
+        let rep = KerberosResponse::from_der(&record)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
