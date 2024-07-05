@@ -99,6 +99,7 @@ pub struct KerberosAsRep {
     pub(crate) client_realm: String,
     pub(crate) client_name: String,
     pub(crate) enc_part: EncryptedData,
+    pub(crate) pa_data: Option<KerberosPaRep>,
 }
 
 #[derive(Debug)]
@@ -394,13 +395,21 @@ impl TryFrom<KdcRep> for KerberosAsRep {
                 let enc_part = EncryptedData::try_from(rep.enc_part)?;
                 trace!(?enc_part);
 
+                let pa_data = rep.padata.map(|pavec| {
+                    KerberosPaRep::try_from(pavec)
+                })
+                .transpose()?;
+                trace!(?pa_data);
+
                 let client_realm: String = rep.crealm.into();
                 let client_name: String = rep.cname.into();
                 let ticket = Ticket::try_from(rep.ticket);
 
+
                 Ok(KerberosAsRep {
                     client_realm,
                     client_name,
+                    pa_data,
                     enc_part,
                 })
             }
@@ -567,8 +576,10 @@ impl EncryptedData {
     ) -> Result<BaseKey, KrbError> {
         match self {
             EncryptedData::Aes256CtsHmacSha196 { .. } => {
-                // todo! there is some way to get a number of rounds here
-                // but I can't obviously see it?
+
+                // TODO: check the padata.
+
+
                 let iter_count = None;
                 derive_key_aes256_cts_hmac_sha1_96(passphrase, realm, cname, iter_count)
                     .map(|k| BaseKey::Aes256 { k })

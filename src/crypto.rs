@@ -115,6 +115,8 @@ pub(crate) fn decrypt_aes256_cts_hmac_sha1_96(
         // the IV for the next block. Ignore it.
         let plaintext = plaintext.split_off(AES_BLOCK_SIZE);
 
+        tracing::trace!("{:x?}", my_hmac);
+        tracing::trace!("{:x?}", msg_hmac);
         if my_hmac == msg_hmac {
             Ok(plaintext)
         } else {
