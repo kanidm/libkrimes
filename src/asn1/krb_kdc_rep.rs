@@ -1,4 +1,5 @@
 use super::kdc_rep::KdcRep;
+use super::krb_error::KrbError;
 use der::{Tag, TagNumber, Writer};
 
 /// ```text
@@ -9,6 +10,7 @@ use der::{Tag, TagNumber, Writer};
 pub(crate) enum KrbKdcRep {
     AsRep(KdcRep),
     TgsRep(KdcRep),
+    ErrRep(KrbError),
 }
 
 impl<'a> ::der::Decode<'a> for KrbKdcRep {
@@ -30,6 +32,13 @@ impl<'a> ::der::Decode<'a> for KrbKdcRep {
             } => {
                 let kdc_rep: KdcRep = decoder.decode()?;
                 Ok(KrbKdcRep::TgsRep(kdc_rep))
+            }
+            Tag::Application {
+                constructed: true,
+                number: TagNumber::N30,
+            } => {
+                let err_rep: KrbError = decoder.decode()?;
+                Ok(KrbKdcRep::ErrRep(err_rep))
             }
             _ => Err(der::Error::from(der::ErrorKind::TagUnexpected {
                 expected: None,
@@ -60,6 +69,15 @@ impl ::der::Encode for KrbKdcRep {
                     + tgsrep.encoded_len()?
                     + tgsrep.encoded_len()?.encoded_len()?
             }
+            KrbKdcRep::ErrRep(err_rep) => {
+                Tag::Application {
+                    constructed: true,
+                    number: TagNumber::N30,
+                }
+                .encoded_len()?
+                    + err_rep.encoded_len()?
+                    + err_rep.encoded_len()?.encoded_len()?
+            }
         }?;
         Ok(len)
     }
@@ -83,6 +101,15 @@ impl ::der::Encode for KrbKdcRep {
                 .encode(writer)?;
                 tgsrep.encoded_len()?.encode(writer)?;
                 tgsrep.encode(writer)
+            }
+            KrbKdcRep::ErrRep(err_rep) => {
+                Tag::Application {
+                    constructed: true,
+                    number: TagNumber::N30,
+                }
+                .encode(writer)?;
+                err_rep.encoded_len()?.encode(writer)?;
+                err_rep.encode(writer)
             }
         }
     }
@@ -196,7 +223,8 @@ mod tests {
             let message = KrbKdcRep::from_der(&blob).expect("Failed to decode");
             match message {
                 KrbKdcRep::AsRep(asrep) => verify_as_rep(&asrep, &sample),
-                KrbKdcRep::TgsRep(_) => todo!(),
+                KrbKdcRep::TgsRep(_) 
+                | KrbKdcRep::ErrRep(_) => todo!(),
             }
         }
     }

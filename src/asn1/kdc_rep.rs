@@ -54,7 +54,8 @@ mod tests {
 
         match message {
             KrbKdcRep::AsRep(asrep) => trace!(?asrep),
-            KrbKdcRep::TgsRep(_) => todo!(),
+            KrbKdcRep::TgsRep(_)
+            | KrbKdcRep::ErrRep(_) => todo!(),
         }
     }
 }

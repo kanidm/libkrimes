@@ -26,13 +26,18 @@ pub mod proto;
 use bytes::Buf;
 // use bytes::BufMut;
 use bytes::BytesMut;
-use der::Decode;
+use der::{Decode, Encode};
 use proto::{KerberosRequest, KerberosResponse};
 use std::io::{self};
 use tokio_util::codec::{Decoder, Encoder};
 use xdr_codec::record::XdrRecordReader;
 // use xdr_codec::record::XdrRecordWriter;
 // use xdr_codec::Write;
+
+use crate::asn1::{
+    krb_kdc_rep::KrbKdcRep,
+    krb_kdc_req::KrbKdcReq,
+};
 
 use crate::constants::DEFAULT_IO_MAX_SIZE;
 
@@ -76,9 +81,11 @@ impl Decoder for KerberosTcpCodec {
             },
         };
 
-        let rep = KerberosResponse::from_der(&record)
+        let krb_kdc_rep = KrbKdcRep::from_der(&record)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
+
+        let rep = KerberosResponse::try_from(krb_kdc_rep).unwrap();
 
         buf.clear();
 
@@ -90,7 +97,10 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosRequest, buf: &mut BytesMut) -> io::Result<()> {
-        let der_bytes = msg
+        let req: KrbKdcReq = msg.try_into()
+            .unwrap();
+
+        let der_bytes = req
             .to_der()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
@@ -166,13 +176,16 @@ impl Decoder for KdcTcpCodec {
             },
         };
 
-        let rep = KerberosRequest::from_der(&record)
+        let krb_kdc_req = KrbKdcReq::from_der(&record)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
+        let req = KerberosRequest::try_from(krb_kdc_req)
+            .unwrap();
+
         buf.clear();
 
-        Ok(Some(rep))
+        Ok(Some(req))
     }
 }
 
@@ -180,7 +193,9 @@ impl Encoder<KerberosResponse> for KdcTcpCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosResponse, buf: &mut BytesMut) -> io::Result<()> {
-        let der_bytes = msg
+        let krb_kdc_rep: KrbKdcRep = msg.try_into()
+            .unwrap();
+        let der_bytes = krb_kdc_rep
             .to_der()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
@@ -232,7 +247,7 @@ mod tests {
 
         let as_req = KerberosRequest::build_asreq(
             Name::principal("testuser", "EXAMPLE.COM"),
-            Name::serice_krbtgt("EXAMPLE.COM"),
+            Name::service_krbtgt("EXAMPLE.COM"),
             None,
             SystemTime::now() + Duration::from_secs(3600),
             None,
@@ -278,7 +293,7 @@ mod tests {
 
         let as_req = KerberosRequest::build_asreq(
             Name::principal("testuser_preauth", "EXAMPLE.COM"),
-            Name::serice_krbtgt("EXAMPLE.COM"),
+            Name::service_krbtgt("EXAMPLE.COM"),
             None,
             now + Duration::from_secs(3600),
             Some(now + Duration::from_secs(86400)),
@@ -337,7 +352,7 @@ mod tests {
 
         let as_req = KerberosRequest::build_asreq(
             Name::principal("testuser_preauth", "EXAMPLE.COM"),
-            Name::serice_krbtgt("EXAMPLE.COM"),
+            Name::service_krbtgt("EXAMPLE.COM"),
             None,
             now + Duration::from_secs(3600),
             Some(now + Duration::from_secs(86400)),

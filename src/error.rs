@@ -14,6 +14,7 @@ pub enum KrbError {
     DerDecodePaData,
     DerDecodeEtypeInfo2,
     DerEncodePaEncTsEnc,
+    DerEncodeOctetString,
     PreAuthUnsupported,
     PreAuthMissingEtypeInfo2,
     PreAuthInvalidUnixTs,

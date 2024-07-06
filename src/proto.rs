@@ -5,6 +5,7 @@ use crate::asn1::{
     },
     encrypted_data::EncryptedData as KdcEncryptedData,
     etype_info2::ETypeInfo2 as KdcETypeInfo2,
+    krb_error::KrbError as KdcKrbError,
     kdc_rep::KdcRep,
     kdc_req::KdcReq,
     kdc_req_body::KdcReqBody,
@@ -13,6 +14,7 @@ use crate::asn1::{
     kerberos_time::KerberosTime,
     krb_error::MethodData,
     krb_kdc_req::KrbKdcReq,
+    krb_kdc_rep::KrbKdcRep,
     pa_data::PaData,
     realm::Realm,
     pa_enc_ts_enc::PaEncTsEnc,
@@ -20,13 +22,13 @@ use crate::asn1::{
     tagged_ticket::TaggedTicket,
     BitString, Ia5String, OctetString,
 };
+use der::{Decode, Encode};
 use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{
     decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
     derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{Decode, Encode, Tag, TagNumber};
 use rand::{thread_rng, Rng};
 
 use std::cmp::Ordering;
@@ -62,20 +64,20 @@ pub struct KerberosAsReqBuilder {
 
 #[derive(Debug)]
 pub struct KerberosAsReq {
-    nonce: u32,
-    client_name: Name,
-    service_name: Name,
-    from: Option<SystemTime>,
-    until: SystemTime,
-    renew: Option<SystemTime>,
-    preauth: PreAuth,
-    etypes: Vec<EncryptionType>,
+    pub nonce: u32,
+    pub client_name: Name,
+    pub service_name: Name,
+    pub from: Option<SystemTime>,
+    pub until: SystemTime,
+    pub renew: Option<SystemTime>,
+    pub preauth: PreAuth,
+    pub etypes: Vec<EncryptionType>,
 }
 
 #[derive(Debug, Default)]
 pub struct PreAuth {
-    enc_timestamp: Option<EncryptedData>,
-    pa_fx_cookie: Option<Vec<u8>>,
+    pub enc_timestamp: Option<EncryptedData>,
+    pub pa_fx_cookie: Option<Vec<u8>>,
 }
 
 pub enum BaseKey {
@@ -148,7 +150,7 @@ pub enum Name {
 pub struct EtypeInfo2 {
     // The type of encryption for enc ts.
     etype: EncryptionType,
-    // Should probably be vecu8 ...
+
     salt: Option<String>,
 
     // For AES HMAC SHA1:
@@ -193,6 +195,23 @@ enum KerberosErrRep {
     Pa(KerberosPaRep),
 }
 
+impl KerberosPaRep {
+    pub fn new() -> Self {
+        KerberosPaRep {
+            pa_fx_fast: false,
+            enc_timestamp: true,
+            pa_fx_cookie: None,
+            etype_info2: vec![
+                EtypeInfo2 {
+                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
+                    salt: None,
+                    s2kparams: None,
+                }
+            ],
+        }
+    }
+}
+
 impl KerberosRequest {
     pub fn build_asreq(
         client_name: Name,
@@ -219,93 +238,98 @@ impl KerberosRequest {
             etypes,
         }
     }
+}
 
-    // Should this be part of the der::Encode trait instead?
-    pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
+impl TryInto<KrbKdcReq> for KerberosRequest {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<KrbKdcReq, Self::Error> {
         match self {
             KerberosRequest::AsReq(as_req) => {
-                let asn_as_req = as_req.to_asn()?;
-                KrbKdcReq::to_der(&KrbKdcReq::AsReq(asn_as_req))
+                as_req.try_into().map(KrbKdcReq::AsReq)
             }
         }
     }
 }
 
+impl TryFrom<KrbKdcReq> for KerberosRequest {
+    type Error = KrbError;
 
-impl<'a> ::der::Decode<'a> for KerberosRequest {
-    fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
-        let tag: der::Tag = decoder.decode()?;
-        let _len: der::Length = decoder.decode()?;
-
-        match tag {
-            Tag::Application {
-                constructed: true,
-                number: TagNumber::N10,
-            } => {
-                let kdc_req: KdcReq = decoder.decode()?;
+    fn try_from(req: KrbKdcReq) -> Result<Self, Self::Error> {
+        match req {
+            KrbKdcReq::AsReq(kdc_req) => {
                 let as_req: KerberosAsReq =
                     KerberosAsReq::try_from(kdc_req).expect("Failed to parse as req");
                 Ok(KerberosRequest::AsReq(as_req))
             }
-            _ => Err(der::Error::from(der::ErrorKind::TagUnexpected {
-                expected: None,
-                actual: tag,
-            })),
+            KrbKdcReq::TgsReq(kdc_req) => {
+                todo!();
+            }
         }
     }
 }
 
-impl<'a> ::der::Decode<'a> for KerberosResponse {
-    fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
-        let tag: der::Tag = decoder.decode()?;
-        let _len: der::Length = decoder.decode()?;
+impl TryFrom<KrbKdcRep> for KerberosResponse {
+    type Error = KrbError;
 
-        match tag {
-            Tag::Application {
-                constructed: true,
-                number: TagNumber::N11,
-            } => {
-                let kdc_rep: KdcRep = decoder.decode()?;
-                //let kdc_rep: KrbKdcRep = KrbKdcRep::AsRep(kdc_rep);
-                let as_rep: KerberosAsRep =
-                    KerberosAsRep::try_from(kdc_rep).expect("Failed to parse as rep");
-                Ok(KerberosResponse::AsRep(as_rep))
+    fn try_from(rep: KrbKdcRep) -> Result<Self, Self::Error> {
+        match rep {
+            KrbKdcRep::AsRep(kdc_rep) => {
+                KerberosAsRep::try_from(kdc_rep).map(KerberosResponse::AsRep)
             }
-            Tag::Application {
-                constructed: true,
-                number: TagNumber::N13,
-            } => {
-                let kdc_rep: KdcRep = decoder.decode()?;
-                let tgs_rep: KerberosTgsRep =
-                    KerberosTgsRep::try_from(kdc_rep).expect("Failed to parse tgs rep");
-                Ok(KerberosResponse::TgsRep(tgs_rep))
-            }
-            Tag::Application {
-                constructed: true,
-                number: TagNumber::N30,
-            } => {
-                let kdc_rep: crate::asn1::krb_error::KrbError = decoder.decode()?;
-                // Kerberos encodes state in some error resposes, and so we need to disambiguate
-                // that here.
-                let err_rep: KerberosErrRep =
-                    KerberosErrRep::try_from(kdc_rep).expect("Failed to parse err rep");
+            KrbKdcRep::TgsRep(kdc_rep) => todo!(),
+            KrbKdcRep::ErrRep(err_rep) => {
+                let err_rep = KerberosErrRep::try_from(err_rep)?;
 
                 Ok(match err_rep {
                     KerberosErrRep::Pa(pa_rep) => KerberosResponse::PaRep(pa_rep),
                     KerberosErrRep::Err(err_code) => KerberosResponse::ErrRep(err_code),
                 })
             }
-            _ => Err(der::Error::from(der::ErrorKind::TagUnexpected {
-                expected: None,
-                actual: tag,
-            })),
         }
+
     }
 }
 
-impl KerberosResponse {
-    pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
-        todo!();
+impl Into<KrbKdcRep> for KerberosResponse {
+    fn into(self) -> KrbKdcRep {
+        match self {
+            KerberosResponse::AsRep(as_rep) => {
+                // let asn_as_req = as_req.to_asn()?;
+                // KrbKdcReq::to_der(&KrbKdcReq::AsReq(asn_as_req))
+                todo!();
+            }
+            KerberosResponse::TgsRep(tgs_rep) => {
+                todo!();
+            }
+            KerberosResponse::PaRep(pa_rep) => {
+                /*
+                let error_code = KrbErrorCode::KdcErrPreauthRequired;
+                // The pre-auth data is stuffed into error_data. Because of course.
+
+                let krb_error = KdcKrbError {
+                    pvno: 5,
+                    msg_type: 30,
+                    ctime: None,
+                    cusec: None,
+                    stime,
+                    susec,
+                    error_code,
+                    crealm: None,
+                    cname: None,
+                    service_realm,
+                    error_text,
+                    error_data,
+                };
+
+                Ok(KrbKdcRep::ErrRep(krb_error))
+                */
+                todo!();
+            }
+            KerberosResponse::ErrRep(err_rep) => {
+                todo!();
+            }
+        }
     }
 }
 
@@ -346,13 +370,17 @@ impl KerberosAsReqBuilder {
     }
 }
 
-impl KerberosAsReq {
-    fn to_asn(&self) -> Result<KdcReq, der::Error> {
+
+impl TryInto<KdcReq> for KerberosAsReq {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<KdcReq, Self::Error> {
         let padata = if self.preauth.pa_fx_cookie.is_some() || self.preauth.enc_timestamp.is_some() {
             let mut padata_inner = Vec::with_capacity(2);
 
             if let Some(fx_cookie) = &self.preauth.pa_fx_cookie {
-                let padata_value = OctetString::new(fx_cookie.clone())?;
+                let padata_value = OctetString::new(fx_cookie.clone())
+                    .map_err(|_| KrbError::DerEncodeOctetString)?;
                 padata_inner.push(PaData {
                     padata_type: PaDataType::PaFxCookie as u32,
                     padata_value,
@@ -362,7 +390,8 @@ impl KerberosAsReq {
             if let Some(enc_data) = &self.preauth.enc_timestamp {
                 let padata_value = match enc_data {
                     EncryptedData::Aes256CtsHmacSha196 { kvno, data } => {
-                        let cipher = OctetString::new(data.clone())?;
+                        let cipher = OctetString::new(data.clone())
+                            .map_err(|_| KrbError::DerEncodeOctetString)?;
                         KdcEncryptedData {
                             etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
                             kvno: None,
@@ -372,7 +401,8 @@ impl KerberosAsReq {
                 };
 
                 // Need to encode the padata value now.
-                let padata_value = padata_value.to_der().and_then(OctetString::new)?;
+                let padata_value = padata_value.to_der().and_then(OctetString::new)
+                    .map_err(|_| KrbError::DerEncodeOctetString)?;
 
                 padata_inner.push(PaData {
                     padata_type: PaDataType::PaEncTimestamp as u32,
@@ -566,10 +596,12 @@ impl TryFrom<KdcRep> for KerberosTgsRep {
     }
 }
 
-impl TryFrom<crate::asn1::krb_error::KrbError> for KerberosErrRep {
+impl TryFrom<KdcKrbError> for KerberosErrRep {
     type Error = KrbError;
 
-    fn try_from(rep: crate::asn1::krb_error::KrbError) -> Result<Self, Self::Error> {
+    fn try_from(rep: KdcKrbError) -> Result<Self, Self::Error> {
+        trace!(?rep);
+
         // assert the pvno and msg_type
         if rep.pvno != 5 {
             return Err(KrbError::InvalidPvno);
