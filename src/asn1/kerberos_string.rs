@@ -32,7 +32,13 @@ impl<'a> EncodeValue for KerberosString {
 
 impl Into<String> for KerberosString {
     fn into(self) -> String {
-        self.0.to_string().clone()
+        self.0.to_string()
+    }
+}
+
+impl Into<String> for &KerberosString {
+    fn into(self) -> String {
+        self.0.to_string()
     }
 }
 

@@ -216,7 +216,7 @@ mod tests {
     use super::KerberosTcpCodec;
     use crate::asn1::constants::errors::KrbErrorCode;
     use crate::asn1::constants::PaDataType;
-    use crate::proto::KerberosRequest;
+    use crate::proto::{KerberosRequest, Name};
     use futures::StreamExt;
     use tracing::trace;
 
@@ -231,8 +231,8 @@ mod tests {
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
         let as_req = KerberosRequest::build_asreq(
-            "testuser".to_string(),
-            "krbtgt".to_string(),
+            Name::principal("testuser", "EXAMPLE.COM"),
+            Name::serice_krbtgt("EXAMPLE.COM"),
             None,
             SystemTime::now() + Duration::from_secs(3600),
             None,
@@ -277,8 +277,8 @@ mod tests {
         let now = SystemTime::now();
 
         let as_req = KerberosRequest::build_asreq(
-            "testuser_preauth".to_string(),
-            "krbtgt".to_string(),
+            Name::principal("testuser_preauth", "EXAMPLE.COM"),
+            Name::serice_krbtgt("EXAMPLE.COM"),
             None,
             now + Duration::from_secs(3600),
             Some(now + Duration::from_secs(86400)),
@@ -336,8 +336,8 @@ mod tests {
             .unwrap();
 
         let as_req = KerberosRequest::build_asreq(
-            "testuser_preauth".to_string(),
-            "krbtgt".to_string(),
+            Name::principal("testuser_preauth", "EXAMPLE.COM"),
+            Name::serice_krbtgt("EXAMPLE.COM"),
             None,
             now + Duration::from_secs(3600),
             Some(now + Duration::from_secs(86400)),
