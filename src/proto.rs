@@ -62,8 +62,8 @@ pub struct KerberosAsReqBuilder {
 #[derive(Debug)]
 pub struct KerberosAsReq {
     nonce: u32,
-    client_name: String,
-    service_name: String,
+    client_name: Name,
+    service_name: Name,
     from: Option<SystemTime>,
     until: SystemTime,
     renew: Option<SystemTime>,
@@ -99,8 +99,7 @@ pub enum EncryptedData {
 
 #[derive(Debug)]
 pub struct KerberosAsRep {
-    pub(crate) client_realm: String,
-    pub(crate) client_name: String,
+    pub(crate) name: Name,
     pub(crate) enc_part: EncryptedData,
     pub(crate) pa_data: Option<KerberosPaRep>,
     pub(crate) ticket: Ticket,
@@ -121,6 +120,26 @@ pub struct KerberosPaRep {
     pub(crate) enc_timestamp: bool,
     pub(crate) pa_fx_cookie: Option<Vec<u8>>,
     pub(crate) etype_info2: Vec<EtypeInfo2>,
+}
+
+pub enum Name {
+    Principal {
+        name: String,
+        realm: String,
+    },
+    SrvInst {
+        service: String,
+        realm: String,
+    },
+    SrvHst {
+        service: String,
+        host: String,
+        realm: String,
+    },
+    /*
+    Uid {
+    }
+    */
 }
 
 #[derive(Debug)]
@@ -376,25 +395,23 @@ impl KerberosAsReq {
             None
         };
 
+        let (cname, crealm) = self.client_name.try_into().unwrap();
+        let sname = self.service_name.try_into().unwrap();
+
         Ok(KdcReq {
             pvno: 5,
             msg_type: KrbMessageType::KrbAsReq as u8,
             padata,
             req_body: KdcReqBody {
                 kdc_options: BitString::from_bytes(&[0x00, 0x80, 0x00, 0x00]).unwrap(),
-                cname: Some(PrincipalName {
-                    // Should be some kind of enum probably?
-                    name_type: 1,
-                    name_string: vec![KerberosString(Ia5String::new(&self.client_name).unwrap())],
-                }),
-                realm: KerberosString(Ia5String::new("EXAMPLE.COM").unwrap()),
-                sname: Some(PrincipalName {
-                    name_type: 2,
-                    name_string: vec![
-                        KerberosString(Ia5String::new(&self.service_name).unwrap()),
-                        KerberosString(Ia5String::new("EXAMPLE.COM").unwrap()),
-                    ],
-                }),
+                cname,
+                // Per the RFC this is the "servers realm" in an AsReq but also the clients. So it's really
+                // not clear if the sname should have the realm or not or if this can be divergent between
+                // the client and server realm. What a clownshow, completely of their own making by trying
+                // to reuse structures in inconsistent ways. For now, we copy whatever bad behaviour mit
+                // krb does, because it's probably wrong, but it's the reference impl.
+                realm,
+                sname,
                 from: self.from.map(|t| {
                     KerberosTime::from_system_time(t)
                         .expect("Failed to build KerberosTime from SystemTime")
@@ -840,3 +857,136 @@ impl KerberosPaRep {
         })
     }
 }
+
+
+impl TryInto<PrincipalName> for &Name {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<PrincipalName, KrbError> {
+        match self {
+            Principal {
+                name, realm
+            } => {
+                let name_string = vec![
+                    KerberosString(Ia5String::new(name)
+                        .unwrap(),
+                    KerberosString(Ia5String::new(realm)
+                        .unwrap()
+                )];
+
+                Ok(PrincipalName {
+                    name_type: 1,
+                    name_string,
+                })
+            }
+            SrvInst {
+                service, realm
+            } => {
+                let name_string = vec![
+                    KerberosString(Ia5String::new(service)
+                        .unwrap(),
+                    KerberosString(Ia5String::new(realm)
+                        .unwrap()
+                )];
+
+                Ok(PrincipalName {
+                    name_type: 2,
+                    name_string,
+                })
+            }
+            SrvHst {
+                service, host, realm
+            } => {
+                let name_string = vec![
+                    KerberosString(Ia5String::new(service)
+                        .unwrap(),
+                    KerberosString(Ia5String::new(host)
+                        .unwrap(),
+                    KerberosString(Ia5String::new(realm)
+                        .unwrap()
+                )];
+
+                Ok(PrincipalName {
+                    name_type: 3,
+                    name_string,
+                })
+            }
+        }
+    }
+}
+
+impl TryInto<(PrincipalName, Realm)> for &Name {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<(PrincipalName, Realm), KrbError> {
+        match self {
+            Principal {
+                name, realm
+            } => {
+                let name_string = vec![KerberosString(Ia5String::new(&name)
+                    .unwrap()
+                )];
+                let realm = KerberosString(Ia5String::new(realm_str)
+                    .unwrap()
+                );
+
+                Ok((PrincipalName {
+                    name_type: 1,
+                    name_string,
+                }, realm))
+            }
+            SrvInst {
+                service, realm
+            } => {
+                let name_string = vec![KerberosString(Ia5String::new(&service)
+                    .unwrap()
+                )];
+                let realm = KerberosString(Ia5String::new(realm_str)
+                    .unwrap()
+                );
+
+                Ok((PrincipalName {
+                    name_type: 2,
+                    name_string,
+                }, realm))
+            }
+            SrvHst {
+                service, host, realm
+            } => {
+                let name_string = vec![
+                    KerberosString(Ia5String::new(&service)
+                        .unwrap(),
+                    KerberosString(Ia5String::new(&host)
+                        .unwrap()
+                )];
+                let realm = KerberosString(Ia5String::new(realm_str)
+                    .unwrap()
+                );
+
+                Ok((PrincipalName {
+                    name_type: 3,
+                    name_string,
+                }, realm))
+            }
+        }
+    }
+}
+
+impl TryFrom<PrincipalName> for Name {
+    type Error = KrbError;
+
+    fn try_from((princ, realm): (PrincipalName, Realm)) -> Result<Self, Self::Error> {
+        todo!();
+    }
+}
+
+impl TryFrom<(PrincipalName, Realm)> for Name {
+    type Error = KrbError;
+
+    fn try_from((princ, realm): (PrincipalName, Realm)) -> Result<Self, Self::Error> {
+        todo!();
+    }
+}
+
+
+
