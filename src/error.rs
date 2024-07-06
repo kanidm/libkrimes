@@ -16,6 +16,8 @@ pub enum KrbError {
     PreAuthInvalidUnixTs,
     PreAuthInvalidS2KParams,
 
-    InvalidMessageType(i32, i32),
+    InvalidMessageType,
+    InvalidMessageDirection,
+    InvalidPvno,
     InvalidEnumValue(String, i32),
 }

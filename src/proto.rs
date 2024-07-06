@@ -8,7 +8,7 @@ use crate::asn1::{
     kdc_rep::KdcRep,
     kdc_req::KdcReq,
     kdc_req_body::KdcReqBody,
-    kerberos_flags::KerberosFlags,
+    // kerberos_flags::KerberosFlags,
     kerberos_string::KerberosString,
     kerberos_time::KerberosTime,
     krb_error::MethodData,
@@ -25,7 +25,7 @@ use crate::crypto::{
     derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{flagset::FlagSet, Decode, Encode, Tag, TagNumber};
+use der::{Decode, Encode, Tag, TagNumber};
 use rand::{thread_rng, Rng};
 
 use std::cmp::Ordering;
@@ -35,6 +35,7 @@ use tracing::trace;
 #[derive(Debug)]
 pub enum KerberosRequest {
     AsReq(KerberosAsReq),
+    // TgsReq(KerberosTgsReq),
 }
 
 #[derive(Debug)]
@@ -55,6 +56,7 @@ pub struct KerberosAsReqBuilder {
     until: SystemTime,
     renew: Option<SystemTime>,
     preauth: Option<PreAuth>,
+    etypes: Vec<EncryptionType>,
 }
 
 #[derive(Debug)]
@@ -65,10 +67,11 @@ pub struct KerberosAsReq {
     from: Option<SystemTime>,
     until: SystemTime,
     renew: Option<SystemTime>,
-    preauth: Option<PreAuth>,
+    preauth: PreAuth,
+    etypes: Vec<EncryptionType>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PreAuth {
     enc_timestamp: Option<EncryptedData>,
     pa_fx_cookie: Option<Vec<u8>>,
@@ -100,6 +103,7 @@ pub struct KerberosAsRep {
     pub(crate) client_name: String,
     pub(crate) enc_part: EncryptedData,
     pub(crate) pa_data: Option<KerberosPaRep>,
+    pub(crate) ticket: Ticket,
 }
 
 #[derive(Debug)]
@@ -137,6 +141,7 @@ pub struct EtypeInfo2 {
 }
 
 fn sort_cryptographic_strength(a: &EtypeInfo2, b: &EtypeInfo2) -> Ordering {
+    /*
     if a.etype == EncryptionType::AES256_CTS_HMAC_SHA384_192 {
         Ordering::Greater
     } else if b.etype == EncryptionType::AES256_CTS_HMAC_SHA384_192 {
@@ -145,7 +150,9 @@ fn sort_cryptographic_strength(a: &EtypeInfo2, b: &EtypeInfo2) -> Ordering {
         Ordering::Greater
     } else if b.etype == EncryptionType::AES128_CTS_HMAC_SHA256_128 {
         Ordering::Less
-    } else if a.etype == EncryptionType::AES256_CTS_HMAC_SHA1_96 {
+    } else
+    */
+    if a.etype == EncryptionType::AES256_CTS_HMAC_SHA1_96 {
         Ordering::Greater
     } else if b.etype == EncryptionType::AES256_CTS_HMAC_SHA1_96 {
         Ordering::Less
@@ -173,6 +180,14 @@ impl KerberosRequest {
         until: SystemTime,
         renew: Option<SystemTime>,
     ) -> KerberosAsReqBuilder {
+        let etypes = vec![
+            EncryptionType::AES256_CTS_HMAC_SHA1_96,
+            // MIT KRB5 claims to support these values, but if they are provided then MIT
+            // KDC's will ignore them.
+            // EncryptionType::AES128_CTS_HMAC_SHA256_128 as i32,
+            // EncryptionType::AES256_CTS_HMAC_SHA384_192 as i32,
+        ];
+
         KerberosAsReqBuilder {
             client_name,
             service_name,
@@ -180,19 +195,41 @@ impl KerberosRequest {
             until,
             renew,
             preauth: None,
+            etypes,
         }
     }
 
-    pub(crate) fn from_der(der: Vec<u8>) -> Result<Self, der::Error> {
-        todo!();
-    }
-
+    // Should this be part of the der::Encode trait instead?
     pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
         match self {
             KerberosRequest::AsReq(as_req) => {
                 let asn_as_req = as_req.to_asn()?;
                 KrbKdcReq::to_der(&KrbKdcReq::AsReq(asn_as_req))
             }
+        }
+    }
+}
+
+
+impl<'a> ::der::Decode<'a> for KerberosRequest {
+    fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
+        let tag: der::Tag = decoder.decode()?;
+        let _len: der::Length = decoder.decode()?;
+
+        match tag {
+            Tag::Application {
+                constructed: true,
+                number: TagNumber::N10,
+            } => {
+                let kdc_req: KdcReq = decoder.decode()?;
+                let as_req: KerberosAsReq =
+                    KerberosAsReq::try_from(kdc_req).expect("Failed to parse as req");
+                Ok(KerberosRequest::AsReq(as_req))
+            }
+            _ => Err(der::Error::from(der::ErrorKind::TagUnexpected {
+                expected: None,
+                actual: tag,
+            })),
         }
     }
 }
@@ -245,6 +282,12 @@ impl<'a> ::der::Decode<'a> for KerberosResponse {
     }
 }
 
+impl KerberosResponse {
+    pub(crate) fn to_der(&self) -> Result<Vec<u8>, der::Error> {
+        todo!();
+    }
+}
+
 impl KerberosAsReqBuilder {
     pub fn add_preauthentication(mut self, preauth: PreAuth) -> Self {
         self.preauth = Some(preauth);
@@ -259,14 +302,15 @@ impl KerberosAsReqBuilder {
             until,
             renew,
             preauth,
+            etypes,
         } = self;
 
-        // let nonce: u32 = thread_rng().gen();
         // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
-        //
         // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
-        //
-        let nonce = 2_147_483_647;
+        let nonce: u32 = thread_rng().gen();
+        let nonce = nonce & 0x7fff_ffff;
+
+        let preauth = preauth.unwrap_or_default();
 
         KerberosRequest::AsReq(KerberosAsReq {
             nonce,
@@ -276,16 +320,17 @@ impl KerberosAsReqBuilder {
             until,
             renew,
             preauth,
+            etypes,
         })
     }
 }
 
 impl KerberosAsReq {
     fn to_asn(&self) -> Result<KdcReq, der::Error> {
-        let padata = if let Some(preauth) = &self.preauth {
-            let mut padata_inner = Vec::with_capacity(4);
+        let padata = if self.preauth.pa_fx_cookie.is_some() || self.preauth.enc_timestamp.is_some() {
+            let mut padata_inner = Vec::with_capacity(2);
 
-            if let Some(fx_cookie) = &preauth.pa_fx_cookie {
+            if let Some(fx_cookie) = &self.preauth.pa_fx_cookie {
                 let padata_value = OctetString::new(fx_cookie.clone())?;
                 padata_inner.push(PaData {
                     padata_type: PaDataType::PaFxCookie as u32,
@@ -293,7 +338,7 @@ impl KerberosAsReq {
                 })
             }
 
-            if let Some(enc_data) = &preauth.enc_timestamp {
+            if let Some(enc_data) = &self.preauth.enc_timestamp {
                 let padata_value = match enc_data {
                     EncryptedData::Aes256CtsHmacSha196 { kvno, data } => {
                         let cipher = OctetString::new(data.clone())?;
@@ -314,6 +359,7 @@ impl KerberosAsReq {
                 })
             }
 
+            /*
             padata_inner.push(PaData {
                 padata_type: PaDataType::PadataAsFreshness as u32,
                 padata_value: OctetString::new(&[])?,
@@ -323,6 +369,7 @@ impl KerberosAsReq {
                 padata_type: PaDataType::EncpadataReqEncPaRep as u32,
                 padata_value: OctetString::new(&[])?,
             });
+            */
 
             Some(padata_inner)
         } else {
@@ -359,13 +406,7 @@ impl KerberosAsReq {
                         .expect("Failed to build KerberosTime from SystemTime")
                 }),
                 nonce: self.nonce,
-                etype: vec![
-                    EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
-                    // MIT KRB5 claims to support these values, but if they are provided then MIT
-                    // KDC's will ignore them.
-                    // EncryptionType::AES128_CTS_HMAC_SHA256_128 as i32,
-                    // EncryptionType::AES256_CTS_HMAC_SHA384_192 as i32,
-                ],
+                etype: self.etypes.iter().map(|e| *e as i32).collect(),
                 addresses: None,
                 enc_authorization_data: None,
                 additional_tickets: None,
@@ -374,20 +415,86 @@ impl KerberosAsReq {
     }
 }
 
+impl TryFrom<KdcReq> for KerberosAsReq {
+    type Error = KrbError;
+
+    fn try_from(req: KdcReq) -> Result<Self, Self::Error> {
+        // assert the pvno and msg_type
+        if req.pvno != 5 {
+            return Err(KrbError::InvalidPvno);
+        }
+
+        let msg_type = KrbMessageType::try_from(req.msg_type).map_err(|_| {
+            KrbError::InvalidMessageType
+        })?;
+
+        match msg_type {
+            KrbMessageType::KrbAsReq => {
+                // Filter and use only the finest of etypes.
+                let mut etypes = req.req_body.etype.iter().filter_map(|etype| {
+                    EncryptionType::try_from(*etype)
+                        .ok()
+                        .and_then(|etype| {
+                            match etype {
+                                EncryptionType::AES256_CTS_HMAC_SHA1_96 => Some(etype),
+                                _ => None,
+                            }
+                        })
+                }).collect();
+
+                let preauth = req
+                    .padata
+                    .map(|pavec|
+                        PreAuth::try_from(pavec)
+                    )
+                    .transpose()?
+                    .unwrap_or_default();
+                trace!(?preauth);
+
+                // let client_realm: String = req.req_body.realm.into();
+
+                let client_name: String = req.req_body.cname.into();
+
+                let service_name: String = req.req_body.sname.into();
+
+                let from = req.req_body.from.map(|t| t.to_system_time());
+                let until = req.req_body.till.to_system_time();
+                let renew = req.req_body.rtime.map(|t| t.to_system_time());
+                let nonce = req.req_body.nonce;
+
+                // addresses,
+                // enc_authorization_data,
+                // additional_tickets,
+
+                Ok(KerberosAsReq {
+                    nonce,
+                    // client_realm,
+                    client_name,
+                    service_name,
+                    from,
+                    until,
+                    renew,
+                    etypes,
+                    preauth,
+                })
+            }
+            _ => Err(KrbError::InvalidMessageDirection),
+        }
+    }
+}
+
+
 impl TryFrom<KdcRep> for KerberosAsRep {
     type Error = KrbError;
 
     fn try_from(rep: KdcRep) -> Result<Self, Self::Error> {
         // assert the pvno and msg_type
         if rep.pvno != 5 {
-            todo!();
+            return Err(KrbError::InvalidPvno);
         }
 
         let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidEnumValue(
-                std::any::type_name::<KrbMessageType>().to_string(),
-                rep.msg_type as i32,
-            )
+            KrbError::InvalidMessageType
         })?;
 
         match msg_type {
@@ -403,19 +510,17 @@ impl TryFrom<KdcRep> for KerberosAsRep {
 
                 let client_realm: String = rep.crealm.into();
                 let client_name: String = rep.cname.into();
-                let ticket = Ticket::try_from(rep.ticket);
+                let ticket = Ticket::try_from(rep.ticket)?;
 
                 Ok(KerberosAsRep {
                     client_realm,
                     client_name,
                     pa_data,
                     enc_part,
+                    ticket,
                 })
             }
-            _ => Err(KrbError::InvalidMessageType(
-                rep.msg_type as i32,
-                KrbMessageType::KrbAsRep as i32,
-            )),
+            _ => Err(KrbError::InvalidMessageDirection),
         }
     }
 }
@@ -426,22 +531,16 @@ impl TryFrom<KdcRep> for KerberosTgsRep {
     fn try_from(rep: KdcRep) -> Result<Self, Self::Error> {
         // assert the pvno and msg_type
         if rep.pvno != 5 {
-            todo!();
+            return Err(KrbError::InvalidPvno);
         }
 
         let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidEnumValue(
-                std::any::type_name::<KrbMessageType>().to_string(),
-                rep.msg_type as i32,
-            )
+            KrbError::InvalidMessageType
         })?;
 
         match msg_type {
             KrbMessageType::KrbTgsRep => Ok(KerberosTgsRep {}),
-            _ => Err(KrbError::InvalidMessageType(
-                rep.msg_type as i32,
-                KrbMessageType::KrbTgsRep as i32,
-            )),
+            _ => Err(KrbError::InvalidMessageDirection),
         }
     }
 }
@@ -452,14 +551,11 @@ impl TryFrom<crate::asn1::krb_error::KrbError> for KerberosErrRep {
     fn try_from(rep: crate::asn1::krb_error::KrbError) -> Result<Self, Self::Error> {
         // assert the pvno and msg_type
         if rep.pvno != 5 {
-            todo!();
+            return Err(KrbError::InvalidPvno);
         }
 
         let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidEnumValue(
-                std::any::type_name::<KrbMessageType>().to_string(),
-                rep.msg_type as i32,
-            )
+            KrbError::InvalidMessageType
         })?;
 
         match msg_type {
@@ -486,10 +582,7 @@ impl TryFrom<crate::asn1::krb_error::KrbError> for KerberosErrRep {
 
                 Ok(rep)
             }
-            _ => Err(KrbError::InvalidMessageType(
-                rep.msg_type as i32,
-                KrbMessageType::KrbError as i32,
-            )),
+            _ => Err(KrbError::InvalidMessageDirection),
         }
     }
 }
@@ -535,7 +628,6 @@ impl TryFrom<Vec<PaData>> for KerberosPaRep {
                         };
 
                         // I think at this point we should ignore any etypes we don't support.
-
                         let salt = einfo2.salt.map(|s| s.into());
                         let s2kparams = einfo2.s2kparams.map(|v| v.as_bytes().to_vec());
 
@@ -563,6 +655,40 @@ impl TryFrom<Vec<PaData>> for KerberosPaRep {
             enc_timestamp,
             etype_info2,
         })
+    }
+}
+
+impl TryFrom<Vec<PaData>> for PreAuth {
+    type Error = KrbError;
+
+    fn try_from(pavec: Vec<PaData>) -> Result<Self, Self::Error> {
+        let mut preauth = PreAuth::default();
+
+        for PaData {
+            padata_type,
+            padata_value,
+        } in pavec
+        {
+            let Ok(padt) = padata_type.try_into() else {
+                // padatatype that we don't support
+                continue;
+            };
+
+            match padt {
+                PaDataType::PaEncTimestamp => {
+                    let enc_timestamp = KdcEncryptedData::from_der(padata_value.as_bytes())
+                        .map_err(|_| { KrbError::DerDecodePaData })
+                        .and_then(EncryptedData::try_from)?;
+                    preauth.enc_timestamp = Some(enc_timestamp);
+                }
+                PaDataType::PaFxCookie => preauth.pa_fx_cookie = Some(padata_value.as_bytes().to_vec()),
+                _ => {
+                    // Ignore unsupported pa data types.
+                }
+            };
+        }
+
+        Ok(preauth)
     }
 }
 

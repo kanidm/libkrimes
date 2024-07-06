@@ -24,18 +24,21 @@ pub mod error;
 pub mod proto;
 
 use bytes::Buf;
-use bytes::BufMut;
+// use bytes::BufMut;
 use bytes::BytesMut;
 use der::Decode;
-use proto::KerberosResponse;
+use proto::{KerberosRequest, KerberosResponse};
 use std::io::{self};
 use tokio_util::codec::{Decoder, Encoder};
 use xdr_codec::record::XdrRecordReader;
-use xdr_codec::record::XdrRecordWriter;
-use xdr_codec::Write;
+// use xdr_codec::record::XdrRecordWriter;
+// use xdr_codec::Write;
 
 use crate::constants::DEFAULT_IO_MAX_SIZE;
-use crate::proto::KerberosRequest;
+
+pub struct KdcTcpCodec {
+    max_size: usize,
+}
 
 pub struct KerberosTcpCodec {
     max_size: usize,
@@ -87,13 +90,9 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosRequest, buf: &mut BytesMut) -> io::Result<()> {
-        debug_assert!(buf.is_empty());
-
         let der_bytes = msg
             .to_der()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-
-        debug_assert!(buf.len() <= self.max_size);
 
         /* RFC1831 section 10
         *
@@ -114,6 +113,76 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
         * highest-order bit of the header; the length is the 31 low-order bits.
         * (Note that this record specification is NOT in XDR standard form!)
         */
+
+        // Something is certainly wrong here with the xdr writer, as doing it by
+        // hand works. given how simple xdr is, maybe we just take this approach?
+
+        /*
+        // buf.resize(der_bytes.len() + 4, 0);
+        let mut w = XdrRecordWriter::new(buf.writer());
+        w.set_implicit_eor(true);
+        w.write_all(&der_bytes)
+        */
+
+        let d_len = der_bytes.len() as u32;
+        let d_len_bytes = d_len.to_be_bytes();
+        buf.clear();
+        buf.extend_from_slice(&d_len_bytes);
+        buf.extend_from_slice(&der_bytes);
+
+        Ok(())
+    }
+}
+
+impl Default for KdcTcpCodec {
+    fn default() -> Self {
+        KdcTcpCodec {
+            max_size: DEFAULT_IO_MAX_SIZE,
+        }
+    }
+}
+
+impl Decoder for KdcTcpCodec {
+    type Item = KerberosRequest;
+    type Error = io::Error;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let reader = buf.reader();
+        let mut xdr_reader = XdrRecordReader::new(reader);
+        xdr_reader.set_implicit_eor(true);
+
+        let record = xdr_reader.into_iter().next();
+
+        let record: Vec<u8> = match record {
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "XDR reader returned EOF",
+                ))
+            }
+            Some(rr) => match rr {
+                Err(x) => return Err(x),
+                Ok(buf) => buf,
+            },
+        };
+
+        let rep = KerberosRequest::from_der(&record)
+            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
+            .expect("Failed to decode");
+
+        buf.clear();
+
+        Ok(Some(rep))
+    }
+}
+
+impl Encoder<KerberosResponse> for KdcTcpCodec {
+    type Error = io::Error;
+
+    fn encode(&mut self, msg: KerberosResponse, buf: &mut BytesMut) -> io::Result<()> {
+        let der_bytes = msg
+            .to_der()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
         // Something is certainly wrong here with the xdr writer, as doing it by
         // hand works. given how simple xdr is, maybe we just take this approach?
