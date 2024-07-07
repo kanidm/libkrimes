@@ -31,7 +31,7 @@ are able to self-host these internally in the library.
 
 ```
 docker build -f Dockerfile.kdc -t libkrime .
-docker run -e KRB5_TRACE=/dev/stderr -p 55000:88 -i -t libkrime
+docker run --rm -e KRB5_TRACE=/dev/stderr -p 55000:88 -i -t libkrime
 ```
 
 Generally the logging from the KDC is poor at best and probably won't help you much.

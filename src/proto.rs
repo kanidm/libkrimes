@@ -5,30 +5,33 @@ use crate::asn1::{
     },
     encrypted_data::EncryptedData as KdcEncryptedData,
     etype_info2::ETypeInfo2 as KdcETypeInfo2,
-    krb_error::KrbError as KdcKrbError,
+    etype_info2::ETypeInfo2Entry as KdcETypeInfo2Entry,
     kdc_rep::KdcRep,
     kdc_req::KdcReq,
     kdc_req_body::KdcReqBody,
     // kerberos_flags::KerberosFlags,
     kerberos_string::KerberosString,
     kerberos_time::KerberosTime,
+    krb_error::KrbError as KdcKrbError,
     krb_error::MethodData,
-    krb_kdc_req::KrbKdcReq,
     krb_kdc_rep::KrbKdcRep,
+    krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
-    realm::Realm,
     pa_enc_ts_enc::PaEncTsEnc,
     principal_name::PrincipalName,
+    realm::Realm,
     tagged_ticket::TaggedTicket,
-    BitString, Ia5String, OctetString,
+    BitString,
+    Ia5String,
+    OctetString,
 };
-use der::{Decode, Encode};
 use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{
     decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
     derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
+use der::{Decode, Encode};
 use rand::{thread_rng, Rng};
 
 use std::cmp::Ordering;
@@ -104,7 +107,7 @@ pub enum EncryptedData {
 pub struct KerberosAsRep {
     pub(crate) name: Name,
     pub(crate) enc_part: EncryptedData,
-    pub(crate) pa_data: Option<KerberosPaRep>,
+    pub(crate) pa_data: Option<PreAuthData>,
     pub(crate) ticket: Ticket,
 }
 
@@ -113,12 +116,6 @@ pub struct KerberosTgsRep {}
 
 #[derive(Debug)]
 pub struct PreAuthData {
-    pub(crate) pa_type: u32,
-    pub(crate) pa_value: Vec<u8>,
-}
-
-#[derive(Debug)]
-pub struct KerberosPaRep {
     pub(crate) pa_fx_fast: bool,
     pub(crate) enc_timestamp: bool,
     pub(crate) pa_fx_cookie: Option<Vec<u8>>,
@@ -126,6 +123,12 @@ pub struct KerberosPaRep {
 }
 
 #[derive(Debug)]
+pub struct KerberosPaRep {
+    pub(crate) pa_data: PreAuthData,
+    pub(crate) service: Name,
+}
+
+#[derive(Debug, Clone)]
 pub enum Name {
     Principal {
         name: String,
@@ -196,18 +199,19 @@ enum KerberosErrRep {
 }
 
 impl KerberosPaRep {
-    pub fn new() -> Self {
+    pub fn new(service: Name) -> Self {
         KerberosPaRep {
-            pa_fx_fast: false,
-            enc_timestamp: true,
-            pa_fx_cookie: None,
-            etype_info2: vec![
-                EtypeInfo2 {
+            pa_data: PreAuthData {
+                pa_fx_fast: false,
+                enc_timestamp: true,
+                pa_fx_cookie: None,
+                etype_info2: vec![EtypeInfo2 {
                     etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
                     salt: None,
                     s2kparams: None,
-                }
-            ],
+                }],
+            },
+            service,
         }
     }
 }
@@ -245,9 +249,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
 
     fn try_into(self) -> Result<KrbKdcReq, Self::Error> {
         match self {
-            KerberosRequest::AsReq(as_req) => {
-                as_req.try_into().map(KrbKdcReq::AsReq)
-            }
+            KerberosRequest::AsReq(as_req) => as_req.try_into().map(KrbKdcReq::AsReq),
         }
     }
 }
@@ -287,12 +289,13 @@ impl TryFrom<KrbKdcRep> for KerberosResponse {
                 })
             }
         }
-
     }
 }
 
-impl Into<KrbKdcRep> for KerberosResponse {
-    fn into(self) -> KrbKdcRep {
+impl TryInto<KrbKdcRep> for KerberosResponse {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<KrbKdcRep, Self::Error> {
         match self {
             KerberosResponse::AsRep(as_rep) => {
                 // let asn_as_req = as_req.to_asn()?;
@@ -303,9 +306,51 @@ impl Into<KrbKdcRep> for KerberosResponse {
                 todo!();
             }
             KerberosResponse::PaRep(pa_rep) => {
-                /*
-                let error_code = KrbErrorCode::KdcErrPreauthRequired;
-                // The pre-auth data is stuffed into error_data. Because of course.
+                let error_code = KrbErrorCode::KdcErrPreauthRequired as i32;
+                // The pre-auth data is stuffed into error_data. Because of course kerberos can't
+                // do nice things.
+                let etype_padata_vec = vec![KdcETypeInfo2Entry {
+                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
+                    salt: None,
+                    s2kparams: None,
+                }];
+
+                let etype_padata_value = etype_padata_vec
+                    .to_der()
+                    .and_then(OctetString::new)
+                    .map_err(|_| KrbError::DerEncodeOctetString)?;
+
+                let pavec = vec![
+                    PaData {
+                        padata_type: PaDataType::PaEncTimestamp as u32,
+                        padata_value: OctetString::new(&[])
+                            .map_err(|err| KrbError::DerEncodeOctetString)?,
+                    },
+                    PaData {
+                        padata_type: PaDataType::PaEtypeInfo2 as u32,
+                        padata_value: etype_padata_value,
+                    },
+                ];
+
+                let error_data = pavec
+                    .to_der()
+                    .and_then(OctetString::new)
+                    .map(Some)
+                    .map_err(|_| KrbError::DerEncodeOctetString)?;
+
+                let error_text = Ia5String::new("Preauthentication Required")
+                    .map(KerberosString)
+                    .ok();
+
+                let stime = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    // We need to stip the fractional part.
+                    .map(|t| Duration::from_secs(t.as_secs()))
+                    .unwrap_or_default();
+
+                let stime = KerberosTime::from_unix_duration(stime).unwrap();
+
+                let (service_name, service_realm) = (&pa_rep.service).try_into()?;
 
                 let krb_error = KdcKrbError {
                     pvno: 5,
@@ -313,18 +358,18 @@ impl Into<KrbKdcRep> for KerberosResponse {
                     ctime: None,
                     cusec: None,
                     stime,
-                    susec,
+                    susec: 0,
                     error_code,
                     crealm: None,
                     cname: None,
                     service_realm,
+                    service_name,
                     error_text,
                     error_data,
                 };
 
                 Ok(KrbKdcRep::ErrRep(krb_error))
-                */
-                todo!();
+                // todo!();
             }
             KerberosResponse::ErrRep(err_rep) => {
                 todo!();
@@ -370,12 +415,12 @@ impl KerberosAsReqBuilder {
     }
 }
 
-
 impl TryInto<KdcReq> for KerberosAsReq {
     type Error = KrbError;
 
     fn try_into(self) -> Result<KdcReq, Self::Error> {
-        let padata = if self.preauth.pa_fx_cookie.is_some() || self.preauth.enc_timestamp.is_some() {
+        let padata = if self.preauth.pa_fx_cookie.is_some() || self.preauth.enc_timestamp.is_some()
+        {
             let mut padata_inner = Vec::with_capacity(2);
 
             if let Some(fx_cookie) = &self.preauth.pa_fx_cookie {
@@ -401,7 +446,9 @@ impl TryInto<KdcReq> for KerberosAsReq {
                 };
 
                 // Need to encode the padata value now.
-                let padata_value = padata_value.to_der().and_then(OctetString::new)
+                let padata_value = padata_value
+                    .to_der()
+                    .and_then(OctetString::new)
                     .map_err(|_| KrbError::DerEncodeOctetString)?;
 
                 padata_inner.push(PaData {
@@ -473,29 +520,29 @@ impl TryFrom<KdcReq> for KerberosAsReq {
             return Err(KrbError::InvalidPvno);
         }
 
-        let msg_type = KrbMessageType::try_from(req.msg_type).map_err(|_| {
-            KrbError::InvalidMessageType
-        })?;
+        let msg_type =
+            KrbMessageType::try_from(req.msg_type).map_err(|_| KrbError::InvalidMessageType)?;
 
         match msg_type {
             KrbMessageType::KrbAsReq => {
                 // Filter and use only the finest of etypes.
-                let mut etypes = req.req_body.etype.iter().filter_map(|etype| {
-                    EncryptionType::try_from(*etype)
-                        .ok()
-                        .and_then(|etype| {
-                            match etype {
+                let mut etypes = req
+                    .req_body
+                    .etype
+                    .iter()
+                    .filter_map(|etype| {
+                        EncryptionType::try_from(*etype)
+                            .ok()
+                            .and_then(|etype| match etype {
                                 EncryptionType::AES256_CTS_HMAC_SHA1_96 => Some(etype),
                                 _ => None,
-                            }
-                        })
-                }).collect();
+                            })
+                    })
+                    .collect();
 
                 let preauth = req
                     .padata
-                    .map(|pavec|
-                        PreAuth::try_from(pavec)
-                    )
+                    .map(|pavec| PreAuth::try_from(pavec))
                     .transpose()?
                     .unwrap_or_default();
                 trace!(?preauth);
@@ -506,7 +553,9 @@ impl TryFrom<KdcReq> for KerberosAsReq {
                 let client_name: Name = (cname, realm).try_into().unwrap();
 
                 // Is realm from .realm? In the service? Who knows! The krb spec is cooked.
-                let service_name: Name = req.req_body.sname
+                let service_name: Name = req
+                    .req_body
+                    .sname
                     .ok_or(KrbError::MissingServiceNameWithRealm)
                     .and_then(|s| s.try_into())?;
 
@@ -536,7 +585,6 @@ impl TryFrom<KdcReq> for KerberosAsReq {
     }
 }
 
-
 impl TryFrom<KdcRep> for KerberosAsRep {
     type Error = KrbError;
 
@@ -546,9 +594,8 @@ impl TryFrom<KdcRep> for KerberosAsRep {
             return Err(KrbError::InvalidPvno);
         }
 
-        let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidMessageType
-        })?;
+        let msg_type =
+            KrbMessageType::try_from(rep.msg_type).map_err(|_| KrbError::InvalidMessageType)?;
 
         match msg_type {
             KrbMessageType::KrbAsRep => {
@@ -557,7 +604,7 @@ impl TryFrom<KdcRep> for KerberosAsRep {
 
                 let pa_data = rep
                     .padata
-                    .map(|pavec| KerberosPaRep::try_from(pavec))
+                    .map(|pavec| PreAuthData::try_from(pavec))
                     .transpose()?;
                 trace!(?pa_data);
 
@@ -585,9 +632,8 @@ impl TryFrom<KdcRep> for KerberosTgsRep {
             return Err(KrbError::InvalidPvno);
         }
 
-        let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidMessageType
-        })?;
+        let msg_type =
+            KrbMessageType::try_from(rep.msg_type).map_err(|_| KrbError::InvalidMessageType)?;
 
         match msg_type {
             KrbMessageType::KrbTgsRep => Ok(KerberosTgsRep {}),
@@ -607,9 +653,8 @@ impl TryFrom<KdcKrbError> for KerberosErrRep {
             return Err(KrbError::InvalidPvno);
         }
 
-        let msg_type = KrbMessageType::try_from(rep.msg_type).map_err(|_| {
-            KrbError::InvalidMessageType
-        })?;
+        let msg_type =
+            KrbMessageType::try_from(rep.msg_type).map_err(|_| KrbError::InvalidMessageType)?;
 
         match msg_type {
             KrbMessageType::KrbError => {
@@ -627,7 +672,12 @@ impl TryFrom<KdcKrbError> for KerberosErrRep {
                         let pavec: Vec<PaData> = MethodData::from_der(edata.as_bytes())
                             .map_err(|_| KrbError::DerDecodePaData)?;
 
-                        let pa_rep = KerberosPaRep::try_from(pavec)?;
+                        let pa_data = PreAuthData::try_from(pavec)?;
+
+                        let service = Name::try_from((rep.service_name, rep.service_realm))?;
+
+                        let pa_rep = KerberosPaRep { pa_data, service };
+
                         KerberosErrRep::Pa(pa_rep)
                     }
                     err_code => KerberosErrRep::Err(err_code),
@@ -640,7 +690,7 @@ impl TryFrom<KdcKrbError> for KerberosErrRep {
     }
 }
 
-impl TryFrom<Vec<PaData>> for KerberosPaRep {
+impl TryFrom<Vec<PaData>> for PreAuthData {
     type Error = KrbError;
 
     fn try_from(pavec: Vec<PaData>) -> Result<Self, Self::Error> {
@@ -702,7 +752,7 @@ impl TryFrom<Vec<PaData>> for KerberosPaRep {
         // Sort the etype_info by cryptographic strength.
         etype_info2.sort_unstable_by(sort_cryptographic_strength);
 
-        Ok(KerberosPaRep {
+        Ok(PreAuthData {
             pa_fx_fast,
             pa_fx_cookie,
             enc_timestamp,
@@ -730,11 +780,13 @@ impl TryFrom<Vec<PaData>> for PreAuth {
             match padt {
                 PaDataType::PaEncTimestamp => {
                     let enc_timestamp = KdcEncryptedData::from_der(padata_value.as_bytes())
-                        .map_err(|_| { KrbError::DerDecodePaData })
+                        .map_err(|_| KrbError::DerDecodePaData)
                         .and_then(EncryptedData::try_from)?;
                     preauth.enc_timestamp = Some(enc_timestamp);
                 }
-                PaDataType::PaFxCookie => preauth.pa_fx_cookie = Some(padata_value.as_bytes().to_vec()),
+                PaDataType::PaFxCookie => {
+                    preauth.pa_fx_cookie = Some(padata_value.as_bytes().to_vec())
+                }
                 _ => {
                     // Ignore unsupported pa data types.
                 }
@@ -769,6 +821,25 @@ impl EncryptedData {
                 decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)
             }
         }
+    }
+
+    pub fn decrypt_pa_enc_timestamp(&self, base_key: &BaseKey) -> Result<SystemTime, KrbError> {
+        // https://www.rfc-editor.org/rfc/rfc4120#section-5.2.7.2
+        let data = self.decrypt_data(base_key, 1)?;
+
+        let paenctsenc = PaEncTsEnc::from_der(&data).map_err(|_| KrbError::DerDecodePaEncTsEnc)?;
+
+        trace!(?paenctsenc);
+
+        let stime = paenctsenc.patimestamp.to_system_time();
+        let usecs = paenctsenc
+            .pausec
+            .map(|s| Duration::from_micros(s as u64))
+            .unwrap_or_default();
+
+        let stime = stime + usecs;
+
+        Ok(stime)
     }
 }
 
@@ -821,27 +892,31 @@ impl KerberosPaRep {
         epoch_seconds: Duration,
     ) -> Result<PreAuth, KrbError> {
         // Major TODO: Can we actually use a reasonable amount of iterations?
-        if !self.enc_timestamp {
+        if !self.pa_data.enc_timestamp {
             return Err(KrbError::PreAuthUnsupported);
         }
 
         // This gets the highest encryption strength item.
-        let Some(einfo2) = self.etype_info2.last() else {
+        let Some(einfo2) = self.pa_data.etype_info2.last() else {
             return Err(KrbError::PreAuthMissingEtypeInfo2);
         };
 
         // https://www.rfc-editor.org/rfc/rfc4120#section-5.2.7.2
         let key_usage = 1;
 
+        // Strip any excess time.
+        let usecs = epoch_seconds.subsec_micros();
+        let epoch_seconds = Duration::from_secs(epoch_seconds.as_secs());
+
         let patimestamp = KerberosTime::from_unix_duration(epoch_seconds)
             .map_err(|_| KrbError::PreAuthInvalidUnixTs)?;
 
         let paenctsenc = PaEncTsEnc {
             patimestamp,
-            pausec: None,
+            pausec: Some(usecs),
         };
 
-        eprintln!("{:?}", paenctsenc);
+        trace!(?paenctsenc);
 
         let data = paenctsenc
             .to_der()
@@ -885,7 +960,7 @@ impl KerberosPaRep {
         };
 
         // fx cookie always has to be sent.
-        let pa_fx_cookie = self.pa_fx_cookie.clone();
+        let pa_fx_cookie = self.pa_data.pa_fx_cookie.clone();
 
         Ok(PreAuth {
             enc_timestamp: Some(enc_timestamp),
@@ -915,14 +990,10 @@ impl TryInto<PrincipalName> for &Name {
 
     fn try_into(self) -> Result<PrincipalName, KrbError> {
         match self {
-            Name::Principal {
-                name, realm
-            } => {
+            Name::Principal { name, realm } => {
                 let name_string = vec![
-                    KerberosString(Ia5String::new(name)
-                        .unwrap()),
-                    KerberosString(Ia5String::new(realm)
-                        .unwrap())
+                    KerberosString(Ia5String::new(name).unwrap()),
+                    KerberosString(Ia5String::new(realm).unwrap()),
                 ];
 
                 Ok(PrincipalName {
@@ -930,14 +1001,10 @@ impl TryInto<PrincipalName> for &Name {
                     name_string,
                 })
             }
-            Name::SrvInst {
-                service, realm
-            } => {
+            Name::SrvInst { service, realm } => {
                 let name_string = vec![
-                    KerberosString(Ia5String::new(service)
-                        .unwrap()),
-                    KerberosString(Ia5String::new(realm)
-                        .unwrap())
+                    KerberosString(Ia5String::new(service).unwrap()),
+                    KerberosString(Ia5String::new(realm).unwrap()),
                 ];
 
                 Ok(PrincipalName {
@@ -946,15 +1013,14 @@ impl TryInto<PrincipalName> for &Name {
                 })
             }
             Name::SrvHst {
-                service, host, realm
+                service,
+                host,
+                realm,
             } => {
                 let name_string = vec![
-                    KerberosString(Ia5String::new(service)
-                        .unwrap()),
-                    KerberosString(Ia5String::new(host)
-                        .unwrap()),
-                    KerberosString(Ia5String::new(realm)
-                        .unwrap())
+                    KerberosString(Ia5String::new(service).unwrap()),
+                    KerberosString(Ia5String::new(host).unwrap()),
+                    KerberosString(Ia5String::new(realm).unwrap()),
                 ];
 
                 Ok(PrincipalName {
@@ -971,53 +1037,48 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
 
     fn try_into(self) -> Result<(PrincipalName, Realm), KrbError> {
         match self {
-            Name::Principal {
-                name, realm
-            } => {
-                let name_string = vec![KerberosString(Ia5String::new(&name)
-                    .unwrap())
-                ];
-                let realm = KerberosString(Ia5String::new(realm)
-                    .unwrap()
-                );
+            Name::Principal { name, realm } => {
+                let name_string = vec![KerberosString(Ia5String::new(&name).unwrap())];
+                let realm = KerberosString(Ia5String::new(realm).unwrap());
 
-                Ok((PrincipalName {
-                    name_type: 1,
-                    name_string,
-                }, realm))
+                Ok((
+                    PrincipalName {
+                        name_type: 1,
+                        name_string,
+                    },
+                    realm,
+                ))
             }
-            Name::SrvInst {
-                service, realm
-            } => {
-                let name_string = vec![KerberosString(Ia5String::new(&service)
-                    .unwrap()
-                )];
-                let realm = KerberosString(Ia5String::new(realm)
-                    .unwrap()
-                );
+            Name::SrvInst { service, realm } => {
+                let name_string = vec![KerberosString(Ia5String::new(&service).unwrap())];
+                let realm = KerberosString(Ia5String::new(realm).unwrap());
 
-                Ok((PrincipalName {
-                    name_type: 2,
-                    name_string,
-                }, realm))
+                Ok((
+                    PrincipalName {
+                        name_type: 2,
+                        name_string,
+                    },
+                    realm,
+                ))
             }
             Name::SrvHst {
-                service, host, realm
+                service,
+                host,
+                realm,
             } => {
                 let name_string = vec![
-                    KerberosString(Ia5String::new(&service)
-                        .unwrap()),
-                    KerberosString(Ia5String::new(&host)
-                        .unwrap()
-                )];
-                let realm = KerberosString(Ia5String::new(realm)
-                    .unwrap()
-                );
+                    KerberosString(Ia5String::new(&service).unwrap()),
+                    KerberosString(Ia5String::new(&host).unwrap()),
+                ];
+                let realm = KerberosString(Ia5String::new(realm).unwrap());
 
-                Ok((PrincipalName {
-                    name_type: 3,
-                    name_string,
-                }, realm))
+                Ok((
+                    PrincipalName {
+                        name_type: 3,
+                        name_string,
+                    },
+                    realm,
+                ))
             }
         }
     }
@@ -1035,23 +1096,21 @@ impl TryFrom<PrincipalName> for Name {
             1 => {
                 let name = name_string.get(0).unwrap().into();
                 let realm = name_string.get(1).unwrap().into();
-                Ok(Name::Principal {
-                    name, realm
-                })
+                Ok(Name::Principal { name, realm })
             }
             2 => {
                 let service = name_string.get(0).unwrap().into();
                 let realm = name_string.get(1).unwrap().into();
-                Ok(Name::SrvInst {
-                    service, realm
-                })
+                Ok(Name::SrvInst { service, realm })
             }
             3 => {
                 let service = name_string.get(0).unwrap().into();
                 let host = name_string.get(1).unwrap().into();
                 let realm = name_string.get(2).unwrap().into();
                 Ok(Name::SrvHst {
-                    service, host, realm
+                    service,
+                    host,
+                    realm,
                 })
             }
             _ => todo!(),
@@ -1073,27 +1132,22 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
         match name_type {
             1 => {
                 let name = name_string.get(0).unwrap().into();
-                Ok(Name::Principal {
-                    name, realm
-                })
+                Ok(Name::Principal { name, realm })
             }
             2 => {
                 let service = name_string.get(0).unwrap().into();
-                Ok(Name::SrvInst {
-                    service, realm
-                })
+                Ok(Name::SrvInst { service, realm })
             }
             3 => {
                 let service = name_string.get(0).unwrap().into();
                 let host = name_string.get(1).unwrap().into();
                 Ok(Name::SrvHst {
-                    service, host, realm
+                    service,
+                    host,
+                    realm,
                 })
             }
             _ => todo!(),
         }
     }
 }
-
-
-

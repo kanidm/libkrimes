@@ -223,8 +223,7 @@ mod tests {
             let message = KrbKdcRep::from_der(&blob).expect("Failed to decode");
             match message {
                 KrbKdcRep::AsRep(asrep) => verify_as_rep(&asrep, &sample),
-                KrbKdcRep::TgsRep(_) 
-                | KrbKdcRep::ErrRep(_) => todo!(),
+                KrbKdcRep::TgsRep(_) | KrbKdcRep::ErrRep(_) => todo!(),
             }
         }
     }

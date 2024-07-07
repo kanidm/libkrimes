@@ -23,10 +23,7 @@ mod tests {
     use crate::asn1::constants::EncryptionType;
     use crate::asn1::encrypted_data::EncryptedData;
     use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
-    use crate::crypto::{
-        derive_key_aes256_cts_hmac_sha1_96,
-        decrypt_aes256_cts_hmac_sha1_96,
-    };
+    use crate::crypto::{decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96};
     use der::{DateTime, Decode};
 
     #[test]
@@ -46,12 +43,8 @@ mod tests {
         )
         .unwrap();
 
-        let plain = decrypt_aes256_cts_hmac_sha1_96(
-            &key,
-            edata.cipher.as_bytes(),
-            1,
-        )
-        .expect("Failed to decrypt");
+        let plain = decrypt_aes256_cts_hmac_sha1_96(&key, edata.cipher.as_bytes(), 1)
+            .expect("Failed to decrypt");
 
         let paenctsenc = PaEncTsEnc::from_der(&plain).expect("Failed to decode");
         assert_eq!(

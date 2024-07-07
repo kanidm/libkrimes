@@ -34,10 +34,7 @@ use xdr_codec::record::XdrRecordReader;
 // use xdr_codec::record::XdrRecordWriter;
 // use xdr_codec::Write;
 
-use crate::asn1::{
-    krb_kdc_rep::KrbKdcRep,
-    krb_kdc_req::KrbKdcReq,
-};
+use crate::asn1::{krb_kdc_rep::KrbKdcRep, krb_kdc_req::KrbKdcReq};
 
 use crate::constants::DEFAULT_IO_MAX_SIZE;
 
@@ -97,8 +94,7 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosRequest, buf: &mut BytesMut) -> io::Result<()> {
-        let req: KrbKdcReq = msg.try_into()
-            .unwrap();
+        let req: KrbKdcReq = msg.try_into().unwrap();
 
         let der_bytes = req
             .to_der()
@@ -180,8 +176,7 @@ impl Decoder for KdcTcpCodec {
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
-        let req = KerberosRequest::try_from(krb_kdc_req)
-            .unwrap();
+        let req = KerberosRequest::try_from(krb_kdc_req).unwrap();
 
         buf.clear();
 
@@ -193,8 +188,7 @@ impl Encoder<KerberosResponse> for KdcTcpCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosResponse, buf: &mut BytesMut) -> io::Result<()> {
-        let krb_kdc_rep: KrbKdcRep = msg.try_into()
-            .unwrap();
+        let krb_kdc_rep: KrbKdcRep = msg.try_into().unwrap();
         let der_bytes = krb_kdc_rep
             .to_der()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
@@ -331,10 +325,10 @@ mod tests {
         // corresponding salt and string to key parameters.
 
         // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
-        assert!(pa_rep.enc_timestamp);
+        assert!(pa_rep.pa_data.enc_timestamp);
 
         // Assert returned preauth data contains PA-ETYPE-INFO2
-        assert!(!pa_rep.etype_info2.is_empty());
+        assert!(!pa_rep.pa_data.etype_info2.is_empty());
 
         // Compute the pre-authentication.
         let now = SystemTime::now();
