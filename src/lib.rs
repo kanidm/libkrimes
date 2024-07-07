@@ -264,7 +264,7 @@ mod tests {
 
         let base_key = asrep
             .enc_part
-            .derive_key(b"password", b"EXAMPLE.COM", b"testuser")
+            .derive_key(b"password", b"EXAMPLE.COM", b"testuser", Some(0x1000))
             .unwrap();
 
         // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP

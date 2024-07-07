@@ -199,7 +199,10 @@ enum KerberosErrRep {
 }
 
 impl KerberosPaRep {
-    pub fn new(service: Name) -> Self {
+    pub fn new(service: Name, salt: String, aes256_cts_hmac_sha1_96_iter_count: u32) -> Self {
+        let aes256_cts_hmac_sha1_96_iter_count =
+            aes256_cts_hmac_sha1_96_iter_count.to_be_bytes().to_vec();
+
         KerberosPaRep {
             pa_data: PreAuthData {
                 pa_fx_fast: false,
@@ -207,8 +210,8 @@ impl KerberosPaRep {
                 pa_fx_cookie: None,
                 etype_info2: vec![EtypeInfo2 {
                     etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
-                    salt: None,
-                    s2kparams: None,
+                    salt: Some(salt),
+                    s2kparams: Some(aes256_cts_hmac_sha1_96_iter_count),
                 }],
             },
             service,
@@ -309,11 +312,28 @@ impl TryInto<KrbKdcRep> for KerberosResponse {
                 let error_code = KrbErrorCode::KdcErrPreauthRequired as i32;
                 // The pre-auth data is stuffed into error_data. Because of course kerberos can't
                 // do nice things.
-                let etype_padata_vec = vec![KdcETypeInfo2Entry {
-                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
-                    salt: None,
-                    s2kparams: None,
-                }];
+                let etype_padata_vec: Vec<_> = pa_rep
+                    .pa_data
+                    .etype_info2
+                    .iter()
+                    .map(|einfo| {
+                        let etype = einfo.etype as i32;
+                        let salt = einfo
+                            .salt
+                            .as_ref()
+                            .map(|data| KerberosString(Ia5String::new(data).unwrap()));
+                        let s2kparams = einfo
+                            .s2kparams
+                            .as_ref()
+                            .map(|data| OctetString::new(data.to_owned()).unwrap());
+
+                        KdcETypeInfo2Entry {
+                            etype: einfo.etype as i32,
+                            salt,
+                            s2kparams,
+                        }
+                    })
+                    .collect();
 
                 let etype_padata_value = etype_padata_vec
                     .to_der()
@@ -801,13 +821,27 @@ impl EncryptedData {
         passphrase: &[u8],
         realm: &[u8],
         cname: &[u8],
+        iter_count: Option<u32>,
     ) -> Result<BaseKey, KrbError> {
         match self {
             EncryptedData::Aes256CtsHmacSha196 { .. } => {
                 // TODO: check the padata.
-
-                let iter_count = None;
                 derive_key_aes256_cts_hmac_sha1_96(passphrase, realm, cname, iter_count)
+                    .map(|k| BaseKey::Aes256 { k })
+            }
+        }
+    }
+
+    pub fn derive_salted_key(
+        &self,
+        passphrase: &[u8],
+        salt: &[u8],
+        iter_count: Option<u32>,
+    ) -> Result<BaseKey, KrbError> {
+        match self {
+            EncryptedData::Aes256CtsHmacSha196 { .. } => {
+                // TODO: check the padata.
+                derive_key_external_salt_aes256_cts_hmac_sha1_96(passphrase, salt, iter_count)
                     .map(|k| BaseKey::Aes256 { k })
             }
         }
