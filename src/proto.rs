@@ -228,8 +228,8 @@ impl KerberosRequest {
             EncryptionType::AES256_CTS_HMAC_SHA1_96,
             // MIT KRB5 claims to support these values, but if they are provided then MIT
             // KDC's will ignore them.
-            // EncryptionType::AES128_CTS_HMAC_SHA256_128 as i32,
-            // EncryptionType::AES256_CTS_HMAC_SHA384_192 as i32,
+            // EncryptionType::AES128_CTS_HMAC_SHA256_128,
+            // EncryptionType::AES256_CTS_HMAC_SHA384_192,
         ];
 
         KerberosAsReqBuilder {
@@ -421,7 +421,7 @@ impl TryInto<KdcReq> for KerberosAsReq {
     fn try_into(self) -> Result<KdcReq, Self::Error> {
         let padata = if self.preauth.pa_fx_cookie.is_some() || self.preauth.enc_timestamp.is_some()
         {
-            let mut padata_inner = Vec::with_capacity(2);
+            let mut padata_inner = Vec::with_capacity(4);
 
             if let Some(fx_cookie) = &self.preauth.pa_fx_cookie {
                 let padata_value = OctetString::new(fx_cookie.clone())
@@ -457,17 +457,15 @@ impl TryInto<KdcReq> for KerberosAsReq {
                 })
             }
 
-            /*
             padata_inner.push(PaData {
                 padata_type: PaDataType::PadataAsFreshness as u32,
-                padata_value: OctetString::new(&[])?,
+                padata_value: OctetString::new(&[]).map_err(|_| KrbError::DerEncodeOctetString)?,
             });
 
             padata_inner.push(PaData {
                 padata_type: PaDataType::EncpadataReqEncPaRep as u32,
-                padata_value: OctetString::new(&[])?,
+                padata_value: OctetString::new(&[]).map_err(|_| KrbError::DerEncodeOctetString)?,
             });
-            */
 
             Some(padata_inner)
         } else {

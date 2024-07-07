@@ -349,10 +349,20 @@ mod tests {
             Name::service_krbtgt("EXAMPLE.COM"),
             None,
             now + Duration::from_secs(3600),
-            Some(now + Duration::from_secs(86400)),
+            Some(now + Duration::from_secs(86400 * 7)),
         )
         .add_preauthentication(pre_auth)
         .build();
+
+        // Now, because MIT KRB is *silly* we have to re-open the connection. Because apparently
+        // the MIT KRB TCP transport is just "lets pretend to be UDP with with TCP" instead of
+        // doing something sensible. I can only imagine that KKDCP also does similar ... sillyness.
+
+        let stream = TcpStream::connect("127.0.0.1:55000")
+            .await
+            .expect("Unable to connect to localhost:55000");
+
+        let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
         // Write a request
         krb_stream
