@@ -24,7 +24,7 @@ pub(crate) struct Ticket {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct TaggedTicket(Ticket);
+pub(crate) struct TaggedTicket(pub Ticket);
 
 impl TaggedTicket {
     pub fn new(tkt: Ticket) -> Self {

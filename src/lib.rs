@@ -24,18 +24,23 @@ pub mod error;
 pub mod proto;
 
 use bytes::Buf;
-use bytes::BufMut;
+// use bytes::BufMut;
 use bytes::BytesMut;
-use der::Decode;
-use proto::KerberosResponse;
+use der::{Decode, Encode};
+use proto::{KerberosRequest, KerberosResponse};
 use std::io::{self};
 use tokio_util::codec::{Decoder, Encoder};
 use xdr_codec::record::XdrRecordReader;
-use xdr_codec::record::XdrRecordWriter;
-use xdr_codec::Write;
+// use xdr_codec::record::XdrRecordWriter;
+// use xdr_codec::Write;
+
+use crate::asn1::{krb_kdc_rep::KrbKdcRep, krb_kdc_req::KrbKdcReq};
 
 use crate::constants::DEFAULT_IO_MAX_SIZE;
-use crate::proto::KerberosRequest;
+
+pub struct KdcTcpCodec {
+    max_size: usize,
+}
 
 pub struct KerberosTcpCodec {
     max_size: usize,
@@ -73,9 +78,13 @@ impl Decoder for KerberosTcpCodec {
             },
         };
 
-        let rep = KerberosResponse::from_der(&record)
+        let krb_kdc_rep = KrbKdcRep::from_der(&record)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
+
+        let rep = KerberosResponse::try_from(krb_kdc_rep).unwrap();
+
+        buf.clear();
 
         Ok(Some(rep))
     }
@@ -85,13 +94,11 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosRequest, buf: &mut BytesMut) -> io::Result<()> {
-        debug_assert!(buf.is_empty());
+        let req: KrbKdcReq = msg.try_into().unwrap();
 
-        let der_bytes = msg
+        let der_bytes = req
             .to_der()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-
-        debug_assert!(buf.len() <= self.max_size);
 
         /* RFC1831 section 10
         *
@@ -112,9 +119,97 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
         * highest-order bit of the header; the length is the 31 low-order bits.
         * (Note that this record specification is NOT in XDR standard form!)
         */
+
+        // Something is certainly wrong here with the xdr writer, as doing it by
+        // hand works. given how simple xdr is, maybe we just take this approach?
+
+        /*
+        // buf.resize(der_bytes.len() + 4, 0);
         let mut w = XdrRecordWriter::new(buf.writer());
         w.set_implicit_eor(true);
         w.write_all(&der_bytes)
+        */
+
+        let d_len = der_bytes.len() as u32;
+        let d_len_bytes = d_len.to_be_bytes();
+        buf.clear();
+        buf.extend_from_slice(&d_len_bytes);
+        buf.extend_from_slice(&der_bytes);
+
+        Ok(())
+    }
+}
+
+impl Default for KdcTcpCodec {
+    fn default() -> Self {
+        KdcTcpCodec {
+            max_size: DEFAULT_IO_MAX_SIZE,
+        }
+    }
+}
+
+impl Decoder for KdcTcpCodec {
+    type Item = KerberosRequest;
+    type Error = io::Error;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let reader = buf.reader();
+        let mut xdr_reader = XdrRecordReader::new(reader);
+        xdr_reader.set_implicit_eor(true);
+
+        let record = xdr_reader.into_iter().next();
+
+        let record: Vec<u8> = match record {
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "XDR reader returned EOF",
+                ))
+            }
+            Some(rr) => match rr {
+                Err(x) => return Err(x),
+                Ok(buf) => buf,
+            },
+        };
+
+        let krb_kdc_req = KrbKdcReq::from_der(&record)
+            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
+            .expect("Failed to decode");
+
+        let req = KerberosRequest::try_from(krb_kdc_req).unwrap();
+
+        buf.clear();
+
+        Ok(Some(req))
+    }
+}
+
+impl Encoder<KerberosResponse> for KdcTcpCodec {
+    type Error = io::Error;
+
+    fn encode(&mut self, msg: KerberosResponse, buf: &mut BytesMut) -> io::Result<()> {
+        let krb_kdc_rep: KrbKdcRep = msg.try_into().unwrap();
+        let der_bytes = krb_kdc_rep
+            .to_der()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+        // Something is certainly wrong here with the xdr writer, as doing it by
+        // hand works. given how simple xdr is, maybe we just take this approach?
+
+        /*
+        // buf.resize(der_bytes.len() + 4, 0);
+        let mut w = XdrRecordWriter::new(buf.writer());
+        w.set_implicit_eor(true);
+        w.write_all(&der_bytes)
+        */
+
+        let d_len = der_bytes.len() as u32;
+        let d_len_bytes = d_len.to_be_bytes();
+        buf.clear();
+        buf.extend_from_slice(&d_len_bytes);
+        buf.extend_from_slice(&der_bytes);
+
+        Ok(())
     }
 }
 
@@ -130,12 +225,12 @@ mod tests {
     use super::KerberosTcpCodec;
     use crate::asn1::constants::errors::KrbErrorCode;
     use crate::asn1::constants::PaDataType;
-    use crate::proto::KerberosRequest;
+    use crate::proto::{KerberosRequest, Name};
     use futures::StreamExt;
     use tracing::trace;
 
     #[tokio::test]
-    async fn test_localhost_kdc() {
+    async fn test_localhost_kdc_no_preauth() {
         let _ = tracing_subscriber::fmt::try_init();
 
         let stream = TcpStream::connect("127.0.0.1:55000")
@@ -145,8 +240,8 @@ mod tests {
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
         let as_req = KerberosRequest::build_asreq(
-            "testuser".to_string(),
-            "krbtgt".to_string(),
+            Name::principal("testuser", "EXAMPLE.COM"),
+            Name::service_krbtgt("EXAMPLE.COM"),
             None,
             SystemTime::now() + Duration::from_secs(3600),
             None,
@@ -162,18 +257,14 @@ mod tests {
         let response = krb_stream.next().await;
 
         trace!(?response);
-        assert!(response.is_some());
-        let response = response.unwrap();
-        assert!(response.is_ok());
-        let response = response.unwrap();
         let asrep = match response {
-            KerberosResponse::AsRep(asrep) => asrep,
+            Some(Ok(KerberosResponse::AsRep(asrep))) => asrep,
             _ => unreachable!(),
         };
 
         let base_key = asrep
             .enc_part
-            .derive_key(b"password", b"EXAMPLE.COM", b"testuser")
+            .derive_key(b"password", b"EXAMPLE.COM", b"testuser", Some(0x1000))
             .unwrap();
 
         // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
@@ -192,12 +283,14 @@ mod tests {
 
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
+        let now = SystemTime::now();
+
         let as_req = KerberosRequest::build_asreq(
-            "testuser_preauth".to_string(),
-            "krbtgt".to_string(),
+            Name::principal("testuser_preauth", "EXAMPLE.COM"),
+            Name::service_krbtgt("EXAMPLE.COM"),
             None,
-            SystemTime::now() + Duration::from_secs(3600),
-            None,
+            now + Duration::from_secs(3600),
+            Some(now + Duration::from_secs(86400)),
         )
         .build();
 
@@ -232,10 +325,10 @@ mod tests {
         // corresponding salt and string to key parameters.
 
         // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
-        assert!(pa_rep.enc_timestamp);
+        assert!(pa_rep.pa_data.enc_timestamp);
 
         // Assert returned preauth data contains PA-ETYPE-INFO2
-        assert!(!pa_rep.etype_info2.is_empty());
+        assert!(!pa_rep.pa_data.etype_info2.is_empty());
 
         // Compute the pre-authentication.
         let now = SystemTime::now();
@@ -252,14 +345,24 @@ mod tests {
             .unwrap();
 
         let as_req = KerberosRequest::build_asreq(
-            "testuser_preauth".to_string(),
-            "krbtgt".to_string(),
+            Name::principal("testuser_preauth", "EXAMPLE.COM"),
+            Name::service_krbtgt("EXAMPLE.COM"),
             None,
             now + Duration::from_secs(3600),
-            None,
+            Some(now + Duration::from_secs(86400 * 7)),
         )
         .add_preauthentication(pre_auth)
         .build();
+
+        // Now, because MIT KRB is *silly* we have to re-open the connection. Because apparently
+        // the MIT KRB TCP transport is just "lets pretend to be UDP with with TCP" instead of
+        // doing something sensible. I can only imagine that KKDCP also does similar ... sillyness.
+
+        let stream = TcpStream::connect("127.0.0.1:55000")
+            .await
+            .expect("Unable to connect to localhost:55000");
+
+        let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
         // Write a request
         krb_stream
@@ -270,5 +373,9 @@ mod tests {
         let response = krb_stream.next().await;
 
         trace!(?response);
+        let asrep = match response {
+            Some(Ok(KerberosResponse::AsRep(asrep))) => asrep,
+            _ => unreachable!(),
+        };
     }
 }

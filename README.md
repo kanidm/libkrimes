@@ -1,13 +1,40 @@
-Why.
+# LibKrimes
 
+Kerberos is an authentication protocol designed in 1993 before TLS was ubiquitious. It has largely
+fallen out of favour due to it's inherent security risks and complexity but a number of ecosystems
+have embedded Kerberos deeply in their operation making it sometimes, unavoidable.
 
+This library aims to make a secure-as-possible implementation of a kerberos client and distribution
+centre that can be included into other Rust applications.
 
-# Local MIT KRB5 Test Server
+## Cryptography Warning
+
+The current 'state of the art' in Kerberos Cryptography is AES-256-CTS-HMAC-SHA1-96. These are to
+put it mildly, not the primitives that any other reasonable modern ecosystem would choose.
+
+While (RFC8009)[https://www.rfc-editor.org/rfc/rfc8009] does exist, it should be noted that no KDC
+we have tested with supports it in their latest versions (last tested June 2024).
+
+Due to how passwords interact with these primitives in Kerberos, it is *critical* that passwords
+are at least 12 characters or more to remain secure against possible bruteforce attacks. We may
+change this advice in future.
+
+## Intentional Design Limits
+
+To remain secure (as is a major goal in the Kanidm ecosystem) we plan to impose limits on how Kerberos
+can function in this library to limit potential risks. These limits are to be decided in future.
+
+## Local MIT KRB5 Test Server
+
+This builds a localhost KRB5 KDC that can be used as a reference for some protocol tests until we
+are able to self-host these internally in the library.
 
 ```
 docker build -f Dockerfile.kdc -t libkrime .
-docker run -p 55000:88 -i -t libkrime
+docker run --rm -e KRB5_TRACE=/dev/stderr -p 55000:88 -i -t libkrime
 ```
+
+Generally the logging from the KDC is poor at best and probably won't help you much.
 
 Password is `password`
 

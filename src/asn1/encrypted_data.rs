@@ -23,6 +23,7 @@ mod tests {
     use crate::asn1::constants::EncryptionType;
     use crate::asn1::encrypted_data::EncryptedData;
     use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
+    use crate::crypto::{decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96};
     use der::{DateTime, Decode};
 
     #[test]
@@ -34,18 +35,17 @@ mod tests {
         let tcipher = hex::decode("a708af058781f75eb72d318ecae2f2830aa8ad4c659faeb477e29e131f923db70a33247ed25aa9d7dda218bcdbdf2203e2125fce1465265e").expect("Failed to decode sample");
         assert_eq!(edata.cipher.as_bytes(), tcipher);
 
-        let key = kerberos_crypto::aes_hmac_sha1::generate_key_from_string(
-            "Suse1234",
-            b"AFOREST.ADuser1",
-            &kerberos_crypto::AesSizes::Aes256,
-        );
-        let plain = kerberos_crypto::aes_hmac_sha1::decrypt(
-            &key,
-            1,
-            edata.cipher.as_bytes(),
-            &kerberos_crypto::AesSizes::Aes256,
+        let key = derive_key_aes256_cts_hmac_sha1_96(
+            "Suse1234".as_bytes(),
+            "AFOREST.AD".as_bytes(),
+            "user1".as_bytes(),
+            None,
         )
-        .expect("Failed to decrypt");
+        .unwrap();
+
+        let plain = decrypt_aes256_cts_hmac_sha1_96(&key, edata.cipher.as_bytes(), 1)
+            .expect("Failed to decrypt");
+
         let paenctsenc = PaEncTsEnc::from_der(&plain).expect("Failed to decode");
         assert_eq!(
             paenctsenc.patimestamp.to_date_time(),
