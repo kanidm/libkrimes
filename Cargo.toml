@@ -18,7 +18,7 @@ futures = "^0.3.21"
 
 hex = "0.4.3"
 num_enum = "^0.5.11"
-tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }
+tokio = { version = "1", features = ["macros", "net", "io-util"] }
 
 tokio-util = { version = "^0.7.1", features = ["codec"] }
 
@@ -38,6 +38,12 @@ pbkdf2 = "0.12.2"
 rand = "0.8.5"
 sha1 = "0.10.6"
 
-
 [dev-dependencies]
 base64 = "0.22.0"
+clap = { version = "^4.5.8", features = ["derive"] }
+serde = { version = "^1.0.204", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }
+toml = "^0.5.11"
+
+
+

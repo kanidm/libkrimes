@@ -16,10 +16,12 @@ pub enum KrbError {
     DerEncodePaEncTsEnc,
     DerDecodePaEncTsEnc,
     DerEncodeOctetString,
-    PreAuthUnsupported,
-    PreAuthMissingEtypeInfo2,
-    PreAuthInvalidUnixTs,
-    PreAuthInvalidS2KParams,
+    PreauthUnsupported,
+    PreauthMissingEtypeInfo2,
+    PreauthInvalidUnixTs,
+    PreauthInvalidS2KParams,
+
+    NameNotPrincipal,
 
     InvalidMessageType,
     InvalidMessageDirection,

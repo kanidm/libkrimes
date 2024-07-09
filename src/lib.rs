@@ -27,7 +27,7 @@ use bytes::Buf;
 // use bytes::BufMut;
 use bytes::BytesMut;
 use der::{Decode, Encode};
-use proto::{KerberosRequest, KerberosResponse};
+use proto::{KerberosReply, KerberosRequest};
 use std::io::{self};
 use tokio_util::codec::{Decoder, Encoder};
 use xdr_codec::record::XdrRecordReader;
@@ -55,7 +55,7 @@ impl Default for KerberosTcpCodec {
 }
 
 impl Decoder for KerberosTcpCodec {
-    type Item = KerberosResponse;
+    type Item = KerberosReply;
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -82,7 +82,7 @@ impl Decoder for KerberosTcpCodec {
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
-        let rep = KerberosResponse::try_from(krb_kdc_rep).unwrap();
+        let rep = KerberosReply::try_from(krb_kdc_rep).unwrap();
 
         buf.clear();
 
@@ -184,10 +184,10 @@ impl Decoder for KdcTcpCodec {
     }
 }
 
-impl Encoder<KerberosResponse> for KdcTcpCodec {
+impl Encoder<KerberosReply> for KdcTcpCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, msg: KerberosResponse, buf: &mut BytesMut) -> io::Result<()> {
+    fn encode(&mut self, msg: KerberosReply, buf: &mut BytesMut) -> io::Result<()> {
         let krb_kdc_rep: KrbKdcRep = msg.try_into().unwrap();
         let der_bytes = krb_kdc_rep
             .to_der()
@@ -215,7 +215,7 @@ impl Encoder<KerberosResponse> for KdcTcpCodec {
 
 #[cfg(test)]
 mod tests {
-    use super::KerberosResponse;
+    use super::KerberosReply;
     use futures::SinkExt;
     use tokio::net::TcpStream;
     use tokio_util::codec::Framed;
@@ -239,13 +239,13 @@ mod tests {
 
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
-        let as_req = KerberosRequest::build_asreq(
+        let now = SystemTime::now();
+        let as_req = KerberosRequest::build_as(
             Name::principal("testuser", "EXAMPLE.COM"),
             Name::service_krbtgt("EXAMPLE.COM"),
-            None,
-            SystemTime::now() + Duration::from_secs(3600),
-            None,
+            now + Duration::from_secs(3600),
         )
+        .renew_until(Some(now + Duration::from_secs(86400 * 7)))
         .build();
 
         // Write a request
@@ -256,21 +256,24 @@ mod tests {
 
         let response = krb_stream.next().await;
 
-        trace!(?response);
-        let asrep = match response {
-            Some(Ok(KerberosResponse::AsRep(asrep))) => asrep,
+        match response {
+            Some(Ok(KerberosReply::Authentication {
+                name,
+                enc_part,
+                pa_data,
+                ticket,
+            })) => {
+                let base_key = enc_part
+                    .derive_key(b"password", b"EXAMPLE.COM", b"testuser", Some(0x1000))
+                    .unwrap();
+
+                // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
+                // message, using the client's long-term key or another key selected
+                // via pre-authentication mechanisms.
+                let cleartext = enc_part.decrypt_data(&base_key, 3).unwrap();
+            }
             _ => unreachable!(),
         };
-
-        let base_key = asrep
-            .enc_part
-            .derive_key(b"password", b"EXAMPLE.COM", b"testuser", Some(0x1000))
-            .unwrap();
-
-        // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
-        // message, using the client's long-term key or another key selected
-        // via pre-authentication mechanisms.
-        let cleartext = asrep.enc_part.decrypt_data(&base_key, 3).unwrap();
     }
 
     #[tokio::test]
@@ -285,13 +288,12 @@ mod tests {
 
         let now = SystemTime::now();
 
-        let as_req = KerberosRequest::build_asreq(
+        let as_req = KerberosRequest::build_as(
             Name::principal("testuser_preauth", "EXAMPLE.COM"),
             Name::service_krbtgt("EXAMPLE.COM"),
-            None,
             now + Duration::from_secs(3600),
-            Some(now + Duration::from_secs(86400)),
         )
+        .renew_until(Some(now + Duration::from_secs(86400 * 7)))
         .build();
 
         // Write a request
@@ -307,8 +309,9 @@ mod tests {
         let response = response.unwrap();
         assert!(response.is_ok());
         let response = response.unwrap();
-        let pa_rep = match response {
-            KerberosResponse::PaRep(pa_rep) => pa_rep,
+
+        let (service, pa_data) = match response {
+            KerberosReply::Preauth { service, pa_data } => (service, pa_data),
             _ => unreachable!(),
         };
 
@@ -325,16 +328,27 @@ mod tests {
         // corresponding salt and string to key parameters.
 
         // Assert returned preauth data contains PA-ENC-TIMESTAMP and PA-ETYPE-INFO2
-        assert!(pa_rep.pa_data.enc_timestamp);
+        assert!(pa_data.enc_timestamp);
 
         // Assert returned preauth data contains PA-ETYPE-INFO2
-        assert!(!pa_rep.pa_data.etype_info2.is_empty());
+        assert!(!pa_data.etype_info2.is_empty());
 
         // Compute the pre-authentication.
-        let now = SystemTime::now();
         let password = "password";
+        let now = SystemTime::now();
         let seconds_since_epoch = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
 
+        let as_req = KerberosRequest::build_as(
+            Name::principal("testuser_preauth", "EXAMPLE.COM"),
+            Name::service_krbtgt("EXAMPLE.COM"),
+            now + Duration::from_secs(3600),
+        )
+        .renew_until(Some(now + Duration::from_secs(86400 * 7)))
+        .preauth_enc_ts(&pa_data, password, seconds_since_epoch)
+        .map(|b| b.build())
+        .expect("Unable to build as req");
+
+        /*
         let pre_auth = pa_rep
             .perform_enc_timestamp(
                 password,
@@ -353,6 +367,7 @@ mod tests {
         )
         .add_preauthentication(pre_auth)
         .build();
+        */
 
         // Now, because MIT KRB is *silly* we have to re-open the connection. Because apparently
         // the MIT KRB TCP transport is just "lets pretend to be UDP with with TCP" instead of
@@ -370,12 +385,9 @@ mod tests {
             .await
             .expect("Failed to transmit request");
 
-        let response = krb_stream.next().await;
+        let response = krb_stream.next().await.unwrap().unwrap();
 
         trace!(?response);
-        let asrep = match response {
-            Some(Ok(KerberosResponse::AsRep(asrep))) => asrep,
-            _ => unreachable!(),
-        };
+        assert!(matches!(response, KerberosReply::Authentication { .. }));
     }
 }
