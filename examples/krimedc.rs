@@ -5,8 +5,9 @@ use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, trace};
-
+use clap::{Parser, Subcommand};
 use std::io;
+use std::path::PathBuf;
 
 async fn process(socket: TcpStream, info: SocketAddr) {
     let mut kdc_stream = Framed::new(socket, KdcTcpCodec::default());
@@ -68,10 +69,24 @@ async fn process(socket: TcpStream, info: SocketAddr) {
     debug!("closing client");
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
-    tracing_subscriber::fmt::init();
 
+#[derive(Debug, clap::Parser)]
+#[clap(about = "The Worlds Worst KDC - A Krime, If You Please")]
+pub struct OptParser {
+    #[clap(global = true)]
+    config: PathBuf,
+    #[clap(subcommand)]
+    command: Opt,
+}
+
+#[derive(Debug, Subcommand)]
+#[clap(about = "The Worlds Worst KDC - A Krime, If You Please")]
+pub enum Opt {
+    Run {},
+    // KeyTab { }
+}
+
+async fn main_run() -> io::Result<()> {
     let addr = "127.0.0.1:55000";
 
     let listener = TcpListener::bind(addr).await?;
@@ -83,3 +98,19 @@ async fn main() -> io::Result<()> {
         tokio::spawn(async move { process(socket, info).await });
     }
 }
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> io::Result<()> {
+    let opt = OptParser::parse();
+
+    tracing_subscriber::fmt::init();
+
+    match opt.command {
+        Opt::Run {
+        } => {
+            todo!();
+        }
+    }
+
+}
+
