@@ -72,21 +72,27 @@ async fn process(socket: TcpStream, info: SocketAddr) {
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "The Worlds Worst KDC - A Krime, If You Please")]
-pub struct OptParser {
-    #[clap(global = true)]
-    config: PathBuf,
+struct OptParser {
+    // Apparently globals can't be required?
+    // #[clap(global = true)]
+    // config: PathBuf,
     #[clap(subcommand)]
     command: Opt,
 }
 
 #[derive(Debug, Subcommand)]
 #[clap(about = "The Worlds Worst KDC - A Krime, If You Please")]
-pub enum Opt {
-    Run {},
+enum Opt {
+    Run {
+        config: PathBuf,
+    },
     // KeyTab { }
 }
 
-async fn main_run() -> io::Result<()> {
+struct Config {
+}
+
+async fn main_run(config: Config) -> io::Result<()> {
     let addr = "127.0.0.1:55000";
 
     let listener = TcpListener::bind(addr).await?;
@@ -99,6 +105,19 @@ async fn main_run() -> io::Result<()> {
     }
 }
 
+fn parse_config<P: AsRef<Path>>(path: P) -> Result<Config, io::Result> {
+    let p: Path = path.as_ref();
+    let mut contents = String::new();
+    let mut f = File::open(&path)?;
+    f.read_to_string(&mut contents)?;
+
+    toml::from_str(&contents)
+        map_err(|err| {
+            error!(?err);
+            io::Error::new(io::ErrorKind::Other, "toml parse failure")
+        })
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
     let opt = OptParser::parse();
@@ -107,10 +126,13 @@ async fn main() -> io::Result<()> {
 
     match opt.command {
         Opt::Run {
+            config
         } => {
-            todo!();
+            let cfg = parse_config(&config)?;
+            main_run(cfg)
         }
     }
-
 }
+
+
 
