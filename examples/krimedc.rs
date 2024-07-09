@@ -1,13 +1,17 @@
+use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
 use libkrime::proto::{KerberosReply, KerberosRequest};
 use libkrime::KdcTcpCodec;
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::fs;
+use std::io;
+use std::io::Read;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, trace};
-use clap::{Parser, Subcommand};
-use std::io;
-use std::path::PathBuf;
 
 async fn process(socket: TcpStream, info: SocketAddr) {
     let mut kdc_stream = Framed::new(socket, KdcTcpCodec::default());
@@ -69,7 +73,6 @@ async fn process(socket: TcpStream, info: SocketAddr) {
     debug!("closing client");
 }
 
-
 #[derive(Debug, clap::Parser)]
 #[clap(about = "The Worlds Worst KDC - A Krime, If You Please")]
 struct OptParser {
@@ -83,21 +86,30 @@ struct OptParser {
 #[derive(Debug, Subcommand)]
 #[clap(about = "The Worlds Worst KDC - A Krime, If You Please")]
 enum Opt {
-    Run {
-        config: PathBuf,
-    },
+    Run { config: PathBuf },
     // KeyTab { }
 }
 
+#[derive(Debug, Deserialize)]
+struct UserPrincipal {
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct Config {
+    realm: String,
+    address: SocketAddr,
+    primary_key: String,
+    preauth_key: String,
+
+    user: BTreeMap<String, UserPrincipal>,
+    // services: BTreeMap<String, Service>,
 }
 
 async fn main_run(config: Config) -> io::Result<()> {
-    let addr = "127.0.0.1:55000";
+    let listener = TcpListener::bind(config.address).await?;
 
-    let listener = TcpListener::bind(addr).await?;
-
-    info!("started krimedc on {}", "127.0.0.1:55000");
+    info!("started krimedc on {}", config.address);
 
     loop {
         let (socket, info) = listener.accept().await?;
@@ -105,17 +117,16 @@ async fn main_run(config: Config) -> io::Result<()> {
     }
 }
 
-fn parse_config<P: AsRef<Path>>(path: P) -> Result<Config, io::Result> {
-    let p: Path = path.as_ref();
+fn parse_config<P: AsRef<Path>>(path: P) -> io::Result<Config> {
+    let p: &Path = path.as_ref();
     let mut contents = String::new();
-    let mut f = File::open(&path)?;
+    let mut f = fs::File::open(&path)?;
     f.read_to_string(&mut contents)?;
 
-    toml::from_str(&contents)
-        map_err(|err| {
-            error!(?err);
-            io::Error::new(io::ErrorKind::Other, "toml parse failure")
-        })
+    toml::from_str(&contents).map_err(|err| {
+        error!(?err);
+        io::Error::new(io::ErrorKind::Other, "toml parse failure")
+    })
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -125,14 +136,9 @@ async fn main() -> io::Result<()> {
     tracing_subscriber::fmt::init();
 
     match opt.command {
-        Opt::Run {
-            config
-        } => {
+        Opt::Run { config } => {
             let cfg = parse_config(&config)?;
-            main_run(cfg)
+            main_run(cfg).await
         }
     }
 }
-
-
-

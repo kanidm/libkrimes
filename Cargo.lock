@@ -480,6 +480,7 @@ dependencies = [
  "num_enum",
  "pbkdf2",
  "rand",
+ "serde",
  "sha1",
  "tokio",
  "tokio-util",
