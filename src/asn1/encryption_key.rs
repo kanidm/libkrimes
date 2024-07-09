@@ -11,6 +11,6 @@ use der::Sequence;
 pub(crate) struct EncryptionKey {
     #[asn1(context_specific = "0")]
     key_type: i32,
-    #[asn1(context_specific = "0")]
+    #[asn1(context_specific = "1")]
     key_value: OctetString,
 }
