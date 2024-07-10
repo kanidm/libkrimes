@@ -10,6 +10,7 @@ use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, trace};
@@ -18,9 +19,11 @@ async fn process_authentication(
     auth_req: AuthenticationRequest,
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
+    let stime = SystemTime::now();
+
     // Got any etypes?
     if auth_req.etypes.is_empty() {
-        return Err(KerberosReply::error_no_etypes(auth_req.service_name));
+        return Err(KerberosReply::error_no_etypes(auth_req.service_name, stime));
     }
 
     // The service name must be krbtgt for this realm.
@@ -28,25 +31,37 @@ async fn process_authentication(
         .service_name
         .is_service_krbtgt(server_state.realm.as_str())
     {
-        return Err(KerberosReply::error_as_not_krbtgt(auth_req.service_name));
+        return Err(KerberosReply::error_as_not_krbtgt(
+            auth_req.service_name,
+            stime,
+        ));
     }
 
     let Ok((cname, crealm)) = auth_req.client_name.principal_name() else {
-        return Err(KerberosReply::error_client_principal(auth_req.service_name));
+        return Err(KerberosReply::error_client_principal(
+            auth_req.service_name,
+            stime,
+        ));
     };
 
     // Is the client for our realm?
     if crealm != server_state.realm.as_str() {
-        return Err(KerberosReply::error_client_realm(auth_req.service_name));
+        return Err(KerberosReply::error_client_realm(
+            auth_req.service_name,
+            stime,
+        ));
     };
 
     // Is the client in our user db?
     let Some(user_record) = server_state.users.get(cname) else {
-        return Err(KerberosReply::error_client_username(auth_req.service_name));
+        return Err(KerberosReply::error_client_username(
+            auth_req.service_name,
+            stime,
+        ));
     };
 
     let Some(pre_enc_timestamp) = auth_req.preauth.enc_timestamp() else {
-        let parep = KerberosReply::preauth_builder(auth_req.service_name).build();
+        let parep = KerberosReply::preauth_builder(auth_req.service_name, stime).build();
 
         // Request pre-auth.
         return Ok(parep);
@@ -64,22 +79,43 @@ async fn process_authentication(
         )
         .map_err(|err| {
             error!(?err, "pre_enc_timestamp.derive_key");
-            KerberosReply::error_no_key(auth_req.service_name.clone())
+            KerberosReply::error_no_key(auth_req.service_name.clone(), stime)
         })?;
 
     let pa_timestamp = pre_enc_timestamp
         .decrypt_pa_enc_timestamp(&key)
         .map_err(|err| {
             error!(?err, "pre_enc_timestamp.decrypt");
-            KerberosReply::error_preauth_failed(auth_req.service_name.clone())
+            KerberosReply::error_preauth_failed(auth_req.service_name.clone(), stime)
         })?;
 
     trace!(?pa_timestamp);
 
-    // Check for the timestamp being in a valid range. If not, reject for clock skew.
-    todo!()
+    let abs_offset = if pa_timestamp > stime {
+        stime.duration_since(pa_timestamp)
+    } else {
+        pa_timestamp.duration_since(stime)
+    }
+    // This error shouldn't be possible. The error condition on duration_since is
+    // when the left side of the term is actually *after* the right. Our if
+    // condition should guard against thin.
+    // However, let's do the right thing and check it anyway.
+    .map_err(|_| KerberosReply::error_internal(auth_req.service_name.clone(), stime))?;
 
-    // Preauthentication SUCCESS. Now we can issue a ticket.
+    // Check for the timestamp being in a valid range. If not, reject for clock skew.
+    if abs_offset > Duration::from_secs(300) {
+        // ClockSkew
+        return Err(KerberosReply::error_clock_skew(
+            auth_req.service_name.clone(),
+            stime,
+        ));
+    }
+
+    // Preauthentication SUCCESS. Now we can consider issuing a ticket.
+
+    // We need to check the request flags and reject or honour them.
+
+    todo!()
 }
 
 async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerState>) {
