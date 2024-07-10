@@ -59,6 +59,13 @@ impl Decoder for KerberosTcpCodec {
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if buf.len() > self.max_size {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "request limit",
+            ));
+        }
+
         let reader = buf.reader();
         let mut xdr_reader = XdrRecordReader::new(reader);
         xdr_reader.set_implicit_eor(true);
@@ -82,11 +89,11 @@ impl Decoder for KerberosTcpCodec {
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
-        let rep = KerberosReply::try_from(krb_kdc_rep).unwrap();
-
         buf.clear();
 
-        Ok(Some(rep))
+        KerberosReply::try_from(krb_kdc_rep)
+            .map(Some)
+            .map_err(|_err| io::Error::new(io::ErrorKind::InvalidData, "Data"))
     }
 }
 
@@ -153,6 +160,13 @@ impl Decoder for KdcTcpCodec {
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if buf.len() > self.max_size {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "request limit",
+            ));
+        }
+
         let reader = buf.reader();
         let mut xdr_reader = XdrRecordReader::new(reader);
         xdr_reader.set_implicit_eor(true);
@@ -176,11 +190,11 @@ impl Decoder for KdcTcpCodec {
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
-        let req = KerberosRequest::try_from(krb_kdc_req).unwrap();
-
         buf.clear();
 
-        Ok(Some(req))
+        KerberosRequest::try_from(krb_kdc_req)
+            .map(Some)
+            .map_err(|_err| io::Error::new(io::ErrorKind::InvalidData, "Data"))
     }
 }
 

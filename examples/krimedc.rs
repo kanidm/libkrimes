@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
-use libkrime::proto::{KerberosReply, KerberosRequest};
+use libkrime::proto::{AuthenticationRequest, KerberosReply, KerberosRequest};
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -9,17 +9,83 @@ use std::io;
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, trace};
 
-async fn process(socket: TcpStream, info: SocketAddr) {
+async fn process_authentication(
+    auth_req: AuthenticationRequest,
+    server_state: &ServerState,
+) -> Result<KerberosReply, KerberosReply> {
+    // Got any etypes?
+    if auth_req.etypes.is_empty() {
+        return Err(KerberosReply::error_no_etypes(auth_req.service_name));
+    }
+
+    // The service name must be krbtgt for this realm.
+    if !auth_req
+        .service_name
+        .is_service_krbtgt(server_state.realm.as_str())
+    {
+        return Err(KerberosReply::error_as_not_krbtgt(auth_req.service_name));
+    }
+
+    let Ok((cname, crealm)) = auth_req.client_name.principal_name() else {
+        return Err(KerberosReply::error_client_principal(auth_req.service_name));
+    };
+
+    // Is the client for our realm?
+    if crealm != server_state.realm.as_str() {
+        return Err(KerberosReply::error_client_realm(auth_req.service_name));
+    };
+
+    // Is the client in our user db?
+    let Some(user_record) = server_state.users.get(cname) else {
+        return Err(KerberosReply::error_client_username(auth_req.service_name));
+    };
+
+    let Some(pre_enc_timestamp) = auth_req.preauth.enc_timestamp() else {
+        let parep = KerberosReply::preauth_builder(auth_req.service_name).build();
+
+        // Request pre-auth.
+        return Ok(parep);
+    };
+
+    // Start to process and validate the enc timestamp.
+
+    // In theory we should be able to cache the users base key.
+    let key = pre_enc_timestamp
+        .derive_key(
+            user_record.password.as_bytes(),
+            crealm.as_bytes(),
+            cname.as_bytes(),
+            Some(0x8000),
+        )
+        .map_err(|err| {
+            error!(?err, "pre_enc_timestamp.derive_key");
+            KerberosReply::error_no_key(auth_req.service_name.clone())
+        })?;
+
+    let pa_timestamp = pre_enc_timestamp
+        .decrypt_pa_enc_timestamp(&key)
+        .map_err(|err| {
+            error!(?err, "pre_enc_timestamp.decrypt");
+            KerberosReply::error_preauth_failed(auth_req.service_name.clone())
+        })?;
+
+    trace!(?pa_timestamp);
+
+    // Check for the timestamp being in a valid range. If not, reject for clock skew.
+    todo!()
+
+    // Preauthentication SUCCESS. Now we can issue a ticket.
+}
+
+async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerState>) {
     let mut kdc_stream = Framed::new(socket, KdcTcpCodec::default());
 
-    let mut pre_auth_req_issued = false;
-
     while let Some(Ok(kdc_req)) = kdc_stream.next().await {
-        trace!(?kdc_req);
         match kdc_req {
             KerberosRequest::Authentication {
                 nonce,
@@ -31,39 +97,27 @@ async fn process(socket: TcpStream, info: SocketAddr) {
                 preauth,
                 etypes,
             } => {
-                // Got any etypes?
-                if etypes.is_empty() {
-                    // Return err
-                    todo!();
-                }
-
-                let Some(pre_enc_timestamp) = preauth.enc_timestamp() else {
-                    if pre_auth_req_issued {
-                        // Errror, we already told you we need pre auth.
-                        todo!();
-                    } else {
-                        let parep =
-                            KerberosReply::preauth_builder(service_name, "abcdefgh".to_string())
-                                .build();
-
-                        if let Err(err) = kdc_stream.send(parep).await {
-                            error!(?err, "error writing response, disconnecting");
-                            break;
-                        }
-                    }
-                    continue;
+                let auth_req = AuthenticationRequest {
+                    nonce,
+                    client_name,
+                    service_name,
+                    from,
+                    until,
+                    renew,
+                    preauth,
+                    etypes,
                 };
 
-                // Start to process and validate the enc timestamp.
+                let reply = match process_authentication(auth_req, &server_state).await {
+                    Ok(rep) => rep,
+                    Err(krb_err) => krb_err,
+                };
 
-                // In theory we should be able to store the users base key.
-                let key = pre_enc_timestamp
-                    .derive_salted_key(b"password", b"abcdefgh", Some(0x8000))
-                    .unwrap();
-
-                let pa_timestamp = pre_enc_timestamp.decrypt_pa_enc_timestamp(&key).unwrap();
-
-                trace!(?pa_timestamp);
+                if let Err(err) = kdc_stream.send(reply).await {
+                    error!(?err, "error writing response, disconnecting");
+                    break;
+                }
+                continue;
             }
             KerberosRequest::TicketGrant {} => {
                 todo!();
@@ -99,21 +153,51 @@ struct UserPrincipal {
 struct Config {
     realm: String,
     address: SocketAddr,
-    primary_key: String,
-    preauth_key: String,
+    #[serde(deserialize_with = "hex::serde::deserialize")]
+    primary_key: Vec<u8>,
 
     user: BTreeMap<String, UserPrincipal>,
     // services: BTreeMap<String, Service>,
 }
 
+impl From<Config> for ServerState {
+    fn from(cr: Config) -> ServerState {
+        let Config {
+            realm,
+            address,
+            primary_key,
+            user,
+        } = cr;
+
+        ServerState {
+            realm,
+            primary_key,
+            users: user,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ServerState {
+    realm: String,
+    // address: SocketAddr,
+    primary_key: Vec<u8>,
+
+    users: BTreeMap<String, UserPrincipal>,
+    // services: BTreeMap<String, Service>,
+}
+
 async fn main_run(config: Config) -> io::Result<()> {
-    let listener = TcpListener::bind(config.address).await?;
+    let listener = TcpListener::bind(&config.address).await?;
 
     info!("started krimedc on {}", config.address);
 
+    let server_state = Arc::new(ServerState::from(config));
+
     loop {
         let (socket, info) = listener.accept().await?;
-        tokio::spawn(async move { process(socket, info).await });
+        let state = server_state.clone();
+        tokio::spawn(async move { process(socket, info, state).await });
     }
 }
 

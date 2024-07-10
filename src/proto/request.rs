@@ -1,44 +1,28 @@
 use crate::asn1::{
     constants::{
-        encryption_types::EncryptionType, errors::KrbErrorCode, message_types::KrbMessageType,
-        pa_data_types::PaDataType,
+        encryption_types::EncryptionType, message_types::KrbMessageType, pa_data_types::PaDataType,
     },
     encrypted_data::EncryptedData as KdcEncryptedData,
-    etype_info2::ETypeInfo2 as KdcETypeInfo2,
-    etype_info2::ETypeInfo2Entry as KdcETypeInfo2Entry,
-    kdc_rep::KdcRep,
     kdc_req::KdcReq,
     kdc_req_body::KdcReqBody,
-    // kerberos_flags::KerberosFlags,
-    kerberos_string::KerberosString,
     kerberos_time::KerberosTime,
-    krb_error::KrbError as KdcKrbError,
-    krb_error::MethodData,
-    krb_kdc_rep::KrbKdcRep,
     krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
-    principal_name::PrincipalName,
-    realm::Realm,
-    tagged_ticket::TaggedTicket,
-    BitString,
-    Ia5String,
-    OctetString,
+    BitString, OctetString,
 };
-use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{
-    decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
-    derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
+    derive_key_aes256_cts_hmac_sha1_96, derive_key_external_salt_aes256_cts_hmac_sha1_96,
+    encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{Decode, Encode};
+use der::Encode;
 use rand::{thread_rng, Rng};
 
-use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
-use super::{EncryptedData, Name, Preauth, PreauthData, Ticket};
+use super::{EncryptedData, Name, Preauth, PreauthData};
 
 #[derive(Debug)]
 pub enum KerberosRequest {
@@ -53,6 +37,21 @@ pub enum KerberosRequest {
         etypes: Vec<EncryptionType>,
     },
     TicketGrant {},
+}
+
+// For callers who need to pass these around it's a bit easier in a struct. Maybe I should
+// have left it that way?
+
+#[derive(Debug)]
+pub struct AuthenticationRequest {
+    pub nonce: u32,
+    pub client_name: Name,
+    pub service_name: Name,
+    pub from: Option<SystemTime>,
+    pub until: SystemTime,
+    pub renew: Option<SystemTime>,
+    pub preauth: Preauth,
+    pub etypes: Vec<EncryptionType>,
 }
 
 #[derive(Debug)]

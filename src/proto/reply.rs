@@ -3,42 +3,27 @@ use crate::asn1::{
         encryption_types::EncryptionType, errors::KrbErrorCode, message_types::KrbMessageType,
         pa_data_types::PaDataType,
     },
-    encrypted_data::EncryptedData as KdcEncryptedData,
-    etype_info2::ETypeInfo2 as KdcETypeInfo2,
     etype_info2::ETypeInfo2Entry as KdcETypeInfo2Entry,
     kdc_rep::KdcRep,
-    kdc_req::KdcReq,
-    kdc_req_body::KdcReqBody,
-    // kerberos_flags::KerberosFlags,
     kerberos_string::KerberosString,
     kerberos_time::KerberosTime,
     krb_error::KrbError as KdcKrbError,
     krb_error::MethodData,
     krb_kdc_rep::KrbKdcRep,
-    krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
-    pa_enc_ts_enc::PaEncTsEnc,
-    principal_name::PrincipalName,
-    realm::Realm,
-    tagged_ticket::TaggedTicket,
-    BitString,
-    Ia5String,
-    OctetString,
+    Ia5String, OctetString,
 };
-use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{
     decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
     derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
 use der::{Decode, Encode};
-use rand::{thread_rng, Rng};
 
-use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
-use super::{EncryptedData, EtypeInfo2, Name, Preauth, PreauthData, Ticket};
+use super::{EncryptedData, EtypeInfo2, Name, PreauthData, Ticket};
 
 #[derive(Debug)]
 pub enum KerberosReply {
@@ -56,43 +41,204 @@ pub enum KerberosReply {
     Error {
         code: KrbErrorCode,
         service: Name,
+        error_text: Option<String>,
     },
 }
 
 pub struct KerberosReplyPreauthBuilder {
-    pa_data: PreauthData,
+    pa_fx_cookie: Option<Vec<u8>>,
+    aes256_cts_hmac_sha1_96_iter_count: u32,
+    salt: Option<String>,
     service: Name,
 }
 
+pub struct KerberosReplyAuthenticationBuilder {
+    aes256_cts_hmac_sha1_96_iter_count: u32,
+    salt: Option<String>,
+    client: Name,
+}
+
 impl KerberosReply {
-    pub fn preauth_builder(service: Name, salt: String) -> KerberosReplyPreauthBuilder {
+    pub fn preauth_builder(service: Name) -> KerberosReplyPreauthBuilder {
+        let aes256_cts_hmac_sha1_96_iter_count: u32 = 0x8000;
+        KerberosReplyPreauthBuilder {
+            pa_fx_cookie: None,
+            aes256_cts_hmac_sha1_96_iter_count,
+            salt: None,
+            service,
+        }
+    }
+
+    pub fn authentication_builder(client: Name) -> KerberosReplyAuthenticationBuilder {
         let aes256_cts_hmac_sha1_96_iter_count: u32 = 0x8000;
 
-        let aes256_cts_hmac_sha1_96_iter_count =
-            aes256_cts_hmac_sha1_96_iter_count.to_be_bytes().to_vec();
+        KerberosReplyAuthenticationBuilder {
+            aes256_cts_hmac_sha1_96_iter_count,
+            salt: None,
+            client,
+        }
+    }
 
-        KerberosReplyPreauthBuilder {
-            pa_data: PreauthData {
-                pa_fx_fast: false,
-                enc_timestamp: true,
-                pa_fx_cookie: None,
-                etype_info2: vec![EtypeInfo2 {
-                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
-                    salt: Some(salt),
-                    s2kparams: Some(aes256_cts_hmac_sha1_96_iter_count),
-                }],
-            },
+    pub fn error_no_etypes(service: Name) -> KerberosReply {
+        KerberosReply::Error {
+            code: KrbErrorCode::KdcErrEtypeNosupp,
             service,
+            error_text: Some(
+                "Client and Server do not have overlapping encryption type support.".to_string(),
+            ),
+        }
+    }
+
+    pub fn error_preauth_failed(service: Name) -> KerberosReply {
+        KerberosReply::Error {
+            code: KrbErrorCode::KdcErrPreauthFailed,
+            service,
+            error_text: Some(
+                "Preauthentication Failed - Check your password is correct.".to_string(),
+            ),
+        }
+    }
+
+    pub fn error_client_principal(service: Name) -> KerberosReply {
+        KerberosReply::Error {
+            code: KrbErrorCode::KdcErrPreauthFailed,
+            service,
+            error_text: Some(
+                "Preauthentication Failed - Client Name was not a valid Principal.".to_string(),
+            ),
+        }
+    }
+
+    pub fn error_client_realm(service: Name) -> KerberosReply {
+        KerberosReply::Error {
+            code: KrbErrorCode::KdcErrWrongRealm,
+            service,
+            error_text: Some("Preauthentication Failed - Check your realm is correct.".to_string()),
+        }
+    }
+
+    pub fn error_client_username(service: Name) -> KerberosReply {
+        KerberosReply::Error {
+            code: KrbErrorCode::KdcErrCPrincipalUnknown,
+            service,
+            error_text: Some(
+                "Preauthentication Failed - Check your username is correct.".to_string(),
+            ),
+        }
+    }
+
+    pub fn error_as_not_krbtgt(service: Name) -> KerberosReply {
+        KerberosReply::Error {
+            code: KrbErrorCode::KdcErrSvcUnavailable,
+            service,
+            error_text: Some(
+                "Authentication (ASREQ) must only be for service instance `krbtgt@REALM`."
+                    .to_string(),
+            ),
+        }
+    }
+
+    pub fn error_no_key(service: Name) -> KerberosReply {
+        KerberosReply::Error {
+            code: KrbErrorCode::KrbApErrNokey,
+            service,
+            error_text: Some("No Key Available".to_string()),
         }
     }
 }
 
 impl KerberosReplyPreauthBuilder {
+    pub fn set_salt(mut self, salt: Option<String>) -> Self {
+        self.salt = salt;
+        self
+    }
+
+    pub fn set_aes256_cts_hmac_sha1_96_iter_count(mut self, iter_count: u32) -> Self {
+        self.aes256_cts_hmac_sha1_96_iter_count = iter_count;
+        self
+    }
+
+    pub fn set_pa_fx_cookie(mut self, cookie: Option<Vec<u8>>) -> Self {
+        self.pa_fx_cookie = cookie;
+        self
+    }
+
     pub fn build(self) -> KerberosReply {
+        let aes256_cts_hmac_sha1_96_iter_count = Some(
+            self.aes256_cts_hmac_sha1_96_iter_count
+                .to_be_bytes()
+                .to_vec(),
+        );
+
         KerberosReply::Preauth {
-            pa_data: self.pa_data,
+            pa_data: PreauthData {
+                pa_fx_fast: false,
+                enc_timestamp: true,
+                pa_fx_cookie: self.pa_fx_cookie,
+                etype_info2: vec![EtypeInfo2 {
+                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
+                    salt: self.salt,
+                    s2kparams: aes256_cts_hmac_sha1_96_iter_count,
+                }],
+            },
             service: self.service,
         }
+    }
+}
+
+impl KerberosReplyAuthenticationBuilder {
+    pub fn set_salt(mut self, salt: Option<String>) -> Self {
+        self.salt = salt;
+        self
+    }
+
+    pub fn set_aes256_cts_hmac_sha1_96_iter_count(mut self, iter_count: u32) -> Self {
+        self.aes256_cts_hmac_sha1_96_iter_count = iter_count;
+        self
+    }
+
+    pub fn build(self) -> KerberosReply {
+        todo!();
+        /*
+        // We need to encrypt some stuff ...
+
+
+        // let enc_part = EncASRepPart -> EncKDCRepPart;
+
+        // let ticket_enc_part = EncTicketPart;
+
+
+        let ticket = Ticket {
+            tkt_vno,
+            realm,
+            service_name,
+            enc_part: ticket_enc_part,
+        };
+
+        let name = self.client;
+
+        let aes256_cts_hmac_sha1_96_iter_count = Some(
+            self.aes256_cts_hmac_sha1_96_iter_count
+                .to_be_bytes()
+                .to_vec(),
+        );
+
+        let pa_data = PreauthData {
+            etype_info2: vec![EtypeInfo2 {
+                etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
+                salt: self.salt,
+                s2kparams: aes256_cts_hmac_sha1_96_iter_count,
+            }],
+            ..Default::default()
+        };
+
+        KerberosReply::Authentication {
+            name,
+            enc_part,
+            pa_data,
+            ticket,
+        },
+        */
     }
 }
 
@@ -145,7 +291,15 @@ impl TryFrom<KdcKrbError> for KerberosReply {
 
                 Ok(KerberosReply::Preauth { pa_data, service })
             }
-            code => Ok(KerberosReply::Error { code, service }),
+            code => {
+                let error_text = rep.error_text.as_ref().map(|s| s.into());
+
+                Ok(KerberosReply::Error {
+                    code,
+                    service,
+                    error_text,
+                })
+            }
         }
     }
 }
@@ -249,8 +403,44 @@ impl TryInto<KrbKdcRep> for KerberosReply {
 
                 Ok(KrbKdcRep::ErrRep(krb_error))
             }
-            KerberosReply::Error { code, service } => {
-                todo!();
+            KerberosReply::Error {
+                code,
+                service,
+                error_text,
+            } => {
+                let error_code = code as i32;
+
+                let error_text = error_text
+                    .as_ref()
+                    .and_then(|et| Ia5String::new(&et).map(KerberosString).ok());
+
+                let stime = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    // We need to stip the fractional part.
+                    .map(|t| Duration::from_secs(t.as_secs()))
+                    .unwrap_or_default();
+
+                let stime = KerberosTime::from_unix_duration(stime).unwrap();
+
+                let (service_name, service_realm) = (&service).try_into()?;
+
+                let krb_error = KdcKrbError {
+                    pvno: 5,
+                    msg_type: 30,
+                    ctime: None,
+                    cusec: None,
+                    stime,
+                    susec: 0,
+                    error_code,
+                    crealm: None,
+                    cname: None,
+                    service_realm,
+                    service_name,
+                    error_text,
+                    error_data: None,
+                };
+
+                Ok(KrbKdcRep::ErrRep(krb_error))
             }
         }
     }
