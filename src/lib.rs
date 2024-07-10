@@ -325,7 +325,11 @@ mod tests {
         let response = response.unwrap();
 
         let (service, pa_data) = match response {
-            KerberosReply::PA(PreauthReply { service, pa_data }) => (service, pa_data),
+            KerberosReply::PA(PreauthReply {
+                service,
+                pa_data,
+                stime,
+            }) => (service, pa_data),
             _ => unreachable!(),
         };
 
