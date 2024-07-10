@@ -27,22 +27,34 @@ use super::{EncryptedData, EtypeInfo2, Name, PreauthData, Ticket};
 
 #[derive(Debug)]
 pub enum KerberosReply {
-    Authentication {
-        name: Name,
-        enc_part: EncryptedData,
-        pa_data: Option<PreauthData>,
-        ticket: Ticket,
-    },
-    TicketGrant {},
-    Preauth {
-        pa_data: PreauthData,
-        service: Name,
-    },
-    Error {
-        code: KrbErrorCode,
-        service: Name,
-        error_text: Option<String>,
-    },
+    AS(AuthenticationReply),
+    TGS(TicketGrantReply),
+    PA(PreauthReply),
+    ERR(ErrorReply),
+}
+
+#[derive(Debug)]
+pub struct AuthenticationReply {
+    pub name: Name,
+    pub enc_part: EncryptedData,
+    pub pa_data: Option<PreauthData>,
+    pub ticket: Ticket,
+}
+
+#[derive(Debug)]
+pub struct TicketGrantReply {}
+
+#[derive(Debug)]
+pub struct PreauthReply {
+    pub pa_data: PreauthData,
+    pub service: Name,
+}
+
+#[derive(Debug)]
+pub struct ErrorReply {
+    code: KrbErrorCode,
+    service: Name,
+    error_text: Option<String>,
 }
 
 pub struct KerberosReplyPreauthBuilder {
@@ -80,70 +92,70 @@ impl KerberosReply {
     }
 
     pub fn error_no_etypes(service: Name) -> KerberosReply {
-        KerberosReply::Error {
+        KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KdcErrEtypeNosupp,
             service,
             error_text: Some(
                 "Client and Server do not have overlapping encryption type support.".to_string(),
             ),
-        }
+        })
     }
 
     pub fn error_preauth_failed(service: Name) -> KerberosReply {
-        KerberosReply::Error {
+        KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KdcErrPreauthFailed,
             service,
             error_text: Some(
                 "Preauthentication Failed - Check your password is correct.".to_string(),
             ),
-        }
+        })
     }
 
     pub fn error_client_principal(service: Name) -> KerberosReply {
-        KerberosReply::Error {
+        KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KdcErrPreauthFailed,
             service,
             error_text: Some(
                 "Preauthentication Failed - Client Name was not a valid Principal.".to_string(),
             ),
-        }
+        })
     }
 
     pub fn error_client_realm(service: Name) -> KerberosReply {
-        KerberosReply::Error {
+        KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KdcErrWrongRealm,
             service,
             error_text: Some("Preauthentication Failed - Check your realm is correct.".to_string()),
-        }
+        })
     }
 
     pub fn error_client_username(service: Name) -> KerberosReply {
-        KerberosReply::Error {
+        KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KdcErrCPrincipalUnknown,
             service,
             error_text: Some(
                 "Preauthentication Failed - Check your username is correct.".to_string(),
             ),
-        }
+        })
     }
 
     pub fn error_as_not_krbtgt(service: Name) -> KerberosReply {
-        KerberosReply::Error {
+        KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KdcErrSvcUnavailable,
             service,
             error_text: Some(
                 "Authentication (ASREQ) must only be for service instance `krbtgt@REALM`."
                     .to_string(),
             ),
-        }
+        })
     }
 
     pub fn error_no_key(service: Name) -> KerberosReply {
-        KerberosReply::Error {
+        KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KrbApErrNokey,
             service,
             error_text: Some("No Key Available".to_string()),
-        }
+        })
     }
 }
 
@@ -170,7 +182,7 @@ impl KerberosReplyPreauthBuilder {
                 .to_vec(),
         );
 
-        KerberosReply::Preauth {
+        KerberosReply::PA(PreauthReply {
             pa_data: PreauthData {
                 pa_fx_fast: false,
                 enc_timestamp: true,
@@ -182,7 +194,7 @@ impl KerberosReplyPreauthBuilder {
                 }],
             },
             service: self.service,
-        }
+        })
     }
 }
 
@@ -289,16 +301,16 @@ impl TryFrom<KdcKrbError> for KerberosReply {
 
                 let pa_data = PreauthData::try_from(pavec)?;
 
-                Ok(KerberosReply::Preauth { pa_data, service })
+                Ok(KerberosReply::PA(PreauthReply { pa_data, service }))
             }
             code => {
                 let error_text = rep.error_text.as_ref().map(|s| s.into());
 
-                Ok(KerberosReply::Error {
+                Ok(KerberosReply::ERR(ErrorReply {
                     code,
                     service,
                     error_text,
-                })
+                }))
             }
         }
     }
@@ -309,20 +321,20 @@ impl TryInto<KrbKdcRep> for KerberosReply {
 
     fn try_into(self) -> Result<KrbKdcRep, KrbError> {
         match self {
-            KerberosReply::Authentication {
+            KerberosReply::AS(AuthenticationReply {
                 name,
                 enc_part,
                 pa_data,
                 ticket,
-            } => {
+            }) => {
                 // let asn_as_req = as_req.to_asn()?;
                 // KrbKdcReq::to_der(&KrbKdcReq::AsReq(asn_as_req))
                 todo!();
             }
-            KerberosReply::TicketGrant {} => {
+            KerberosReply::TGS(TicketGrantReply {}) => {
                 todo!();
             }
-            KerberosReply::Preauth { pa_data, service } => {
+            KerberosReply::PA(PreauthReply { pa_data, service }) => {
                 let error_code = KrbErrorCode::KdcErrPreauthRequired as i32;
                 // The pre-auth data is stuffed into error_data. Because of course kerberos can't
                 // do nice things.
@@ -403,11 +415,11 @@ impl TryInto<KrbKdcRep> for KerberosReply {
 
                 Ok(KrbKdcRep::ErrRep(krb_error))
             }
-            KerberosReply::Error {
+            KerberosReply::ERR(ErrorReply {
                 code,
                 service,
                 error_text,
-            } => {
+            }) => {
                 let error_code = code as i32;
 
                 let error_text = error_text
@@ -472,12 +484,12 @@ impl TryFrom<KdcRep> for KerberosReply {
                 let name = (rep.cname, rep.crealm).try_into()?;
                 let ticket = Ticket::try_from(rep.ticket)?;
 
-                Ok(KerberosReply::Authentication {
+                Ok(KerberosReply::AS(AuthenticationReply {
                     name,
                     pa_data,
                     enc_part,
                     ticket,
-                })
+                }))
             }
             KrbMessageType::KrbTgsRep => {
                 todo!();

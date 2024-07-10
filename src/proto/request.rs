@@ -26,21 +26,12 @@ use super::{EncryptedData, Name, Preauth, PreauthData};
 
 #[derive(Debug)]
 pub enum KerberosRequest {
-    Authentication {
-        nonce: u32,
-        client_name: Name,
-        service_name: Name,
-        from: Option<SystemTime>,
-        until: SystemTime,
-        renew: Option<SystemTime>,
-        preauth: Preauth,
-        etypes: Vec<EncryptionType>,
-    },
-    TicketGrant {},
+    AS(AuthenticationRequest),
+    TGS(TicketGrantRequest),
 }
 
-// For callers who need to pass these around it's a bit easier in a struct. Maybe I should
-// have left it that way?
+#[derive(Debug)]
+pub struct TicketGrantRequest {}
 
 #[derive(Debug)]
 pub struct AuthenticationRequest {
@@ -90,7 +81,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
 
     fn try_into(self) -> Result<KrbKdcReq, Self::Error> {
         match self {
-            KerberosRequest::Authentication {
+            KerberosRequest::AS(AuthenticationRequest {
                 nonce,
                 client_name,
                 service_name,
@@ -99,7 +90,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                 renew,
                 preauth,
                 etypes,
-            } => {
+            }) => {
                 let padata = if preauth.pa_fx_cookie.is_some() || preauth.enc_timestamp.is_some() {
                     let mut padata_inner = Vec::with_capacity(2);
 
@@ -189,7 +180,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                     },
                 }))
             }
-            KerberosRequest::TicketGrant {} => {
+            KerberosRequest::TGS(TicketGrantRequest {}) => {
                 todo!()
             }
         }
@@ -323,7 +314,7 @@ impl KerberosAuthenticationBuilder {
 
         let preauth = preauth.unwrap_or_default();
 
-        KerberosRequest::Authentication {
+        KerberosRequest::AS(AuthenticationRequest {
             nonce,
             client_name,
             service_name,
@@ -332,7 +323,7 @@ impl KerberosAuthenticationBuilder {
             renew,
             preauth,
             etypes,
-        }
+        })
     }
 }
 
@@ -393,7 +384,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                 // enc_authorization_data,
                 // additional_tickets,
 
-                Ok(KerberosRequest::Authentication {
+                Ok(KerberosRequest::AS(AuthenticationRequest {
                     nonce,
                     client_name,
                     service_name,
@@ -402,7 +393,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                     renew,
                     etypes,
                     preauth,
-                })
+                }))
             }
             KrbMessageType::KrbTgsReq => {
                 todo!();
