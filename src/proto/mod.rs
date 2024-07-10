@@ -2,39 +2,24 @@ mod reply;
 mod request;
 
 pub use self::reply::KerberosReply;
-pub use self::request::KerberosRequest;
+pub use self::request::{AuthenticationRequest, KerberosRequest};
 
 use crate::asn1::{
-    constants::{
-        encryption_types::EncryptionType, errors::KrbErrorCode, message_types::KrbMessageType,
-        pa_data_types::PaDataType,
-    },
+    constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
     encrypted_data::EncryptedData as KdcEncryptedData,
     etype_info2::ETypeInfo2 as KdcETypeInfo2,
-    etype_info2::ETypeInfo2Entry as KdcETypeInfo2Entry,
-    kdc_rep::KdcRep,
-    kdc_req::KdcReq,
-    kdc_req_body::KdcReqBody,
-    // kerberos_flags::KerberosFlags,
     kerberos_string::KerberosString,
-    kerberos_time::KerberosTime,
-    krb_error::KrbError as KdcKrbError,
-    krb_error::MethodData,
-    krb_kdc_rep::KrbKdcRep,
-    krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
     principal_name::PrincipalName,
     realm::Realm,
     tagged_ticket::TaggedTicket,
-    BitString,
     Ia5String,
-    OctetString,
 };
 use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{
     decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
-    derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
+    derive_key_external_salt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
 use der::{Decode, Encode};
@@ -70,7 +55,7 @@ pub enum EncryptedData {
     Aes256CtsHmacSha196 { kvno: Option<u32>, data: Vec<u8> },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PreauthData {
     pub(crate) pa_fx_fast: bool,
     pub(crate) enc_timestamp: bool,
@@ -361,6 +346,13 @@ impl Name {
         Self::SrvInst {
             service: "krbtgt".to_string(),
             realm: realm.to_string(),
+        }
+    }
+
+    pub fn is_service_krbtgt(&self, check_realm: &str) -> bool {
+        match self {
+            Self::SrvInst { service, realm } => service == "krbtgt" && check_realm == realm,
+            _ => false,
         }
     }
 
