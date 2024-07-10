@@ -87,27 +87,7 @@ async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerSt
 
     while let Some(Ok(kdc_req)) = kdc_stream.next().await {
         match kdc_req {
-            KerberosRequest::Authentication {
-                nonce,
-                client_name,
-                service_name,
-                from,
-                until,
-                renew,
-                preauth,
-                etypes,
-            } => {
-                let auth_req = AuthenticationRequest {
-                    nonce,
-                    client_name,
-                    service_name,
-                    from,
-                    until,
-                    renew,
-                    preauth,
-                    etypes,
-                };
-
+            KerberosRequest::AS(auth_req) => {
                 let reply = match process_authentication(auth_req, &server_state).await {
                     Ok(rep) => rep,
                     Err(krb_err) => krb_err,
@@ -119,7 +99,7 @@ async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerSt
                 }
                 continue;
             }
-            KerberosRequest::TicketGrant {} => {
+            KerberosRequest::TGS(_) => {
                 todo!();
             }
         }

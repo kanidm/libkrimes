@@ -1,8 +1,8 @@
 mod reply;
 mod request;
 
-pub use self::reply::KerberosReply;
-pub use self::request::{AuthenticationRequest, KerberosRequest};
+pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGrantReply};
+pub use self::request::{AuthenticationRequest, KerberosRequest, TicketGrantRequest};
 
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},

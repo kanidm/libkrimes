@@ -239,7 +239,7 @@ mod tests {
     use super::KerberosTcpCodec;
     use crate::asn1::constants::errors::KrbErrorCode;
     use crate::asn1::constants::PaDataType;
-    use crate::proto::{KerberosRequest, Name};
+    use crate::proto::{AuthenticationReply, KerberosRequest, Name, PreauthReply};
     use futures::StreamExt;
     use tracing::trace;
 
@@ -271,12 +271,12 @@ mod tests {
         let response = krb_stream.next().await;
 
         match response {
-            Some(Ok(KerberosReply::Authentication {
+            Some(Ok(KerberosReply::AS(AuthenticationReply {
                 name,
                 enc_part,
                 pa_data,
                 ticket,
-            })) => {
+            }))) => {
                 let base_key = enc_part
                     .derive_key(b"password", b"EXAMPLE.COM", b"testuser", Some(0x1000))
                     .unwrap();
@@ -325,7 +325,7 @@ mod tests {
         let response = response.unwrap();
 
         let (service, pa_data) = match response {
-            KerberosReply::Preauth { service, pa_data } => (service, pa_data),
+            KerberosReply::PA(PreauthReply { service, pa_data }) => (service, pa_data),
             _ => unreachable!(),
         };
 
@@ -402,6 +402,6 @@ mod tests {
         let response = krb_stream.next().await.unwrap().unwrap();
 
         trace!(?response);
-        assert!(matches!(response, KerberosReply::Authentication { .. }));
+        assert!(matches!(response, KerberosReply::AS(_)));
     }
 }
