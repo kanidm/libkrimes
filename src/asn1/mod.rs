@@ -16,6 +16,7 @@ pub mod kerberos_time;
 pub mod krb_error;
 pub mod krb_kdc_rep;
 pub mod krb_kdc_req;
+pub mod last_req;
 pub mod microseconds;
 pub mod pa_data;
 pub mod pa_enc_ts_enc;
