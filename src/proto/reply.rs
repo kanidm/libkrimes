@@ -3,6 +3,9 @@ use crate::asn1::{
         encryption_types::EncryptionType, errors::KrbErrorCode, message_types::KrbMessageType,
         pa_data_types::PaDataType,
     },
+    enc_kdc_rep_part::EncKdcRepPart,
+    enc_ticket_part::EncTicketPart,
+    encryption_key::EncryptionKey as KdcEncryptionKey,
     etype_info2::ETypeInfo2Entry as KdcETypeInfo2Entry,
     kdc_rep::KdcRep,
     kerberos_string::KerberosString,
@@ -11,19 +14,22 @@ use crate::asn1::{
     krb_error::MethodData,
     krb_kdc_rep::KrbKdcRep,
     pa_data::PaData,
+    transited_encoding::TransitedEncoding,
     Ia5String, OctetString,
 };
+use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{
     decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
     derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
 use der::{Decode, Encode};
+use rand::{thread_rng, Rng};
 
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
-use super::{EncryptedData, EtypeInfo2, Name, PreauthData, Ticket};
+use super::{EncryptedData, EncryptionKey, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, Ticket};
 
 #[derive(Debug)]
 pub enum KerberosReply {
@@ -71,6 +77,14 @@ pub struct KerberosReplyAuthenticationBuilder {
     aes256_cts_hmac_sha1_96_iter_count: u32,
     salt: Option<String>,
     client: Name,
+    server: Name,
+
+    nonce: u32,
+
+    auth_time: SystemTime,
+    start_time: SystemTime,
+    end_time: SystemTime,
+    renew_until: Option<SystemTime>,
 }
 
 impl KerberosReply {
@@ -85,13 +99,31 @@ impl KerberosReply {
         }
     }
 
-    pub fn authentication_builder(client: Name) -> KerberosReplyAuthenticationBuilder {
+    pub fn authentication_builder(
+        client: Name,
+        server: Name,
+        stime: SystemTime,
+        nonce: u32,
+    ) -> KerberosReplyAuthenticationBuilder {
         let aes256_cts_hmac_sha1_96_iter_count: u32 = 0x8000;
+
+        let auth_time = stime;
+        let start_time = stime;
+        let end_time = stime + Duration::from_secs(3600 * 4);
+        let renew_until = Some(stime + Duration::from_secs(86400 * 7));
 
         KerberosReplyAuthenticationBuilder {
             aes256_cts_hmac_sha1_96_iter_count,
             salt: None,
             client,
+            server,
+
+            nonce,
+
+            auth_time,
+            start_time,
+            end_time,
+            renew_until,
         }
     }
 
@@ -239,21 +271,101 @@ impl KerberosReplyAuthenticationBuilder {
         self
     }
 
-    pub fn build(self) -> KerberosReply {
-        todo!();
-        /*
-        // We need to encrypt some stuff ...
+    pub fn build(
+        self,
+        user_key: &EncryptionKey,
+        primary_key: &KdcPrimaryKey,
+    ) -> Result<KerberosReply, KrbError> {
+        // Build and encrypt the reply.
+        let mut session_key = [0u8; AES_256_KEY_LEN];
+        thread_rng().fill(&mut session_key);
+        let key_value =
+            OctetString::new(session_key).map_err(|_| KrbError::DerEncodeOctetString)?;
 
+        let session_key = KdcEncryptionKey {
+            key_type: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
+            key_value,
+        };
 
-        // let enc_part = EncASRepPart -> EncKDCRepPart;
+        let auth_time = KerberosTime::from_system_time(self.auth_time).unwrap();
+        let start_time = KerberosTime::from_system_time(self.auth_time).unwrap();
+        let end_time = KerberosTime::from_system_time(self.auth_time).unwrap();
+        let renew_till = self
+            .renew_until
+            .map(|t| KerberosTime::from_system_time(t).unwrap());
 
-        // let ticket_enc_part = EncTicketPart;
+        let mut flags = 0x0;
+        if renew_till.is_some() {
+            // renewable.
+            flags = flags | 0b1_0000_0000;
+        };
 
+        let (cname, crealm) = (&self.client).try_into().unwrap();
+        let (server_name, server_realm) = (&self.server).try_into().unwrap();
+
+        let enc_kdc_rep_part = EncKdcRepPart {
+            key: session_key.clone(),
+            // Not 100% clear on this field.
+            last_req: Vec::with_capacity(0),
+            nonce: self.nonce,
+            key_expiration: None,
+            flags,
+            auth_time,
+            start_time: Some(start_time),
+            end_time,
+            renew_till,
+            server_realm,
+            server_name,
+            client_addresses: None,
+        };
+
+        let data = enc_kdc_rep_part
+            .to_der()
+            .map_err(|_| KrbError::DerEncodeEncKdcRepPart)?;
+
+        let (enc_part_etype, enc_part) = match user_key {
+            EncryptionKey::Aes256 { k } => {
+                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, 3)?;
+                let enc_part = EncryptedData::Aes256CtsHmacSha196 { kvno: None, data };
+
+                (EncryptionType::AES256_CTS_HMAC_SHA1_96, enc_part)
+            }
+        };
+
+        let transited = TransitedEncoding {
+            tr_type: 1,
+            // Since no transit has occured, we record an empty str.
+            contents: OctetString::new(b"").unwrap(),
+        };
+
+        let ticket_inner = EncTicketPart {
+            flags,
+            key: session_key,
+            crealm,
+            cname,
+            transited,
+            auth_time,
+            start_time: Some(start_time),
+            end_time,
+            renew_till,
+            client_addresses: None,
+            authorization_data: None,
+        };
+
+        let data = ticket_inner
+            .to_der()
+            .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
+
+        let ticket_enc_part = match primary_key {
+            KdcPrimaryKey::Aes256 { k } => {
+                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, 3)?;
+                EncryptedData::Aes256CtsHmacSha196 { kvno: None, data }
+            }
+        };
 
         let ticket = Ticket {
-            tkt_vno,
-            realm,
-            service_name,
+            tkt_vno: 0,
+            service: self.server,
             enc_part: ticket_enc_part,
         };
 
@@ -265,22 +377,21 @@ impl KerberosReplyAuthenticationBuilder {
                 .to_vec(),
         );
 
-        let pa_data = PreauthData {
+        let pa_data = Some(PreauthData {
             etype_info2: vec![EtypeInfo2 {
-                etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
+                etype: enc_part_etype,
                 salt: self.salt,
                 s2kparams: aes256_cts_hmac_sha1_96_iter_count,
             }],
             ..Default::default()
-        };
+        });
 
-        KerberosReply::Authentication {
+        Ok(KerberosReply::AS(AuthenticationReply {
             name,
             enc_part,
             pa_data,
             ticket,
-        },
-        */
+        }))
     }
 }
 

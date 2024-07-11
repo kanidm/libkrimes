@@ -7,7 +7,7 @@ use der::Sequence;
 ///         keyvalue        [1] OCTET STRING
 /// }
 /// ````
-#[derive(Debug, Eq, PartialEq, Sequence)]
+#[derive(Debug, Eq, PartialEq, Sequence, Clone)]
 pub(crate) struct EncryptionKey {
     #[asn1(context_specific = "0")]
     pub key_type: i32,
