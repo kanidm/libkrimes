@@ -27,25 +27,29 @@ use der::Sequence;
 #[derive(Debug, Eq, PartialEq, Sequence)]
 pub(crate) struct EncTicketPart {
     #[asn1(context_specific = "0")]
-    flags: FlagSet<TicketFlags>,
+    pub flags: u32,
+    // flags: FlagSet<TicketFlags>,
     #[asn1(context_specific = "1")]
-    key: EncryptionKey,
+    pub key: EncryptionKey,
     #[asn1(context_specific = "2")]
-    crealm: Realm,
+    pub crealm: Realm,
     #[asn1(context_specific = "3")]
-    cname: PrincipalName,
+    pub cname: PrincipalName,
     #[asn1(context_specific = "4")]
-    transited: TransitedEncoding,
+    pub transited: TransitedEncoding,
     #[asn1(context_specific = "5")]
-    authtime: KerberosTime,
+    pub auth_time: KerberosTime,
     #[asn1(context_specific = "6", optional = "true")]
-    starttime: Option<KerberosTime>,
+    pub start_time: Option<KerberosTime>,
     #[asn1(context_specific = "7")]
-    endtime: KerberosTime,
+    pub end_time: KerberosTime,
     #[asn1(context_specific = "8", optional = "true")]
-    till: Option<KerberosTime>,
+    pub renew_till: Option<KerberosTime>,
     #[asn1(context_specific = "9", optional = "true")]
-    cadr: Option<HostAddresses>,
+    pub client_addresses: Option<HostAddresses>,
+    /// Per RFC4120: Experience has shown that the name of this
+    /// field is confusing, and that a better name would be
+    /// "restrictions".
     #[asn1(context_specific = "10", optional = "true")]
-    authorization_data: Option<Vec<AuthorizationData>>,
+    pub authorization_data: Option<Vec<AuthorizationData>>,
 }

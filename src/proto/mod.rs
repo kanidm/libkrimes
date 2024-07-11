@@ -56,11 +56,39 @@ impl fmt::Debug for EncryptionKey {
     }
 }
 
+pub enum KdcPrimaryKey {
+    Aes256 { k: [u8; AES_256_KEY_LEN] },
+}
+
+impl fmt::Debug for KdcPrimaryKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut builder = f.debug_struct("KdcPrimaryKey");
+        match self {
+            KdcPrimaryKey::Aes256 { .. } => builder.field("k", &"Aes256"),
+        }
+        .finish()
+    }
+}
+
+impl TryFrom<&[u8]> for KdcPrimaryKey {
+    type Error = KrbError;
+
+    fn try_from(key: &[u8]) -> Result<Self, Self::Error> {
+        if key.len() == AES_256_KEY_LEN {
+            let mut k = [0u8; AES_256_KEY_LEN];
+            k.copy_from_slice(key);
+            Ok(KdcPrimaryKey::Aes256 { k })
+        } else {
+            tracing::error!(key_len = %key.len(), expected = %AES_256_KEY_LEN);
+            Err(KrbError::InvalidEncryptionKey)
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Ticket {
     tkt_vno: i8,
-    realm: String,
-    service_name: String,
+    service: Name,
     enc_part: EncryptedData,
 }
 
@@ -377,16 +405,13 @@ impl TryFrom<TaggedTicket> for Ticket {
     fn try_from(tkt: TaggedTicket) -> Result<Self, Self::Error> {
         let TaggedTicket(tkt) = tkt;
 
-        let tkt_vno = tkt.tkt_vno;
-        let realm: String = tkt.realm.into();
-        let service_name: String = tkt.sname.into();
-
+        let service = Name::try_from((tkt.sname, tkt.realm))?;
         let enc_part = EncryptedData::try_from(tkt.enc_part)?;
+        let tkt_vno = tkt.tkt_vno;
 
         Ok(Ticket {
             tkt_vno,
-            realm,
-            service_name,
+            service,
             enc_part,
         })
     }
@@ -402,7 +427,8 @@ impl TryFrom<EncKdcRepPart> for KdcReplyPart {
         let server = Name::try_from((enc_kdc_rep_part.server_name, enc_kdc_rep_part.server_realm))?;
 
         let nonce = enc_kdc_rep_part.nonce;
-        let flags = enc_kdc_rep_part.flags.bits();
+        // let flags = enc_kdc_rep_part.flags.bits();
+        let flags = enc_kdc_rep_part.flags;
 
         let key_expiration = enc_kdc_rep_part.key_expiration.map(|t| t.to_system_time());
         let start_time = enc_kdc_rep_part.start_time.map(|t| t.to_system_time());

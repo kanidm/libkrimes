@@ -10,7 +10,7 @@ use der::Sequence;
 #[derive(Debug, Eq, PartialEq, Sequence)]
 pub(crate) struct TransitedEncoding {
     #[asn1(context_specific = "0")]
-    tr_type: i32,
+    pub tr_type: i32,
     #[asn1(context_specific = "1")]
-    contents: OctetString,
+    pub contents: OctetString,
 }

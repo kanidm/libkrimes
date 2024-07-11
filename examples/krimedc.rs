@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
-use libkrime::proto::{AuthenticationRequest, KerberosReply, KerberosRequest};
+use libkrime::proto::{AuthenticationRequest, KdcPrimaryKey, KerberosReply, KerberosRequest};
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -70,7 +70,7 @@ async fn process_authentication(
     // Start to process and validate the enc timestamp.
 
     // In theory we should be able to cache the users base key.
-    let key = pre_enc_timestamp
+    let user_key = pre_enc_timestamp
         .derive_key(
             user_record.password.as_bytes(),
             crealm.as_bytes(),
@@ -83,27 +83,31 @@ async fn process_authentication(
         })?;
 
     let pa_timestamp = pre_enc_timestamp
-        .decrypt_pa_enc_timestamp(&key)
+        .decrypt_pa_enc_timestamp(&user_key)
         .map_err(|err| {
             error!(?err, "pre_enc_timestamp.decrypt");
             KerberosReply::error_preauth_failed(auth_req.service_name.clone(), stime)
         })?;
 
-    trace!(?pa_timestamp);
+    trace!(?pa_timestamp, ?stime);
 
     let abs_offset = if pa_timestamp > stime {
-        stime.duration_since(pa_timestamp)
-    } else {
         pa_timestamp.duration_since(stime)
+    } else {
+        stime.duration_since(pa_timestamp)
     }
     // This error shouldn't be possible. The error condition on duration_since is
-    // when the left side of the term is actually *after* the right. Our if
+    // when the right side of the term is actually *before* the left. Our if
     // condition should guard against thin.
     // However, let's do the right thing and check it anyway.
-    .map_err(|_| KerberosReply::error_internal(auth_req.service_name.clone(), stime))?;
+    .map_err(|kdc_err| {
+        error!(?kdc_err);
+        KerberosReply::error_internal(auth_req.service_name.clone(), stime)
+    })?;
 
     // Check for the timestamp being in a valid range. If not, reject for clock skew.
     if abs_offset > Duration::from_secs(300) {
+        error!(?abs_offset, "clock skew");
         // ClockSkew
         return Err(KerberosReply::error_clock_skew(
             auth_req.service_name.clone(),
@@ -113,9 +117,23 @@ async fn process_authentication(
 
     // Preauthentication SUCCESS. Now we can consider issuing a ticket.
 
-    // We need to check the request flags and reject or honour them.
+    // TODO: I think I'm going to refactor this so that there is some kind of KDC context
+    // that tracks our salts, iter_counts, primary key etc. I think the manual key handling
+    // here isn't very nice.
 
-    todo!()
+    let builder = KerberosReply::authentication_builder(
+        auth_req.client_name,
+        auth_req.service_name.clone(),
+        stime,
+        auth_req.nonce,
+    );
+
+    builder
+        .build(&user_key, &server_state.primary_key)
+        .map_err(|kdc_err| {
+            error!(?kdc_err);
+            KerberosReply::error_internal(auth_req.service_name.clone(), stime)
+        })
 }
 
 async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerState>) {
@@ -185,6 +203,8 @@ impl From<Config> for ServerState {
             user,
         } = cr;
 
+        let primary_key = KdcPrimaryKey::try_from(primary_key.as_slice()).unwrap();
+
         ServerState {
             realm,
             primary_key,
@@ -193,11 +213,11 @@ impl From<Config> for ServerState {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct ServerState {
     realm: String,
     // address: SocketAddr,
-    primary_key: Vec<u8>,
+    primary_key: KdcPrimaryKey,
 
     users: BTreeMap<String, UserPrincipal>,
     // services: BTreeMap<String, Service>,
