@@ -270,21 +270,19 @@ mod tests {
 
         let response = krb_stream.next().await;
 
-        match response {
+        let cleartext = match response {
             Some(Ok(KerberosReply::AS(AuthenticationReply {
                 name,
                 enc_part,
                 pa_data,
                 ticket,
             }))) => {
+                // Probably needs a re-think based on the etype info in the auth reply
                 let base_key = enc_part
                     .derive_key(b"password", b"EXAMPLE.COM", b"testuser", Some(0x1000))
                     .unwrap();
 
-                // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
-                // message, using the client's long-term key or another key selected
-                // via pre-authentication mechanisms.
-                let cleartext = enc_part.decrypt_data(&base_key, 3).unwrap();
+                enc_part.decrypt_enc_kdc_rep(&base_key).unwrap()
             }
             _ => unreachable!(),
         };

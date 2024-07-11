@@ -15,6 +15,7 @@ pub enum KrbError {
     DerDecodeEtypeInfo2,
     DerEncodePaEncTsEnc,
     DerDecodePaEncTsEnc,
+    DerDecodeEncKdcRepPart,
     DerEncodeOctetString,
     PreauthUnsupported,
     PreauthMissingEtypeInfo2,
@@ -26,5 +27,6 @@ pub enum KrbError {
     InvalidMessageType,
     InvalidMessageDirection,
     InvalidPvno,
+    InvalidEncryptionKey,
     InvalidEnumValue(String, i32),
 }
