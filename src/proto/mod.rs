@@ -6,13 +6,16 @@ pub use self::request::{AuthenticationRequest, KerberosRequest, TicketGrantReque
 
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
+    enc_kdc_rep_part::EncKdcRepPart,
     encrypted_data::EncryptedData as KdcEncryptedData,
+    encryption_key::EncryptionKey as KdcEncryptionKey,
     etype_info2::ETypeInfo2 as KdcETypeInfo2,
     kerberos_string::KerberosString,
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
     principal_name::PrincipalName,
     realm::Realm,
+    tagged_enc_kdc_rep_part::TaggedEncKdcRepPart,
     tagged_ticket::TaggedTicket,
     Ia5String,
 };
@@ -26,8 +29,12 @@ use der::{Decode, Encode};
 use rand::{thread_rng, Rng};
 
 use std::cmp::Ordering;
+use std::fmt;
 use std::time::{Duration, SystemTime};
 use tracing::trace;
+
+// Zeroize blocked on https://github.com/RustCrypto/block-ciphers/issues/426
+// use zeroize::Zeroizing;
 
 #[derive(Debug, Default)]
 pub struct Preauth {
@@ -35,11 +42,18 @@ pub struct Preauth {
     pa_fx_cookie: Option<Vec<u8>>,
 }
 
-pub enum BaseKey {
-    Aes256 {
-        // Todo zeroizing.
-        k: [u8; AES_256_KEY_LEN],
-    },
+pub enum EncryptionKey {
+    Aes256 { k: [u8; AES_256_KEY_LEN] },
+}
+
+impl fmt::Debug for EncryptionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut builder = f.debug_struct("EncryptionKey");
+        match self {
+            EncryptionKey::Aes256 { .. } => builder.field("k", &"Aes256"),
+        }
+        .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -48,6 +62,27 @@ pub struct Ticket {
     realm: String,
     service_name: String,
     enc_part: EncryptedData,
+}
+
+// pub struct LastRequest
+
+#[derive(Debug)]
+pub struct KdcReplyPart {
+    key: EncryptionKey,
+    // Last req shows "last login" and probably isn't important for our needs.
+    // last_req: (),
+    nonce: u32,
+    key_expiration: Option<SystemTime>,
+    flags: u32,
+    auth_time: SystemTime,
+    start_time: Option<SystemTime>,
+    end_time: SystemTime,
+    renew_until: Option<SystemTime>,
+    server: Name,
+    // Shows the addresses the ticket may be used from. Mostly these are broken
+    // by nat, and so aren't used. These are just to display that there are limits
+    // to the client, the enforced addrs are in the ticket.
+    // client_addresses: Vec<HostAddress>,
 }
 
 #[derive(Debug)]
@@ -241,12 +276,12 @@ impl EncryptedData {
         realm: &[u8],
         cname: &[u8],
         iter_count: Option<u32>,
-    ) -> Result<BaseKey, KrbError> {
+    ) -> Result<EncryptionKey, KrbError> {
         match self {
             EncryptedData::Aes256CtsHmacSha196 { .. } => {
                 // TODO: check the padata.
                 derive_key_aes256_cts_hmac_sha1_96(passphrase, realm, cname, iter_count)
-                    .map(|k| BaseKey::Aes256 { k })
+                    .map(|k| EncryptionKey::Aes256 { k })
             }
         }
     }
@@ -256,25 +291,48 @@ impl EncryptedData {
         passphrase: &[u8],
         salt: &[u8],
         iter_count: Option<u32>,
-    ) -> Result<BaseKey, KrbError> {
+    ) -> Result<EncryptionKey, KrbError> {
         match self {
             EncryptedData::Aes256CtsHmacSha196 { .. } => {
                 // TODO: check the padata.
                 derive_key_external_salt_aes256_cts_hmac_sha1_96(passphrase, salt, iter_count)
-                    .map(|k| BaseKey::Aes256 { k })
+                    .map(|k| EncryptionKey::Aes256 { k })
             }
         }
     }
 
-    pub fn decrypt_data(&self, base_key: &BaseKey, key_usage: i32) -> Result<Vec<u8>, KrbError> {
+    fn decrypt_data(&self, base_key: &EncryptionKey, key_usage: i32) -> Result<Vec<u8>, KrbError> {
         match (self, base_key) {
-            (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, BaseKey::Aes256 { k }) => {
+            (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, EncryptionKey::Aes256 { k }) => {
                 decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)
             }
         }
     }
 
-    pub fn decrypt_pa_enc_timestamp(&self, base_key: &BaseKey) -> Result<SystemTime, KrbError> {
+    pub fn decrypt_enc_kdc_rep(&self, base_key: &EncryptionKey) -> Result<KdcReplyPart, KrbError> {
+        // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
+        // message, using the client's long-term key or another key selected
+        // via pre-authentication mechanisms.
+        let data = self.decrypt_data(base_key, 3)?;
+
+        let tagged_kdc_enc_part =
+            TaggedEncKdcRepPart::from_der(&data).map_err(|_| KrbError::DerDecodeEncKdcRepPart)?;
+
+        // RFC states we should relax the tag check on these.
+
+        let kdc_enc_part = match tagged_kdc_enc_part {
+            TaggedEncKdcRepPart::EncTgsRepPart(part) | TaggedEncKdcRepPart::EncAsRepPart(part) => {
+                part
+            }
+        };
+
+        KdcReplyPart::try_from(kdc_enc_part)
+    }
+
+    pub fn decrypt_pa_enc_timestamp(
+        &self,
+        base_key: &EncryptionKey,
+    ) -> Result<SystemTime, KrbError> {
         // https://www.rfc-editor.org/rfc/rfc4120#section-5.2.7.2
         let data = self.decrypt_data(base_key, 1)?;
 
@@ -331,6 +389,59 @@ impl TryFrom<TaggedTicket> for Ticket {
             service_name,
             enc_part,
         })
+    }
+}
+
+impl TryFrom<EncKdcRepPart> for KdcReplyPart {
+    type Error = KrbError;
+
+    fn try_from(enc_kdc_rep_part: EncKdcRepPart) -> Result<Self, Self::Error> {
+        trace!(?enc_kdc_rep_part);
+
+        let key = EncryptionKey::try_from(enc_kdc_rep_part.key)?;
+        let server = Name::try_from((enc_kdc_rep_part.server_name, enc_kdc_rep_part.server_realm))?;
+
+        let nonce = enc_kdc_rep_part.nonce;
+        let flags = enc_kdc_rep_part.flags.bits();
+
+        let key_expiration = enc_kdc_rep_part.key_expiration.map(|t| t.to_system_time());
+        let start_time = enc_kdc_rep_part.start_time.map(|t| t.to_system_time());
+        let renew_until = enc_kdc_rep_part.renew_till.map(|t| t.to_system_time());
+        let auth_time = enc_kdc_rep_part.auth_time.to_system_time();
+        let end_time = enc_kdc_rep_part.end_time.to_system_time();
+
+        Ok(KdcReplyPart {
+            key,
+            nonce,
+            key_expiration,
+            flags,
+            auth_time,
+            start_time,
+            end_time,
+            renew_until,
+            server,
+        })
+    }
+}
+
+impl TryFrom<KdcEncryptionKey> for EncryptionKey {
+    type Error = KrbError;
+
+    fn try_from(kdc_key: KdcEncryptionKey) -> Result<Self, Self::Error> {
+        let key_type = EncryptionType::try_from(kdc_key.key_type)
+            .map_err(|_| KrbError::UnsupportedEncryption)?;
+        match key_type {
+            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
+                if kdc_key.key_value.as_bytes().len() == AES_256_KEY_LEN {
+                    let mut k = [0u8; AES_256_KEY_LEN];
+                    k.copy_from_slice(kdc_key.key_value.as_bytes());
+                    Ok(EncryptionKey::Aes256 { k })
+                } else {
+                    Err(KrbError::InvalidEncryptionKey)
+                }
+            }
+            _ => Err(KrbError::UnsupportedEncryption),
+        }
     }
 }
 
