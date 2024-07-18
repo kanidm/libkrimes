@@ -27,8 +27,7 @@ use der::Sequence;
 #[derive(Debug, Eq, PartialEq, Sequence)]
 pub(crate) struct EncTicketPart {
     #[asn1(context_specific = "0")]
-    pub flags: u32,
-    // flags: FlagSet<TicketFlags>,
+    pub flags: FlagSet<TicketFlags>,
     #[asn1(context_specific = "1")]
     pub key: EncryptionKey,
     #[asn1(context_specific = "2")]

@@ -15,7 +15,7 @@ use crate::asn1::{
     krb_kdc_rep::KrbKdcRep,
     pa_data::PaData,
     transited_encoding::TransitedEncoding,
-    Ia5String, OctetString,
+    Ia5String, OctetString, ticket_flags::TicketFlags,
 };
 use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{
@@ -23,7 +23,7 @@ use crate::crypto::{
     derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{Decode, Encode};
+use der::{Decode, Encode, flagset::FlagSet};
 use rand::{thread_rng, Rng};
 
 use std::time::{Duration, SystemTime};
@@ -294,10 +294,9 @@ impl KerberosReplyAuthenticationBuilder {
             .renew_until
             .map(|t| KerberosTime::from_system_time(t).unwrap());
 
-        let mut flags = 0x0;
+        let mut flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
         if renew_till.is_some() {
-            // renewable.
-            flags = flags | 0b1_0000_0000;
+            flags |= TicketFlags::Renewable;
         };
 
         let (cname, crealm) = (&self.client).try_into().unwrap();

@@ -280,9 +280,9 @@ mod tests {
                 // Probably needs a re-think based on the etype info in the auth reply
                 let base_key = enc_part
                     .derive_key(b"password", b"EXAMPLE.COM", b"testuser", Some(0x1000))
-                    .unwrap();
+                    .expect("Failed to derive base key");
 
-                enc_part.decrypt_enc_kdc_rep(&base_key).unwrap()
+                enc_part.decrypt_enc_kdc_rep(&base_key).expect("Failed to decrypt")
             }
             _ => unreachable!(),
         };
