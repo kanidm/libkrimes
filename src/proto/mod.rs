@@ -17,6 +17,7 @@ use crate::asn1::{
     realm::Realm,
     tagged_enc_kdc_rep_part::TaggedEncKdcRepPart,
     tagged_ticket::TaggedTicket,
+    ticket_flags::TicketFlags,
     Ia5String,
 };
 use crate::constants::AES_256_KEY_LEN;
@@ -25,7 +26,7 @@ use crate::crypto::{
     derive_key_external_salt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{Decode, Encode};
+use der::{flagset::FlagSet, Decode, Encode};
 use rand::{thread_rng, Rng};
 
 use std::cmp::Ordering;
@@ -101,7 +102,7 @@ pub struct KdcReplyPart {
     // last_req: (),
     nonce: u32,
     key_expiration: Option<SystemTime>,
-    flags: u32,
+    flags: FlagSet<TicketFlags>,
     auth_time: SystemTime,
     start_time: Option<SystemTime>,
     end_time: SystemTime,
@@ -343,8 +344,10 @@ impl EncryptedData {
         // via pre-authentication mechanisms.
         let data = self.decrypt_data(base_key, 3)?;
 
-        let tagged_kdc_enc_part =
-            TaggedEncKdcRepPart::from_der(&data).map_err(|_| KrbError::DerDecodeEncKdcRepPart)?;
+        let tagged_kdc_enc_part = TaggedEncKdcRepPart::from_der(&data).map_err(|e| {
+            println!("{:#?}", e);
+            KrbError::DerDecodeEncKdcRepPart
+        })?;
 
         // RFC states we should relax the tag check on these.
 
