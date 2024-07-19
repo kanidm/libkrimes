@@ -16,9 +16,9 @@ use crate::asn1::{
     principal_name::PrincipalName,
     realm::Realm,
     tagged_enc_kdc_rep_part::TaggedEncKdcRepPart,
-    tagged_ticket::TaggedTicket,
+    tagged_ticket::TaggedTicket as Asn1Ticket,
     ticket_flags::TicketFlags,
-    Ia5String,
+    Ia5String, OctetString,
 };
 use crate::constants::AES_256_KEY_LEN;
 use crate::crypto::{
@@ -402,11 +402,28 @@ impl TryFrom<KdcEncryptedData> for EncryptedData {
     }
 }
 
-impl TryFrom<TaggedTicket> for Ticket {
+impl TryInto<KdcEncryptedData> for EncryptedData {
     type Error = KrbError;
 
-    fn try_from(tkt: TaggedTicket) -> Result<Self, Self::Error> {
-        let TaggedTicket(tkt) = tkt;
+    fn try_into(self) -> Result<KdcEncryptedData, KrbError> {
+        match self {
+            EncryptedData::Aes256CtsHmacSha196 { kvno, data } => Ok(KdcEncryptedData {
+                etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
+                kvno,
+                cipher: OctetString::new(data).map_err(|e| {
+                    println!("{:#?}", e);
+                    KrbError::UnsupportedEncryption // TODO
+                })?,
+            }),
+        }
+    }
+}
+
+impl TryFrom<Asn1Ticket> for Ticket {
+    type Error = KrbError;
+
+    fn try_from(tkt: Asn1Ticket) -> Result<Self, Self::Error> {
+        let Asn1Ticket(tkt) = tkt;
 
         let service = Name::try_from((tkt.sname, tkt.realm))?;
         let enc_part = EncryptedData::try_from(tkt.enc_part)?;
@@ -417,6 +434,20 @@ impl TryFrom<TaggedTicket> for Ticket {
             service,
             enc_part,
         })
+    }
+}
+
+impl TryInto<Asn1Ticket> for Ticket {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<Asn1Ticket, KrbError> {
+        let t = crate::asn1::tagged_ticket::Ticket {
+            tkt_vno: self.tkt_vno,
+            realm: (&self.service).try_into()?,
+            sname: (&self.service).try_into()?,
+            enc_part: self.enc_part.try_into()?,
+        };
+        Ok(Asn1Ticket::new(t))
     }
 }
 
@@ -502,6 +533,31 @@ impl Name {
         match self {
             Name::Principal { name, realm } => Ok((name.as_str(), realm.as_str())),
             _ => Err(KrbError::NameNotPrincipal),
+        }
+    }
+}
+
+impl TryInto<Realm> for &Name {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<Realm, KrbError> {
+        match self {
+            Name::Principal { name, realm } => {
+                let realm = KerberosString(Ia5String::new(realm).unwrap());
+                Ok(realm)
+            }
+            Name::SrvInst { service, realm } => {
+                let realm = KerberosString(Ia5String::new(realm).unwrap());
+                Ok(realm)
+            }
+            Name::SrvHst {
+                service,
+                host,
+                realm,
+            } => {
+                let realm = KerberosString(Ia5String::new(realm).unwrap());
+                Ok(realm)
+            }
         }
     }
 }
