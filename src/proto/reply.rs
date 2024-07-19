@@ -363,7 +363,7 @@ impl KerberosReplyAuthenticationBuilder {
         };
 
         let ticket = Ticket {
-            tkt_vno: 0,
+            tkt_vno: 5,
             service: self.server,
             enc_part: ticket_enc_part,
         };
