@@ -553,7 +553,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
 
                 let krb_error = KdcKrbError {
                     pvno: 5,
-                    msg_type: 30,
+                    msg_type: KrbMessageType::KrbError as u8,
                     ctime: None,
                     cusec: None,
                     stime,
@@ -593,7 +593,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
 
                 let krb_error = KdcKrbError {
                     pvno: 5,
-                    msg_type: 30,
+                    msg_type: KrbMessageType::KrbError as u8,
                     ctime: None,
                     cusec: None,
                     stime,
