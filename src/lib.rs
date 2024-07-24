@@ -239,7 +239,7 @@ mod tests {
     use super::KerberosTcpCodec;
     use crate::asn1::constants::errors::KrbErrorCode;
     use crate::asn1::constants::PaDataType;
-    use crate::proto::{AuthenticationReply, KerberosRequest, Name, PreauthReply};
+    use crate::proto::{AuthenticationReply, DerivedKey, KerberosRequest, Name, PreauthReply};
     use futures::StreamExt;
     use tracing::trace;
 
@@ -277,12 +277,22 @@ mod tests {
                 pa_data,
                 ticket,
             }))) => {
-                // Probably needs a re-think based on the etype info in the auth reply
-                let base_key = enc_part
-                    .derive_key(b"password", b"EXAMPLE.COM", b"testuser", Some(0x1000))
-                    .expect("Failed to derive base key");
+                let etype_info = pa_data
+                    .as_ref()
+                    .map(|pa_inner| pa_inner.etype_info2.as_slice());
 
-                enc_part.decrypt_enc_kdc_rep(&base_key).expect("Failed to decrypt")
+                let base_key = DerivedKey::from_encrypted_reply(
+                    &enc_part,
+                    etype_info,
+                    "EXAMPLE.COM",
+                    "testuser",
+                    "password",
+                )
+                .expect("Failed to derive base key");
+
+                enc_part
+                    .decrypt_enc_kdc_rep(&base_key)
+                    .expect("Failed to decrypt")
             }
             _ => unreachable!(),
         };
@@ -349,8 +359,14 @@ mod tests {
         // Assert returned preauth data contains PA-ETYPE-INFO2
         assert!(!pa_data.etype_info2.is_empty());
 
+        // This gets the highest encryption strength item.
+        let einfo2 = pa_data.etype_info2.last().unwrap();
+
         // Compute the pre-authentication.
-        let password = "password";
+        let base_key =
+            DerivedKey::from_etype_info2(einfo2, "EXAMPLE.COM", "testuser_preauth", "password")
+                .expect("Failed to derive user key");
+
         let now = SystemTime::now();
         let seconds_since_epoch = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
 
@@ -360,7 +376,7 @@ mod tests {
             now + Duration::from_secs(3600),
         )
         .renew_until(Some(now + Duration::from_secs(86400 * 7)))
-        .preauth_enc_ts(&pa_data, password, seconds_since_epoch)
+        .preauth_enc_ts(&pa_data, seconds_since_epoch, &base_key)
         .map(|b| b.build())
         .expect("Unable to build as req");
 

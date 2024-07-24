@@ -20,10 +20,10 @@ use crate::asn1::{
     ticket_flags::TicketFlags,
     Ia5String, OctetString,
 };
-use crate::constants::AES_256_KEY_LEN;
+use crate::constants::{AES_256_KEY_LEN, PKBDF2_SHA1_ITER, RFC_PKBDF2_SHA1_ITER};
 use crate::crypto::{
     decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
-    derive_key_external_salt_aes256_cts_hmac_sha1_96,
+    encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode};
@@ -43,15 +43,179 @@ pub struct Preauth {
     pa_fx_cookie: Option<Vec<u8>>,
 }
 
-pub enum EncryptionKey {
-    Aes256 { k: [u8; AES_256_KEY_LEN] },
+pub enum DerivedKey {
+    Aes256CtsHmacSha196 {
+        k: [u8; AES_256_KEY_LEN],
+        i: u32,
+        s: String,
+    },
 }
 
-impl fmt::Debug for EncryptionKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut builder = f.debug_struct("EncryptionKey");
+impl DerivedKey {
+    pub fn new_aes256_cts_hmac_sha1_96(passphrase: &str, salt: &str) -> Result<Self, KrbError> {
+        // let iter_count = PKBDF2_SHA1_ITER;
+        let iter_count = RFC_PKBDF2_SHA1_ITER;
+
+        derive_key_aes256_cts_hmac_sha1_96(passphrase.as_bytes(), salt.as_bytes(), iter_count).map(
+            |k| DerivedKey::Aes256CtsHmacSha196 {
+                k,
+                i: iter_count,
+                s: salt.to_string(),
+            },
+        )
+    }
+
+    // Used to derive a key for the user. We have to do this to get the correct
+    // etype from the enc data as pa_data may have many etype_info2 and the spec
+    // doesn't call it an error to have multiple ... yay for confusing poorly
+    // structured protocols.
+    pub fn from_encrypted_reply(
+        encrypted_data: &EncryptedData,
+        pa_data_etype_info2: Option<&[EtypeInfo2]>,
+        realm: &str,
+        username: &str,
+        passphrase: &str,
+    ) -> Result<Self, KrbError> {
+        // If only Krb had put the *parameters* with the encrypted data, like any other
+        // sane ecosystem.
+        match encrypted_data {
+            EncryptedData::Aes256CtsHmacSha196 { .. } => {
+                // Find if we have an etype info?
+
+                let maybe_etype_info2 = pa_data_etype_info2
+                    .iter()
+                    .map(|slice| slice.iter())
+                    .flatten()
+                    .filter(|etype_info2| {
+                        matches!(&etype_info2.etype, EncryptionType::AES256_CTS_HMAC_SHA1_96)
+                    })
+                    .next();
+
+                let (salt, iter_count) = if let Some(etype_info2) = maybe_etype_info2 {
+                    let salt = etype_info2.salt.as_ref().cloned();
+
+                    let iter_count = if let Some(s2kparams) = &etype_info2.s2kparams {
+                        if s2kparams.len() != 4 {
+                            return Err(KrbError::PreauthInvalidS2KParams);
+                        };
+                        let mut iter_count = [0u8; 4];
+                        iter_count.copy_from_slice(&s2kparams);
+
+                        Some(u32::from_be_bytes(iter_count))
+                    } else {
+                        None
+                    };
+
+                    (salt, iter_count)
+                } else {
+                    (None, None)
+                };
+
+                let salt = salt.unwrap_or_else(|| format!("{}{}", realm, username));
+
+                let iter_count = iter_count.unwrap_or(RFC_PKBDF2_SHA1_ITER);
+
+                derive_key_aes256_cts_hmac_sha1_96(
+                    passphrase.as_bytes(),
+                    salt.as_bytes(),
+                    iter_count,
+                )
+                .map(|k| DerivedKey::Aes256CtsHmacSha196 {
+                    k,
+                    i: iter_count,
+                    s: salt,
+                })
+            }
+            _ => Err(KrbError::UnsupportedEncryption),
+        }
+    }
+
+    // This is used in pre-auth timestamp as there is no kvno as I can see?
+    pub fn from_etype_info2(
+        etype_info2: &EtypeInfo2,
+        realm: &str,
+        username: &str,
+        passphrase: &str,
+    ) -> Result<Self, KrbError> {
+        let salt = etype_info2
+            .salt
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| format!("{}{}", realm, username));
+
+        match &etype_info2.etype {
+            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
+                // Iter count is from the s2kparams
+                let iter_count = if let Some(s2kparams) = &etype_info2.s2kparams {
+                    if s2kparams.len() != 4 {
+                        return Err(KrbError::PreauthInvalidS2KParams);
+                    };
+                    let mut iter_count = [0u8; 4];
+                    iter_count.copy_from_slice(&s2kparams);
+
+                    u32::from_be_bytes(iter_count)
+                } else {
+                    // Assume the insecure default rfc value.
+                    RFC_PKBDF2_SHA1_ITER
+                };
+
+                derive_key_aes256_cts_hmac_sha1_96(
+                    passphrase.as_bytes(),
+                    salt.as_bytes(),
+                    iter_count,
+                )
+                .map(|k| DerivedKey::Aes256CtsHmacSha196 {
+                    k,
+                    i: iter_count,
+                    s: salt,
+                })
+            }
+            _ => Err(KrbError::UnsupportedEncryption),
+        }
+    }
+
+    pub fn encrypt_pa_enc_timestamp(
+        &self,
+        paenctsenc: &PaEncTsEnc,
+    ) -> Result<EncryptedData, KrbError> {
+        let data = paenctsenc
+            .to_der()
+            .map_err(|_| KrbError::DerEncodePaEncTsEnc)?;
+
+        // https://www.rfc-editor.org/rfc/rfc4120#section-5.2.7.2
+        let key_usage = 1;
+
         match self {
-            EncryptionKey::Aes256 { .. } => builder.field("k", &"Aes256"),
+            DerivedKey::Aes256CtsHmacSha196 { k, .. } => {
+                encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)
+                    .map(|data| EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
+            }
+        }
+    }
+}
+
+impl fmt::Debug for DerivedKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut builder = f.debug_struct("DerivedKey");
+        match self {
+            DerivedKey::Aes256CtsHmacSha196 { i, s, .. } => builder
+                .field("k", &"Aes256HmacSha1")
+                .field("i", i)
+                .field("s", s),
+        }
+        .finish()
+    }
+}
+
+pub enum SessionKey {
+    Aes256CtsHmacSha196 { k: [u8; AES_256_KEY_LEN] },
+}
+
+impl fmt::Debug for SessionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut builder = f.debug_struct("SessionKey");
+        match self {
+            SessionKey::Aes256CtsHmacSha196 { .. } => builder.field("k", &"Aes256"),
         }
         .finish()
     }
@@ -97,7 +261,7 @@ pub struct Ticket {
 
 #[derive(Debug)]
 pub struct KdcReplyPart {
-    key: EncryptionKey,
+    key: SessionKey,
     // Last req shows "last login" and probably isn't important for our needs.
     // last_req: (),
     nonce: u32,
@@ -148,7 +312,7 @@ pub enum Name {
     */
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EtypeInfo2 {
     // The type of encryption for enc ts.
     etype: EncryptionType,
@@ -299,46 +463,16 @@ impl TryFrom<Vec<PaData>> for Preauth {
 }
 
 impl EncryptedData {
-    pub fn derive_key(
-        &self,
-        passphrase: &[u8],
-        realm: &[u8],
-        cname: &[u8],
-        iter_count: Option<u32>,
-    ) -> Result<EncryptionKey, KrbError> {
-        match self {
-            EncryptedData::Aes256CtsHmacSha196 { .. } => {
-                // TODO: check the padata.
-                derive_key_aes256_cts_hmac_sha1_96(passphrase, realm, cname, iter_count)
-                    .map(|k| EncryptionKey::Aes256 { k })
-            }
-        }
-    }
-
-    pub fn derive_salted_key(
-        &self,
-        passphrase: &[u8],
-        salt: &[u8],
-        iter_count: Option<u32>,
-    ) -> Result<EncryptionKey, KrbError> {
-        match self {
-            EncryptedData::Aes256CtsHmacSha196 { .. } => {
-                // TODO: check the padata.
-                derive_key_external_salt_aes256_cts_hmac_sha1_96(passphrase, salt, iter_count)
-                    .map(|k| EncryptionKey::Aes256 { k })
-            }
-        }
-    }
-
-    fn decrypt_data(&self, base_key: &EncryptionKey, key_usage: i32) -> Result<Vec<u8>, KrbError> {
+    fn decrypt_data(&self, base_key: &DerivedKey, key_usage: i32) -> Result<Vec<u8>, KrbError> {
         match (self, base_key) {
-            (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, EncryptionKey::Aes256 { k }) => {
-                decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)
-            }
+            (
+                EncryptedData::Aes256CtsHmacSha196 { kvno: _, data },
+                DerivedKey::Aes256CtsHmacSha196 { k, .. },
+            ) => decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage),
         }
     }
 
-    pub fn decrypt_enc_kdc_rep(&self, base_key: &EncryptionKey) -> Result<KdcReplyPart, KrbError> {
+    pub fn decrypt_enc_kdc_rep(&self, base_key: &DerivedKey) -> Result<KdcReplyPart, KrbError> {
         // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
         // message, using the client's long-term key or another key selected
         // via pre-authentication mechanisms.
@@ -360,10 +494,7 @@ impl EncryptedData {
         KdcReplyPart::try_from(kdc_enc_part)
     }
 
-    pub fn decrypt_pa_enc_timestamp(
-        &self,
-        base_key: &EncryptionKey,
-    ) -> Result<SystemTime, KrbError> {
+    pub fn decrypt_pa_enc_timestamp(&self, base_key: &DerivedKey) -> Result<SystemTime, KrbError> {
         // https://www.rfc-editor.org/rfc/rfc4120#section-5.2.7.2
         let data = self.decrypt_data(base_key, 1)?;
 
@@ -457,7 +588,7 @@ impl TryFrom<EncKdcRepPart> for KdcReplyPart {
     fn try_from(enc_kdc_rep_part: EncKdcRepPart) -> Result<Self, Self::Error> {
         trace!(?enc_kdc_rep_part);
 
-        let key = EncryptionKey::try_from(enc_kdc_rep_part.key)?;
+        let key = SessionKey::try_from(enc_kdc_rep_part.key)?;
         let server = Name::try_from((enc_kdc_rep_part.server_name, enc_kdc_rep_part.server_realm))?;
 
         let nonce = enc_kdc_rep_part.nonce;
@@ -484,7 +615,7 @@ impl TryFrom<EncKdcRepPart> for KdcReplyPart {
     }
 }
 
-impl TryFrom<KdcEncryptionKey> for EncryptionKey {
+impl TryFrom<KdcEncryptionKey> for SessionKey {
     type Error = KrbError;
 
     fn try_from(kdc_key: KdcEncryptionKey) -> Result<Self, Self::Error> {
@@ -495,7 +626,7 @@ impl TryFrom<KdcEncryptionKey> for EncryptionKey {
                 if kdc_key.key_value.as_bytes().len() == AES_256_KEY_LEN {
                     let mut k = [0u8; AES_256_KEY_LEN];
                     k.copy_from_slice(kdc_key.key_value.as_bytes());
-                    Ok(EncryptionKey::Aes256 { k })
+                    Ok(SessionKey::Aes256CtsHmacSha196 { k })
                 } else {
                     Err(KrbError::InvalidEncryptionKey)
                 }

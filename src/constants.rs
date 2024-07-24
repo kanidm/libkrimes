@@ -3,7 +3,9 @@ pub const DEFAULT_IO_MAX_SIZE: usize = 32 * 1024;
 pub const AES_BLOCK_SIZE: usize = 16;
 pub const AES_256_KEY_LEN: usize = 32;
 pub const SHA1_HMAC_LEN: usize = 12;
-pub const PKBDF2_SHA1_ITER: u32 = 0x1000;
+
+pub const PKBDF2_SHA1_ITER: u32 = 0x8000;
+pub const RFC_PKBDF2_SHA1_ITER: u32 = 0x1000;
 
 pub const IV_ZERO: [u8; AES_BLOCK_SIZE] = [0u8; AES_BLOCK_SIZE];
 
