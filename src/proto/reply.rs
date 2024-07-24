@@ -14,22 +14,23 @@ use crate::asn1::{
     krb_error::MethodData,
     krb_kdc_rep::KrbKdcRep,
     pa_data::PaData,
+    ticket_flags::TicketFlags,
     transited_encoding::TransitedEncoding,
-    Ia5String, OctetString, ticket_flags::TicketFlags,
+    Ia5String, OctetString,
 };
-use crate::constants::AES_256_KEY_LEN;
+use crate::constants::{AES_256_KEY_LEN, PKBDF2_SHA1_ITER};
 use crate::crypto::{
     decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
-    derive_key_external_salt_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
+    encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{Decode, Encode, flagset::FlagSet};
+use der::{flagset::FlagSet, Decode, Encode};
 use rand::{thread_rng, Rng};
 
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
-use super::{EncryptedData, EncryptionKey, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, Ticket};
+use super::{DerivedKey, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, Ticket};
 
 #[derive(Debug)]
 pub enum KerberosReply {
@@ -89,7 +90,7 @@ pub struct KerberosReplyAuthenticationBuilder {
 
 impl KerberosReply {
     pub fn preauth_builder(service: Name, stime: SystemTime) -> KerberosReplyPreauthBuilder {
-        let aes256_cts_hmac_sha1_96_iter_count: u32 = 0x8000;
+        let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;
         KerberosReplyPreauthBuilder {
             pa_fx_cookie: None,
             aes256_cts_hmac_sha1_96_iter_count,
@@ -105,7 +106,7 @@ impl KerberosReply {
         stime: SystemTime,
         nonce: u32,
     ) -> KerberosReplyAuthenticationBuilder {
-        let aes256_cts_hmac_sha1_96_iter_count: u32 = 0x8000;
+        let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;
 
         let auth_time = stime;
         let start_time = stime;
@@ -221,14 +222,14 @@ impl KerberosReply {
 }
 
 impl KerberosReplyPreauthBuilder {
-    pub fn set_salt(mut self, salt: Option<String>) -> Self {
-        self.salt = salt;
-        self
-    }
-
-    pub fn set_aes256_cts_hmac_sha1_96_iter_count(mut self, iter_count: u32) -> Self {
-        self.aes256_cts_hmac_sha1_96_iter_count = iter_count;
-        self
+    pub fn set_key_params(mut self, dk: &DerivedKey) -> Self {
+        match dk {
+            DerivedKey::Aes256CtsHmacSha196 { i, s, .. } => {
+                self.salt = Some(s.clone());
+                self.aes256_cts_hmac_sha1_96_iter_count = *i;
+                self
+            }
+        }
     }
 
     pub fn set_pa_fx_cookie(mut self, cookie: Option<Vec<u8>>) -> Self {
@@ -273,7 +274,7 @@ impl KerberosReplyAuthenticationBuilder {
 
     pub fn build(
         self,
-        user_key: &EncryptionKey,
+        user_key: &DerivedKey,
         primary_key: &KdcPrimaryKey,
     ) -> Result<KerberosReply, KrbError> {
         // Build and encrypt the reply.
@@ -322,12 +323,18 @@ impl KerberosReplyAuthenticationBuilder {
             .to_der()
             .map_err(|_| KrbError::DerEncodeEncKdcRepPart)?;
 
-        let (enc_part_etype, enc_part) = match user_key {
-            EncryptionKey::Aes256 { k } => {
+        let (etype_info2, enc_part) = match user_key {
+            DerivedKey::Aes256CtsHmacSha196 { i, s, k } => {
                 let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, 3)?;
                 let enc_part = EncryptedData::Aes256CtsHmacSha196 { kvno: None, data };
 
-                (EncryptionType::AES256_CTS_HMAC_SHA1_96, enc_part)
+                let ei = EtypeInfo2 {
+                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
+                    salt: Some(s.clone()),
+                    s2kparams: Some(i.to_be_bytes().to_vec()),
+                };
+
+                (ei, enc_part)
             }
         };
 
@@ -377,11 +384,7 @@ impl KerberosReplyAuthenticationBuilder {
         );
 
         let pa_data = Some(PreauthData {
-            etype_info2: vec![EtypeInfo2 {
-                etype: enc_part_etype,
-                salt: self.salt,
-                s2kparams: aes256_cts_hmac_sha1_96_iter_count,
-            }],
+            etype_info2: vec![etype_info2],
             ..Default::default()
         });
 

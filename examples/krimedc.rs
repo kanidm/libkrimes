@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
-use libkrime::proto::{AuthenticationRequest, KdcPrimaryKey, KerberosReply, KerberosRequest};
+use libkrime::proto::{
+    AuthenticationRequest, DerivedKey, KdcPrimaryKey, KerberosReply, KerberosRequest,
+};
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -13,8 +15,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, instrument, trace};
 
+#[instrument(level = "trace", skip_all)]
 async fn process_authentication(
     auth_req: AuthenticationRequest,
     server_state: &ServerState,
@@ -61,29 +64,20 @@ async fn process_authentication(
     };
 
     let Some(pre_enc_timestamp) = auth_req.preauth.enc_timestamp() else {
-        let parep = KerberosReply::preauth_builder(auth_req.service_name, stime).build();
+        info!("ENC-TS Preauth not present, returning pre-auth parameters.");
+        let parep = KerberosReply::preauth_builder(auth_req.service_name, stime)
+            .set_key_params(&user_record.base_key)
+            .build();
 
         // Request pre-auth.
         return Ok(parep);
     };
+    info!("ENC-TS Preauth present.");
 
     // Start to process and validate the enc timestamp.
 
-    // In theory we should be able to cache the users base key.
-    let user_key = pre_enc_timestamp
-        .derive_key(
-            user_record.password.as_bytes(),
-            crealm.as_bytes(),
-            cname.as_bytes(),
-            Some(0x8000),
-        )
-        .map_err(|err| {
-            error!(?err, "pre_enc_timestamp.derive_key");
-            KerberosReply::error_no_key(auth_req.service_name.clone(), stime)
-        })?;
-
     let pa_timestamp = pre_enc_timestamp
-        .decrypt_pa_enc_timestamp(&user_key)
+        .decrypt_pa_enc_timestamp(&user_record.base_key)
         .map_err(|err| {
             error!(?err, "pre_enc_timestamp.decrypt");
             KerberosReply::error_preauth_failed(auth_req.service_name.clone(), stime)
@@ -105,6 +99,8 @@ async fn process_authentication(
         KerberosReply::error_internal(auth_req.service_name.clone(), stime)
     })?;
 
+    trace!(?abs_offset);
+
     // Check for the timestamp being in a valid range. If not, reject for clock skew.
     if abs_offset > Duration::from_secs(300) {
         error!(?abs_offset, "clock skew");
@@ -117,9 +113,7 @@ async fn process_authentication(
 
     // Preauthentication SUCCESS. Now we can consider issuing a ticket.
 
-    // TODO: I think I'm going to refactor this so that there is some kind of KDC context
-    // that tracks our salts, iter_counts, primary key etc. I think the manual key handling
-    // here isn't very nice.
+    trace!("PREAUTH SUCCESS");
 
     let builder = KerberosReply::authentication_builder(
         auth_req.client_name,
@@ -129,7 +123,7 @@ async fn process_authentication(
     );
 
     builder
-        .build(&user_key, &server_state.primary_key)
+        .build(&user_record.base_key, &server_state.primary_key)
         .map_err(|kdc_err| {
             error!(?kdc_err);
             KerberosReply::error_internal(auth_req.service_name.clone(), stime)
@@ -138,6 +132,7 @@ async fn process_authentication(
 
 async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerState>) {
     let mut kdc_stream = Framed::new(socket, KdcTcpCodec::default());
+    trace!(?info, "connection from");
 
     while let Some(Ok(kdc_req)) = kdc_stream.next().await {
         match kdc_req {
@@ -205,12 +200,28 @@ impl From<Config> for ServerState {
 
         let primary_key = KdcPrimaryKey::try_from(primary_key.as_slice()).unwrap();
 
+        let users = user
+            .into_iter()
+            .map(|(n, u)| {
+                let salt = format!("{}{}", realm, n);
+
+                let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&u.password, &salt).unwrap();
+
+                (n, UserRecord { base_key })
+            })
+            .collect();
+
         ServerState {
             realm,
             primary_key,
-            users: user,
+            users,
         }
     }
+}
+
+#[derive(Debug)]
+struct UserRecord {
+    base_key: DerivedKey,
 }
 
 #[derive(Debug)]
@@ -219,7 +230,7 @@ struct ServerState {
     // address: SocketAddr,
     primary_key: KdcPrimaryKey,
 
-    users: BTreeMap<String, UserPrincipal>,
+    users: BTreeMap<String, UserRecord>,
     // services: BTreeMap<String, Service>,
 }
 

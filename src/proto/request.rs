@@ -11,10 +11,7 @@ use crate::asn1::{
     pa_enc_ts_enc::PaEncTsEnc,
     BitString, OctetString,
 };
-use crate::crypto::{
-    derive_key_aes256_cts_hmac_sha1_96, derive_key_external_salt_aes256_cts_hmac_sha1_96,
-    encrypt_aes256_cts_hmac_sha1_96,
-};
+use crate::crypto::{derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96};
 use crate::error::KrbError;
 use der::Encode;
 use rand::{thread_rng, Rng};
@@ -22,7 +19,7 @@ use rand::{thread_rng, Rng};
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
-use super::{EncryptedData, Name, Preauth, PreauthData};
+use super::{DerivedKey, EncryptedData, Name, Preauth, PreauthData};
 
 #[derive(Debug)]
 pub enum KerberosRequest {
@@ -213,21 +210,13 @@ impl KerberosAuthenticationBuilder {
     pub fn preauth_enc_ts(
         mut self,
         pa_data: &PreauthData,
-        passphrase: &str,
         epoch_seconds: Duration,
+        user_key: &DerivedKey,
     ) -> Result<Self, KrbError> {
         // Major TODO: Can we actually use a reasonable amount of iterations?
         if !pa_data.enc_timestamp {
             return Err(KrbError::PreauthUnsupported);
         }
-
-        // This gets the highest encryption strength item.
-        let Some(einfo2) = pa_data.etype_info2.last() else {
-            return Err(KrbError::PreauthMissingEtypeInfo2);
-        };
-
-        // https://www.rfc-editor.org/rfc/rfc4120#section-5.2.7.2
-        let key_usage = 1;
 
         // Strip any excess time.
         let usecs = epoch_seconds.subsec_micros();
@@ -243,47 +232,7 @@ impl KerberosAuthenticationBuilder {
 
         trace!(?paenctsenc);
 
-        let data = paenctsenc
-            .to_der()
-            .map_err(|_| KrbError::DerEncodePaEncTsEnc)?;
-
-        let enc_timestamp = match einfo2.etype {
-            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
-                let iter_count = if let Some(s2kparams) = &einfo2.s2kparams {
-                    if s2kparams.len() != 4 {
-                        return Err(KrbError::PreauthInvalidS2KParams);
-                    };
-                    let mut iter_count = [0u8; 4];
-                    iter_count.copy_from_slice(&s2kparams);
-
-                    Some(u32::from_be_bytes(iter_count))
-                } else {
-                    None
-                };
-
-                let base_key = if let Some(external_salt) = &einfo2.salt {
-                    derive_key_external_salt_aes256_cts_hmac_sha1_96(
-                        passphrase.as_bytes(),
-                        external_salt.as_bytes(),
-                        iter_count,
-                    )?
-                } else {
-                    let (cname, realm) = self.client_name.principal_name()?;
-                    derive_key_aes256_cts_hmac_sha1_96(
-                        passphrase.as_bytes(),
-                        realm.as_bytes(),
-                        cname.as_bytes(),
-                        iter_count,
-                    )?
-                };
-
-                let data = encrypt_aes256_cts_hmac_sha1_96(&base_key, &data, key_usage)?;
-
-                EncryptedData::Aes256CtsHmacSha196 { kvno: None, data }
-            }
-            // Shouldn't be possible, we pre-vet all the etypes.
-            _ => return Err(KrbError::UnsupportedEncryption),
-        };
+        let enc_timestamp = user_key.encrypt_pa_enc_timestamp(&paenctsenc)?;
 
         // fx cookie always has to be sent.
         let pa_fx_cookie = pa_data.pa_fx_cookie.clone();

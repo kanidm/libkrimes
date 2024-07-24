@@ -7,6 +7,10 @@ have embedded Kerberos deeply in their operation making it sometimes, unavoidabl
 This library aims to make a secure-as-possible implementation of a kerberos client and distribution
 centre that can be included into other Rust applications.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kanidm/libkrimes/master/static/IMG_1775.JPG" width="80%" height="auto" />
+</p>
+
 ## Cryptography Warning
 
 The current 'state of the art' in Kerberos Cryptography is AES-256-CTS-HMAC-SHA1-96. These are to

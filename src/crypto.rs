@@ -23,43 +23,13 @@ type HmacSha1 = Hmac<Sha1>;
 /// INSECURE and should not be used. This will become a hard error in the future!
 pub(crate) fn derive_key_aes256_cts_hmac_sha1_96(
     passphrase: &[u8],
-    realm: &[u8],
-    cname: &[u8],
-    iter_count: Option<u32>,
+    salt: &[u8],
+    iter_count: u32,
 ) -> Result<[u8; AES_256_KEY_LEN], KrbError> {
     // Salt is the concatenation of realm + cname.
     // NOTE: Salt may come in AS-REP padata ETYPE-INFO2
-    let mut salt = Vec::with_capacity(realm.len() + cname.len());
-    salt.extend_from_slice(realm);
-    salt.extend_from_slice(cname);
-
-    let iter_count = iter_count.unwrap_or(PKBDF2_SHA1_ITER);
-
     let mut buf = [0u8; AES_256_KEY_LEN];
-    pbkdf2_hmac::<Sha1>(passphrase, &salt, iter_count, &mut buf);
-
-    // It's unclear what this achieves cryptographically ...
-    let mut dk_buf = [0u8; AES_256_KEY_LEN];
-    dk_aes_256(&mut dk_buf, &buf);
-
-    Ok(dk_buf)
-}
-
-/// Given the users passphrase, an external salt and the iteration
-/// count then the users base key is derived. The iteration count is an optional value
-/// which defaults to the RFC3962 value of 0x1000 (4096). This *default value* is
-/// INSECURE and should not be used. This will become a hard error in the future!
-pub(crate) fn derive_key_external_salt_aes256_cts_hmac_sha1_96(
-    passphrase: &[u8],
-    external_salt: &[u8],
-    iter_count: Option<u32>,
-) -> Result<[u8; AES_256_KEY_LEN], KrbError> {
-    // Salt is the concatenation of realm + cname.
-    // NOTE: Salt may come in AS-REP padata ETYPE-INFO2
-    let iter_count = iter_count.unwrap_or(PKBDF2_SHA1_ITER);
-
-    let mut buf = [0u8; AES_256_KEY_LEN];
-    pbkdf2_hmac::<Sha1>(passphrase, external_salt, iter_count, &mut buf);
+    pbkdf2_hmac::<Sha1>(passphrase, salt, iter_count, &mut buf);
 
     // It's unclear what this achieves cryptographically ...
     let mut dk_buf = [0u8; AES_256_KEY_LEN];
@@ -422,15 +392,15 @@ fn decrypt_aes256_cts(key: &[u8; AES_256_KEY_LEN], ciphertext: &[u8]) -> Result<
 mod tests {
     use super::*;
     use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
+    use crate::constants::RFC_PKBDF2_SHA1_ITER;
     use der::Decode;
 
     #[test]
     fn test_hmac_sha1_96_kerbeiros() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "Minnie1234".as_bytes(),
-            "KINGDOM.HEARTS".as_bytes(),
-            "mickey".as_bytes(),
-            None,
+            "KINGDOM.HEARTSmickey".as_bytes(),
+            RFC_PKBDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -450,9 +420,8 @@ mod tests {
     fn test_hmac_sha1_96_rfc3962_vector_1() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "password".as_bytes(),
-            "ATHENA.MIT.EDU".as_bytes(),
-            "raeburn".as_bytes(),
-            Some(1),
+            "ATHENA.MIT.EDUraeburn".as_bytes(),
+            1,
         )
         .unwrap();
 
@@ -470,9 +439,8 @@ mod tests {
     fn test_hmac_sha1_96_rfc3962_vector_2() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "password".as_bytes(),
-            "ATHENA.MIT.EDU".as_bytes(),
-            "raeburn".as_bytes(),
-            Some(1200),
+            "ATHENA.MIT.EDUraeburn".as_bytes(),
+            1200,
         )
         .unwrap();
 
@@ -490,9 +458,8 @@ mod tests {
     fn test_aes256_cts_hmac_sha1_96_decrypt_1() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "admin".as_bytes(),
-            "admin".as_bytes(),
-            "1234".as_bytes(),
-            None,
+            "admin1234".as_bytes(),
+            RFC_PKBDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -520,9 +487,8 @@ mod tests {
     fn test_aes256_cts_hmac_sha1_96_decrypt_2() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
-            "test".as_bytes(),
-            "1234".as_bytes(),
-            None,
+            "test1234".as_bytes(),
+            RFC_PKBDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -550,9 +516,8 @@ mod tests {
     fn test_aes256_cts_hmac_sha1_96_reflexive_1() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
-            "test".as_bytes(),
-            "1234".as_bytes(),
-            None,
+            "test1234".as_bytes(),
+            RFC_PKBDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -571,9 +536,8 @@ mod tests {
     fn test_aes256_cts_hmac_sha1_96_reflexive_2() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
-            "test".as_bytes(),
-            "1234".as_bytes(),
-            None,
+            "test1234".as_bytes(),
+            RFC_PKBDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -593,9 +557,8 @@ mod tests {
     fn test_aes256_cts_hmac_sha1_96_reflexive_3() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
-            "test".as_bytes(),
-            "1234".as_bytes(),
-            None,
+            "test1234".as_bytes(),
+            RFC_PKBDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -615,9 +578,8 @@ mod tests {
     fn test_aes256_cts_hmac_sha1_96_reflexive_4() {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
-            "test".as_bytes(),
-            "1234".as_bytes(),
-            None,
+            "test1234".as_bytes(),
+            RFC_PKBDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -638,10 +600,10 @@ mod tests {
         let enc_data = hex::decode("b736f4dba847718b9f634b7ac94d5d691663164d877a0d875b94f786222ae9dca8cf68a972cfe6b5bec1c29682ec3c507307e7c32eedc032")
             .unwrap();
 
-        let out_key = derive_key_external_salt_aes256_cts_hmac_sha1_96(
+        let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "password".as_bytes(),
             "EXAMPLE.COMtestuser_preauth".as_bytes(),
-            None,
+            RFC_PKBDF2_SHA1_ITER,
         )
         .unwrap();
 
