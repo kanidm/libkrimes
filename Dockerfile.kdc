@@ -6,8 +6,8 @@ RUN zypper --non-interactive mr -e -a &&\
     zypper --non-interactive in git-core vim tcpdump iputils iproute2 make gcc awk gcc-c++ resolv_wrapper libcmocka-devel python3 libverto-libev1 strace gdb lmdb-devel
 
 RUN pushd /root/ && git clone https://github.com/krb5/krb5.git && popd
-COPY kdc_test/0001-Fix-debug-build.patch /root/krb5
-RUN pushd /root/krb5 && git apply 0001-Fix-debug-build.patch && popd
+COPY kdc_test/*.patch /root/krb5
+RUN pushd /root/krb5 && git apply *.patch && popd
 ENV CFLAGS="-O0 -g -DDEBUG -D_GNU_SOURCE -fPIC"
 ENV SS_LIB="-lss"
 RUN pushd /root/krb5/src && autoreconf -fi && ./configure \
