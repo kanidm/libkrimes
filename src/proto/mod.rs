@@ -20,14 +20,13 @@ use crate::asn1::{
     ticket_flags::TicketFlags,
     Ia5String, OctetString,
 };
-use crate::constants::{AES_256_KEY_LEN, PKBDF2_SHA1_ITER, RFC_PKBDF2_SHA1_ITER};
+use crate::constants::{AES_256_KEY_LEN, RFC_PKBDF2_SHA1_ITER};
 use crate::crypto::{
     decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
     encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode};
-use rand::{thread_rng, Rng};
 
 use std::cmp::Ordering;
 use std::fmt;

@@ -11,7 +11,6 @@ use crate::asn1::{
     pa_enc_ts_enc::PaEncTsEnc,
     BitString, OctetString,
 };
-use crate::crypto::{derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96};
 use crate::error::KrbError;
 use der::Encode;
 use rand::{thread_rng, Rng};
@@ -291,7 +290,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
         match msg_type {
             KrbMessageType::KrbAsReq => {
                 // Filter and use only the finest of etypes.
-                let mut etypes = req
+                let etypes = req
                     .req_body
                     .etype
                     .iter()
