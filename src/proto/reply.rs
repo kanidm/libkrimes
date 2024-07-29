@@ -19,9 +19,7 @@ use crate::asn1::{
     Ia5String, OctetString,
 };
 use crate::constants::{AES_256_KEY_LEN, PKBDF2_SHA1_ITER};
-use crate::crypto::{
-    encrypt_aes256_cts_hmac_sha1_96,
-};
+use crate::crypto::encrypt_aes256_cts_hmac_sha1_96;
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode};
 use rand::{thread_rng, Rng};
@@ -479,7 +477,6 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                             .etype_info2
                             .iter()
                             .map(|einfo| {
-                                let etype = einfo.etype as i32;
                                 let salt = einfo
                                     .salt
                                     .as_ref()
@@ -549,7 +546,6 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                     .etype_info2
                     .iter()
                     .map(|einfo| {
-                        let etype = einfo.etype as i32;
                         let salt = einfo
                             .salt
                             .as_ref()
