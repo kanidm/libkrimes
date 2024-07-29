@@ -28,10 +28,17 @@ use crate::crypto::{
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode};
 
+use binrw::{binrw, BinWrite};
 use std::cmp::Ordering;
 use std::fmt;
 use std::time::{Duration, SystemTime};
 use tracing::trace;
+
+use crate::KerberosTcpCodec;
+use futures::SinkExt;
+use futures::StreamExt;
+use tokio::net::TcpStream;
+use tokio_util::codec::Framed;
 
 // Zeroize blocked on https://github.com/RustCrypto/block-ciphers/issues/426
 // use zeroize::Zeroizing;
@@ -252,24 +259,24 @@ impl TryFrom<&[u8]> for KdcPrimaryKey {
 pub struct Ticket {
     tkt_vno: i8,
     service: Name,
-    enc_part: EncryptedData,
+    pub enc_part: EncryptedData,
 }
 
 // pub struct LastRequest
 
 #[derive(Debug)]
 pub struct KdcReplyPart {
-    key: SessionKey,
+    pub(crate) key: SessionKey,
     // Last req shows "last login" and probably isn't important for our needs.
     // last_req: (),
-    nonce: u32,
-    key_expiration: Option<SystemTime>,
-    flags: FlagSet<TicketFlags>,
-    auth_time: SystemTime,
-    start_time: Option<SystemTime>,
-    end_time: SystemTime,
-    renew_until: Option<SystemTime>,
-    server: Name,
+    pub(crate) nonce: u32,
+    pub(crate) key_expiration: Option<SystemTime>,
+    pub(crate) flags: FlagSet<TicketFlags>,
+    pub(crate) auth_time: SystemTime,
+    pub(crate) start_time: Option<SystemTime>,
+    pub(crate) end_time: SystemTime,
+    pub(crate) renew_until: Option<SystemTime>,
+    pub(crate) server: Name,
     // Shows the addresses the ticket may be used from. Mostly these are broken
     // by nat, and so aren't used. These are just to display that there are limits
     // to the client, the enforced addrs are in the ticket.
@@ -862,4 +869,60 @@ impl Preauth {
     pub fn enc_timestamp(&self) -> Option<&EncryptedData> {
         self.enc_timestamp.as_ref()
     }
+}
+
+pub async fn get_tgt(
+    principal: &str,
+    realm: &str,
+    password: &str,
+) -> Result<(Name, Ticket, KdcReplyPart), KrbError> {
+    let stream = TcpStream::connect("127.0.0.1:55000")
+        .await
+        .expect("Unable to connect to localhost:55000");
+
+    let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
+
+    let now = SystemTime::now();
+    let as_req = KerberosRequest::build_as(
+        Name::principal(principal, realm),
+        Name::service_krbtgt(realm),
+        now + Duration::from_secs(3600),
+    )
+    .renew_until(Some(now + Duration::from_secs(86400 * 7)))
+    .build();
+
+    // Write a request
+    krb_stream
+        .send(as_req)
+        .await
+        .expect("Failed to transmit request");
+
+    let response = krb_stream
+        .next()
+        .await
+        .unwrap()
+        .map_err(|e| KrbError::IoError(e))?;
+
+    let (name, ticket, kdc_reply): (Name, Ticket, KdcReplyPart) = match response {
+        KerberosReply::AS(AuthenticationReply {
+            name,
+            enc_part,
+            pa_data,
+            ticket,
+        }) => {
+            let etype_info = pa_data
+                .as_ref()
+                .map(|pa_inner| pa_inner.etype_info2.as_slice());
+
+            let base_key = DerivedKey::from_encrypted_reply(
+                &enc_part, etype_info, realm, principal, password,
+            )?;
+
+            let kdc_reply = enc_part.decrypt_enc_kdc_rep(&base_key)?;
+            (name, ticket, kdc_reply)
+        }
+        _ => unreachable!(),
+    };
+
+    Ok((name, ticket, kdc_reply))
 }

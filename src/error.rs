@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum KrbError {
     InvalidHmacSha1Key,
     MessageAuthenticationFailed,
@@ -26,6 +26,10 @@ pub enum KrbError {
     PreauthInvalidS2KParams,
 
     NameNotPrincipal,
+
+    UnsupportedCredentialCacheType,
+    IoError(std::io::Error),
+    BinRWError(binrw::Error),
 
     InvalidMessageType,
     InvalidMessageDirection,
