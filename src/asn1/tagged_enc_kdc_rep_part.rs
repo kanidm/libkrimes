@@ -1,5 +1,4 @@
 use super::enc_kdc_rep_part::EncKdcRepPart;
-use super::krb_error::KrbError;
 use der::{Tag, TagNumber, Writer};
 
 /// ```text
