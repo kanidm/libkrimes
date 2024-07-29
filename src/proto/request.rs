@@ -92,7 +92,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
 
                     if let Some(fx_cookie) = &preauth.pa_fx_cookie {
                         let padata_value = OctetString::new(fx_cookie.clone())
-                            .map_err(|_| KrbError::DerEncodeOctetString)?;
+                            .map_err(|e| KrbError::DerEncodeOctetString(e))?;
                         padata_inner.push(PaData {
                             padata_type: PaDataType::PaFxCookie as u32,
                             padata_value,
@@ -103,7 +103,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                         let padata_value = match enc_data {
                             EncryptedData::Aes256CtsHmacSha196 { kvno, data } => {
                                 let cipher = OctetString::new(data.clone())
-                                    .map_err(|_| KrbError::DerEncodeOctetString)?;
+                                    .map_err(|e| KrbError::DerEncodeOctetString(e))?;
                                 KdcEncryptedData {
                                     etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
                                     kvno: None,
@@ -116,7 +116,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                         let padata_value = padata_value
                             .to_der()
                             .and_then(OctetString::new)
-                            .map_err(|_| KrbError::DerEncodeOctetString)?;
+                            .map_err(|e| KrbError::DerEncodeOctetString(e))?;
 
                         padata_inner.push(PaData {
                             padata_type: PaDataType::PaEncTimestamp as u32,
