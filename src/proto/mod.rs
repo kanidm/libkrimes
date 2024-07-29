@@ -125,7 +125,6 @@ impl DerivedKey {
                     s: salt,
                 })
             }
-            _ => Err(KrbError::UnsupportedEncryption),
         }
     }
 

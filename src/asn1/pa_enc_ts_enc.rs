@@ -9,7 +9,7 @@ use der::Sequence;
 /// }
 /// ````
 #[derive(Debug, Eq, PartialEq, Sequence)]
-pub(crate) struct PaEncTsEnc {
+pub struct PaEncTsEnc {
     #[asn1(context_specific = "0")]
     pub(crate) patimestamp: KerberosTime,
     #[asn1(context_specific = "1", optional = "true")]
