@@ -123,12 +123,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "byteorder"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
-
-[[package]]
 name = "bytes"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -267,15 +261,6 @@ name = "equivalent"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
-
-[[package]]
-name = "error-chain"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9435d864e017c3c6afeac1654189b06cdb491cf2ff73dbf0d73b0f292f42ff8"
-dependencies = [
- "backtrace",
-]
 
 [[package]]
 name = "flagset"
@@ -490,7 +475,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "xdr-codec",
 ]
 
 [[package]]
@@ -1105,15 +1089,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f593a95398737aeed53e489c785df13f3618e41dbcd6718c6addbf1395aa6876"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "xdr-codec"
-version = "0.4.4"
-source = "git+https://github.com/scabrero/rust-xdr.git?branch=implicit_eor#0894e8421ed90c09be359c64e21e68c4ea48258d"
-dependencies = [
- "byteorder",
- "error-chain",
 ]
 
 [[package]]

@@ -24,15 +24,11 @@ pub mod error;
 pub mod proto;
 
 use bytes::Buf;
-// use bytes::BufMut;
 use bytes::BytesMut;
 use der::{Decode, Encode};
 use proto::{KerberosReply, KerberosRequest};
-use std::io::{self};
+use std::io::{self, Read};
 use tokio_util::codec::{Decoder, Encoder};
-use xdr_codec::record::XdrRecordReader;
-// use xdr_codec::record::XdrRecordWriter;
-// use xdr_codec::Write;
 
 use crate::asn1::{krb_kdc_rep::KrbKdcRep, krb_kdc_req::KrbKdcReq};
 
@@ -66,26 +62,25 @@ impl Decoder for KerberosTcpCodec {
             ));
         }
 
-        let reader = buf.reader();
-        let mut xdr_reader = XdrRecordReader::new(reader);
-        xdr_reader.set_implicit_eor(true);
+        let mut reader = buf.reader();
+        // XDR record marking (RFC1831):
+        //   A record is composed of one or more fragments. Each fragment has a 32 bit
+        //   header where the leftmost bit is a boolean indicating if this is the last
+        //   fragment of a record, and next 31 bits are the length of the fragment.
+        //
+        //   MIT does not set the end-of-record flag, assumes that a KRB PDU fits in a
+        //   fragment, i.e, its length is always less that (2**31)-1.
+        let mut xdr_hdr: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
+        reader.read(&mut xdr_hdr)?;
 
-        let record = xdr_reader.into_iter().next();
+        // Reset end-of-record flag before parsing header into record length
+        xdr_hdr[0] &= 0xEF;
 
-        let record: Vec<u8> = match record {
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "XDR reader returned EOF",
-                ))
-            }
-            Some(rr) => match rr {
-                Err(x) => return Err(x),
-                Ok(buf) => buf,
-            },
-        };
+        let xdr_record_len = u32::from_be_bytes(xdr_hdr);
+        let mut xdr_record_buf = vec![0; xdr_record_len as usize];
+        reader.read_exact(&mut xdr_record_buf)?;
 
-        let krb_kdc_rep = KrbKdcRep::from_der(&record)
+        let krb_kdc_rep = KrbKdcRep::from_der(&xdr_record_buf)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
@@ -107,40 +102,18 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
             .to_der()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-        /* RFC1831 section 10
-        *
-        * When RPC messages are passed on top of a byte stream transport
-        * protocol (like TCP), it is necessary to delimit one message from
-        * another in order to detect and possibly recover from protocol errors.
-        * This is called record marking (RM).  One RPC message fits into one RM
-        * record.
-
-        * A record is composed of one or more record fragments.  A record
-        * fragment is a four-byte header followed by 0 to (2**31) - 1 bytes of
-        * fragment data.  The bytes encode an unsigned binary number; as with
-        * XDR integers, the byte order is from highest to lowest.  The number
-        * encodes two values -- a boolean which indicates whether the fragment
-        * is the last fragment of the record (bit value 1 implies the fragment
-        * is the last fragment) and a 31-bit unsigned binary value which is the
-        * length in bytes of the fragment's data.  The boolean value is the
-        * highest-order bit of the header; the length is the 31 low-order bits.
-        * (Note that this record specification is NOT in XDR standard form!)
-        */
-
-        // Something is certainly wrong here with the xdr writer, as doing it by
-        // hand works. given how simple xdr is, maybe we just take this approach?
-
-        /*
-        // buf.resize(der_bytes.len() + 4, 0);
-        let mut w = XdrRecordWriter::new(buf.writer());
-        w.set_implicit_eor(true);
-        w.write_all(&der_bytes)
-        */
-
+        // XDR record marking (RFC1831):
+        //   A record is composed of one or more fragments. Each fragment has a 32 bit
+        //   header where the leftmost bit is a boolean indicating if this is the last
+        //   fragment of a record, and next 31 bits are the length of the fragment.
+        //
+        //   MIT does not set the end-of-record flag, assumes that a KRB PDU fits in a
+        //   fragment, i.e, its length is always less that (2**31)-1.
         let d_len = der_bytes.len() as u32;
-        let d_len_bytes = d_len.to_be_bytes();
+        let xdr_hdr: [u8; 4] = d_len.to_be_bytes();
+
         buf.clear();
-        buf.extend_from_slice(&d_len_bytes);
+        buf.extend_from_slice(&xdr_hdr);
         buf.extend_from_slice(&der_bytes);
 
         Ok(())
@@ -167,26 +140,26 @@ impl Decoder for KdcTcpCodec {
             ));
         }
 
-        let reader = buf.reader();
-        let mut xdr_reader = XdrRecordReader::new(reader);
-        xdr_reader.set_implicit_eor(true);
+        let mut reader = buf.reader();
 
-        let record = xdr_reader.into_iter().next();
+        // XDR record marking (RFC1831):
+        //   A record is composed of one or more fragments. Each fragment has a 32 bit
+        //   header where the leftmost bit is a boolean indicating if this is the last
+        //   fragment of a record, and next 31 bits are the length of the fragment.
+        //
+        //   MIT does not set the end-of-record flag, assumes that a KRB PDU fits in a
+        //   fragment, i.e, its length is always less that (2**31)-1.
+        let mut xdr_hdr: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
+        reader.read(&mut xdr_hdr)?;
 
-        let record: Vec<u8> = match record {
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "XDR reader returned EOF",
-                ))
-            }
-            Some(rr) => match rr {
-                Err(x) => return Err(x),
-                Ok(buf) => buf,
-            },
-        };
+        // Reset end-of-record flag before parsing header into record length
+        xdr_hdr[0] &= 0xEF;
 
-        let krb_kdc_req = KrbKdcReq::from_der(&record)
+        let xdr_record_len = u32::from_be_bytes(xdr_hdr);
+        let mut xdr_record_buf = vec![0; xdr_record_len as usize];
+        reader.read_exact(&mut xdr_record_buf)?;
+
+        let krb_kdc_req = KrbKdcReq::from_der(&xdr_record_buf)
             .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
             .expect("Failed to decode");
 
@@ -207,20 +180,19 @@ impl Encoder<KerberosReply> for KdcTcpCodec {
             .to_der()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-        // Something is certainly wrong here with the xdr writer, as doing it by
-        // hand works. given how simple xdr is, maybe we just take this approach?
-
-        /*
-        // buf.resize(der_bytes.len() + 4, 0);
-        let mut w = XdrRecordWriter::new(buf.writer());
-        w.set_implicit_eor(true);
-        w.write_all(&der_bytes)
-        */
+        // XDR record marking (RFC1831):
+        //   A record is composed of one or more fragments. Each fragment has a 32 bit
+        //   header where the leftmost bit is a boolean indicating if this is the last
+        //   fragment of a record, and next 31 bits are the length of the fragment.
+        //
+        //   MIT does not set the end-of-record flag, assumes that a KRB PDU fits in a
+        //   fragment, i.e, its length is always less that (2**31)-1.
 
         let d_len = der_bytes.len() as u32;
-        let d_len_bytes = d_len.to_be_bytes();
+        let xdr_hdr: [u8; 4] = d_len.to_be_bytes();
+
         buf.clear();
-        buf.extend_from_slice(&d_len_bytes);
+        buf.extend_from_slice(&xdr_hdr);
         buf.extend_from_slice(&der_bytes);
 
         Ok(())
