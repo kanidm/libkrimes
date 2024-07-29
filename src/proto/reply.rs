@@ -376,12 +376,6 @@ impl KerberosReplyAuthenticationBuilder {
 
         let name = self.client;
 
-        let aes256_cts_hmac_sha1_96_iter_count = Some(
-            self.aes256_cts_hmac_sha1_96_iter_count
-                .to_be_bytes()
-                .to_vec(),
-        );
-
         let pa_data = Some(PreauthData {
             etype_info2: vec![etype_info2],
             ..Default::default()
