@@ -18,6 +18,7 @@
 #![allow(clippy::unreachable)]
 
 mod asn1;
+pub mod ccache;
 pub(crate) mod constants;
 pub(crate) mod crypto;
 pub mod error;
