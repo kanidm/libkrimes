@@ -16,7 +16,7 @@ centre that can be included into other Rust applications.
 The current 'state of the art' in Kerberos Cryptography is AES-256-CTS-HMAC-SHA1-96. These are to
 put it mildly, not the primitives that any other reasonable modern ecosystem would choose.
 
-While (RFC8009)[https://www.rfc-editor.org/rfc/rfc8009] does exist, it should be noted that no KDC
+While [RFC8009](https://www.rfc-editor.org/rfc/rfc8009) does exist, it should be noted that no KDC
 we have tested with supports it in their latest versions (last tested June 2024).
 
 Due to how passwords interact with these primitives in Kerberos, it is *critical* that passwords
@@ -33,7 +33,7 @@ can function in this library to limit potential risks. These limits are to be de
 This builds a localhost KRB5 KDC that can be used as a reference for some protocol tests until we
 are able to self-host these internally in the library.
 
-```
+```sh
 docker build -f Dockerfile.kdc -t libkrime .
 docker run --rm -e KRB5_TRACE=/dev/stderr -p 55000:88 -i -t libkrime
 ```
@@ -42,7 +42,7 @@ Generally the logging from the KDC is poor at best and probably won't help you m
 
 Password is `password`
 
-```
+```sh
 KRB5_TRACE=/dev/stdout KRB5_CONFIG=kdc_test/krb5.conf /opt/homebrew/opt/krb5/bin/kinit testuser
 KRB5_TRACE=/dev/stdout KRB5_CONFIG=kdc_test/krb5.conf /opt/homebrew/opt/krb5/bin/klist
 ```
