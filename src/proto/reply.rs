@@ -14,6 +14,7 @@ use crate::asn1::{
     krb_error::MethodData,
     krb_kdc_rep::KrbKdcRep,
     pa_data::PaData,
+    tagged_enc_kdc_rep_part::TaggedEncKdcRepPart,
     ticket_flags::TicketFlags,
     transited_encoding::TransitedEncoding,
     Ia5String, OctetString,
@@ -316,7 +317,7 @@ impl KerberosReplyAuthenticationBuilder {
             client_addresses: None,
         };
 
-        let data = enc_kdc_rep_part
+        let data = TaggedEncKdcRepPart::EncAsRepPart(enc_kdc_rep_part)
             .to_der()
             .map_err(|_| KrbError::DerEncodeEncKdcRepPart)?;
 
