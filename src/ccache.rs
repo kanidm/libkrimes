@@ -183,20 +183,32 @@ impl TryFrom<&Name> for PrincipalV4 {
                 };
                 Ok(p)
             }
-            Name::SrvInst { service, realm } => {
+            Name::SrvInst {
+                service,
+                instance,
+                realm,
+            } => {
+                let mut components: Vec<DataComponent> = vec![];
+                components.push(DataComponent {
+                    value: service.as_bytes().into(),
+                });
+                let iv: Vec<DataComponent> = instance
+                    .into_iter()
+                    .map(|x| DataComponent {
+                        value: x.as_bytes().into(),
+                    })
+                    .collect();
+                components.extend(iv);
+                components.push(DataComponent {
+                    value: realm.as_bytes().into(),
+                });
+
                 let p: PrincipalV4 = PrincipalV4 {
                     name_type: PrincipalNameType::NtSrvInst as u32,
                     realm: DataComponent {
                         value: realm.as_bytes().into(),
                     },
-                    components: vec![
-                        DataComponent {
-                            value: service.as_bytes().into(),
-                        },
-                        DataComponent {
-                            value: realm.as_bytes().into(),
-                        },
-                    ],
+                    components,
                 };
                 Ok(p)
             }
