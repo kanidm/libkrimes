@@ -4,6 +4,7 @@ mod request;
 pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGrantReply};
 pub use self::request::{AuthenticationRequest, KerberosRequest, TicketGrantRequest};
 
+use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart,
@@ -710,7 +711,7 @@ impl TryInto<PrincipalName> for &Name {
                 ];
 
                 Ok(PrincipalName {
-                    name_type: 1,
+                    name_type: PrincipalNameType::NtPrincipal as i32,
                     name_string,
                 })
             }
@@ -721,7 +722,7 @@ impl TryInto<PrincipalName> for &Name {
                 ];
 
                 Ok(PrincipalName {
-                    name_type: 2,
+                    name_type: PrincipalNameType::NtSrvInst as i32,
                     name_string,
                 })
             }
@@ -737,7 +738,7 @@ impl TryInto<PrincipalName> for &Name {
                 ];
 
                 Ok(PrincipalName {
-                    name_type: 3,
+                    name_type: PrincipalNameType::NtSrvHst as i32,
                     name_string,
                 })
             }
@@ -756,7 +757,7 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
 
                 Ok((
                     PrincipalName {
-                        name_type: 1,
+                        name_type: PrincipalNameType::NtPrincipal as i32,
                         name_string,
                     },
                     realm,
@@ -768,7 +769,7 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
 
                 Ok((
                     PrincipalName {
-                        name_type: 2,
+                        name_type: PrincipalNameType::NtSrvInst as i32,
                         name_string,
                     },
                     realm,
@@ -787,7 +788,7 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
 
                 Ok((
                     PrincipalName {
-                        name_type: 3,
+                        name_type: PrincipalNameType::NtSrvHst as i32,
                         name_string,
                     },
                     realm,
@@ -805,18 +806,23 @@ impl TryFrom<PrincipalName> for Name {
             name_type,
             name_string,
         } = princ;
+
+        let name_type: PrincipalNameType = name_type
+            .try_into()
+            .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
+
         match name_type {
-            1 => {
+            PrincipalNameType::NtPrincipal => {
                 let name = name_string.get(0).unwrap().into();
                 let realm = name_string.get(1).unwrap().into();
                 Ok(Name::Principal { name, realm })
             }
-            2 => {
+            PrincipalNameType::NtSrvInst => {
                 let service = name_string.get(0).unwrap().into();
                 let realm = name_string.get(1).unwrap().into();
                 Ok(Name::SrvInst { service, realm })
             }
-            3 => {
+            PrincipalNameType::NtSrvHst => {
                 let service = name_string.get(0).unwrap().into();
                 let host = name_string.get(1).unwrap().into();
                 let realm = name_string.get(2).unwrap().into();
@@ -841,17 +847,20 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
         } = princ;
 
         let realm = realm.into();
+        let name_type: PrincipalNameType = name_type
+            .try_into()
+            .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
 
         match name_type {
-            1 => {
+            PrincipalNameType::NtPrincipal => {
                 let name = name_string.get(0).unwrap().into();
                 Ok(Name::Principal { name, realm })
             }
-            2 => {
+            PrincipalNameType::NtSrvInst => {
                 let service = name_string.get(0).unwrap().into();
                 Ok(Name::SrvInst { service, realm })
             }
-            3 => {
+            PrincipalNameType::NtSrvHst => {
                 let service = name_string.get(0).unwrap().into();
                 let host = name_string.get(1).unwrap().into();
                 Ok(Name::SrvHst {

@@ -1,3 +1,4 @@
+use crate::asn1::constants::PrincipalNameType;
 use crate::error::KrbError;
 use crate::proto::{Name, SessionKey};
 use binrw::helpers::until_eof;
@@ -172,7 +173,7 @@ impl TryFrom<&Name> for PrincipalV4 {
         match name {
             Name::Principal { name, realm } => {
                 let p: PrincipalV4 = PrincipalV4 {
-                    name_type: 1 as u32,
+                    name_type: PrincipalNameType::NtPrincipal as u32,
                     realm: DataComponent {
                         value: realm.as_bytes().into(),
                     },
@@ -184,7 +185,7 @@ impl TryFrom<&Name> for PrincipalV4 {
             }
             Name::SrvInst { service, realm } => {
                 let p: PrincipalV4 = PrincipalV4 {
-                    name_type: 2 as u32,
+                    name_type: PrincipalNameType::NtSrvInst as u32,
                     realm: DataComponent {
                         value: realm.as_bytes().into(),
                     },

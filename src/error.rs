@@ -36,4 +36,5 @@ pub enum KrbError {
     InvalidPvno,
     InvalidEncryptionKey,
     InvalidEnumValue(String, i32),
+    InvalidPrincipalNameType(i32),
 }
