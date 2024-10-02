@@ -731,11 +731,8 @@ impl TryInto<PrincipalName> for &Name {
 
     fn try_into(self) -> Result<PrincipalName, KrbError> {
         match self {
-            Name::Principal { name, realm } => {
-                let name_string = vec![
-                    KerberosString(Ia5String::new(name).unwrap()),
-                    KerberosString(Ia5String::new(realm).unwrap()),
-                ];
+            Name::Principal { name, realm: _ } => {
+                let name_string = vec![KerberosString(Ia5String::new(name).unwrap())];
 
                 Ok(PrincipalName {
                     name_type: PrincipalNameType::NtPrincipal as i32,
@@ -753,9 +750,7 @@ impl TryInto<PrincipalName> for &Name {
                     .iter()
                     .map(|x| KerberosString(Ia5String::new(x).unwrap()))
                     .collect();
-                let realm: Vec<KerberosString> =
-                    vec![KerberosString(Ia5String::new(realm).unwrap())];
-                let name_string: Vec<KerberosString> = vec![primary, instance, realm]
+                let name_string: Vec<KerberosString> = vec![primary, instance]
                     .into_iter()
                     .flatten()
                     .collect();
