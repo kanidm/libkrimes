@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
 use libkrime::proto::{
-    AuthenticationRequest, DerivedKey, KdcPrimaryKey, KerberosReply, KerberosRequest,
+    AuthenticationRequest, DerivedKey, KdcPrimaryKey, KerberosReply, KerberosRequest, Name
 };
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
@@ -117,7 +117,7 @@ async fn process_authentication(
 
     let builder = KerberosReply::authentication_builder(
         auth_req.client_name,
-        auth_req.service_name.clone(),
+        Name::service_krbtgt(server_state.realm.as_str()),
         stime,
         auth_req.nonce,
     );
