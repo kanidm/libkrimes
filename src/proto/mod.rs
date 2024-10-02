@@ -305,6 +305,7 @@ pub enum Name {
     },
     SrvInst {
         service: String,
+        instance: Vec<String>,
         realm: String,
     },
     SrvHst {
@@ -651,15 +652,37 @@ impl Name {
     }
 
     pub fn service_krbtgt(realm: &str) -> Self {
+        /*
+         * RFC4120, section 7.3, Name of the TGS
+         * The principal identifier of the ticket-granting service shall be
+         * composed of three parts: the realm of the KDC issuing the TGS ticket,
+         * and a two-part name of type NT-SRV-INST, with the first part "krbtgt"
+         * and the second part the name of the realm that will accept the TGT.
+         *
+         * For example, a TGT issued by the ATHENA.MIT.EDU realm to be used to
+         * get tickets from the ATHENA.MIT.EDU KDC has a principal identifier of
+         * "ATHENA.MIT.EDU" (realm), ("krbtgt", "ATHENA.MIT.EDU") (name).
+         *
+         * A TGT issued by the ATHENA.MIT.EDU realm to be used to get tickets from the
+         * MIT.EDU realm has a principal identifier of "ATHENA.MIT.EDU" (realm),
+         * ("krbtgt", "MIT.EDU") (name).
+         */
         Self::SrvInst {
             service: "krbtgt".to_string(),
+            instance: vec![realm.to_string()],
             realm: realm.to_string(),
         }
     }
 
     pub fn is_service_krbtgt(&self, check_realm: &str) -> bool {
         match self {
-            Self::SrvInst { service, realm } => service == "krbtgt" && check_realm == realm,
+            Self::SrvInst {
+                service,
+                instance,
+                realm,
+            } => {
+                service == "krbtgt" && check_realm == realm && instance.is_empty()
+            }
             _ => false,
         }
     }
@@ -679,17 +702,21 @@ impl TryInto<Realm> for &Name {
 
     fn try_into(self) -> Result<Realm, KrbError> {
         match self {
-            Name::Principal { name, realm } => {
+            Name::Principal { name: _, realm } => {
                 let realm = KerberosString(Ia5String::new(realm).unwrap());
                 Ok(realm)
             }
-            Name::SrvInst { service, realm } => {
+            Name::SrvInst {
+                service: _,
+                instance: _,
+                realm,
+            } => {
                 let realm = KerberosString(Ia5String::new(realm).unwrap());
                 Ok(realm)
             }
             Name::SrvHst {
-                service,
-                host,
+                service: _,
+                host: _,
                 realm,
             } => {
                 let realm = KerberosString(Ia5String::new(realm).unwrap());
@@ -715,11 +742,23 @@ impl TryInto<PrincipalName> for &Name {
                     name_string,
                 })
             }
-            Name::SrvInst { service, realm } => {
-                let name_string = vec![
-                    KerberosString(Ia5String::new(service).unwrap()),
-                    KerberosString(Ia5String::new(realm).unwrap()),
-                ];
+            Name::SrvInst {
+                service,
+                instance,
+                realm,
+            } => {
+                let primary: Vec<KerberosString> =
+                    vec![KerberosString(Ia5String::new(&service).unwrap())];
+                let instance: Vec<KerberosString> = instance
+                    .iter()
+                    .map(|x| KerberosString(Ia5String::new(x).unwrap()))
+                    .collect();
+                let realm: Vec<KerberosString> =
+                    vec![KerberosString(Ia5String::new(realm).unwrap())];
+                let name_string: Vec<KerberosString> = vec![primary, instance, realm]
+                    .into_iter()
+                    .flatten()
+                    .collect();
 
                 Ok(PrincipalName {
                     name_type: PrincipalNameType::NtSrvInst as i32,
@@ -763,10 +802,20 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
                     realm,
                 ))
             }
-            Name::SrvInst { service, realm } => {
-                let name_string = vec![KerberosString(Ia5String::new(&service).unwrap())];
+            Name::SrvInst {
+                service,
+                instance,
+                realm,
+            } => {
+                let primary: Vec<KerberosString> =
+                    vec![KerberosString(Ia5String::new(&service).unwrap())];
+                let instance: Vec<KerberosString> = instance
+                    .iter()
+                    .map(|x| KerberosString(Ia5String::new(x).unwrap()))
+                    .collect();
+                let name_string: Vec<KerberosString> =
+                    vec![primary, instance].into_iter().flatten().collect();
                 let realm = KerberosString(Ia5String::new(realm).unwrap());
-
                 Ok((
                     PrincipalName {
                         name_type: PrincipalNameType::NtSrvInst as i32,
@@ -818,9 +867,15 @@ impl TryFrom<PrincipalName> for Name {
                 Ok(Name::Principal { name, realm })
             }
             PrincipalNameType::NtSrvInst => {
-                let service = name_string.get(0).unwrap().into();
-                let realm = name_string.get(1).unwrap().into();
-                Ok(Name::SrvInst { service, realm })
+                let (service, instance) = name_string.split_first().unwrap();
+                let service: String = service.into();
+                let mut instance: Vec<String> = instance.iter().map(|x| x.into()).collect();
+                let realm: String = instance.pop().unwrap();
+                Ok(Name::SrvInst {
+                    service,
+                    instance,
+                    realm,
+                })
             }
             PrincipalNameType::NtSrvHst => {
                 let service = name_string.get(0).unwrap().into();
@@ -857,8 +912,12 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 Ok(Name::Principal { name, realm })
             }
             PrincipalNameType::NtSrvInst => {
-                let service = name_string.get(0).unwrap().into();
-                Ok(Name::SrvInst { service, realm })
+                let (service, instance) = name_string.split_first().unwrap();
+                Ok(Name::SrvInst {
+                    service: service.into(),
+                    instance: instance.iter().map(|x| x.into()).collect(),
+                    realm,
+                })
             }
             PrincipalNameType::NtSrvHst => {
                 let service = name_string.get(0).unwrap().into();
