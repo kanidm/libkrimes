@@ -19,7 +19,7 @@ flags! {
     ///         -- ok-as-delegate(13)
     /// ````
     #[repr(u32)]
-    pub(crate) enum TicketFlags: u32 {
+    pub enum TicketFlags: u32 {
         Reserved               = 1 << 0,
         Forwardable            = 1 << 1,
         Forwarded              = 1 << 2,

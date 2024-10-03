@@ -9,10 +9,10 @@ use crate::asn1::{
     krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
-    BitString, OctetString,
+    BitString, OctetString, kerberos_flags::KerberosFlags, kdc_options, ticket_flags::TicketFlags,
 };
 use crate::error::KrbError;
-use der::Encode;
+use der::{Encode, flagset::FlagSet};
 use rand::{thread_rng, Rng};
 
 use std::time::{Duration, SystemTime};
@@ -39,6 +39,7 @@ pub struct AuthenticationRequest {
     pub renew: Option<SystemTime>,
     pub preauth: Preauth,
     pub etypes: Vec<EncryptionType>,
+    pub kdc_options: FlagSet<KerberosFlags>
 }
 
 #[derive(Debug)]
@@ -86,6 +87,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                 renew,
                 preauth,
                 etypes,
+                kdc_options
             }) => {
                 let padata = if preauth.pa_fx_cookie.is_some() || preauth.enc_timestamp.is_some() {
                     let mut padata_inner = Vec::with_capacity(2);
@@ -149,7 +151,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                     msg_type: KrbMessageType::KrbAsReq as u8,
                     padata,
                     req_body: KdcReqBody {
-                        kdc_options: BitString::from_bytes(&[0x00, 0x80, 0x00, 0x00]).unwrap(),
+                        kdc_options,
                         cname: Some(cname),
                         // Per the RFC this is the "servers realm" in an AsReq but also the clients. So it's really
                         // not clear if the sname should have the realm or not or if this can be divergent between
@@ -262,6 +264,9 @@ impl KerberosAuthenticationBuilder {
 
         let preauth = preauth.unwrap_or_default();
 
+        let mut kdc_options = FlagSet::<KerberosFlags>::new(0b0).expect("Failed to build FlagSet");
+        kdc_options |= KerberosFlags::Renewable;
+
         KerberosRequest::AS(AuthenticationRequest {
             nonce,
             client_name,
@@ -271,6 +276,7 @@ impl KerberosAuthenticationBuilder {
             renew,
             preauth,
             etypes,
+            kdc_options,
         })
     }
 }
@@ -327,6 +333,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                 let until = req.req_body.till.to_system_time();
                 let renew = req.req_body.rtime.map(|t| t.to_system_time());
                 let nonce = req.req_body.nonce;
+                let kdc_options = req.req_body.kdc_options;
 
                 // addresses,
                 // enc_authorization_data,
@@ -341,6 +348,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                     renew,
                     etypes,
                     preauth,
+                    kdc_options
                 }))
             }
             KrbMessageType::KrbTgsReq => {

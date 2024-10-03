@@ -84,6 +84,8 @@ pub struct KerberosReplyAuthenticationBuilder {
     start_time: SystemTime,
     end_time: SystemTime,
     renew_until: Option<SystemTime>,
+
+    flags: FlagSet<TicketFlags>,
 }
 
 impl KerberosReply {
@@ -101,15 +103,14 @@ impl KerberosReply {
     pub fn authentication_builder(
         client: Name,
         server: Name,
-        stime: SystemTime,
+        auth_time: SystemTime,
+        start_time: SystemTime,
+        end_time: SystemTime,
+        renew_until: Option<SystemTime>,
         nonce: u32,
+        flags: FlagSet<TicketFlags>,
     ) -> KerberosReplyAuthenticationBuilder {
         let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;
-
-        let auth_time = stime;
-        let start_time = stime;
-        let end_time = stime + Duration::from_secs(3600 * 4);
-        let renew_until = Some(stime + Duration::from_secs(86400 * 7));
 
         KerberosReplyAuthenticationBuilder {
             aes256_cts_hmac_sha1_96_iter_count,
@@ -123,6 +124,7 @@ impl KerberosReply {
             start_time,
             end_time,
             renew_until,
+            flags,
         }
     }
 
@@ -209,6 +211,24 @@ impl KerberosReply {
         })
     }
 
+    pub fn error_cannot_postdate(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KdcErrCannotPostdate,
+            service,
+            error_text: Some("Ticket not elegible for postdating".to_string()),
+            stime,
+        })
+    }
+
+    pub fn error_never_valid(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KdcErrNeverValid,
+            service,
+            error_text: Some("Requested ticket start time is later than end time".to_string()),
+            stime,
+        })
+    }
+
     pub fn error_internal(service: Name, stime: SystemTime) -> KerberosReply {
         KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KrbErrGeneric,
@@ -286,20 +306,15 @@ impl KerberosReplyAuthenticationBuilder {
             key_value,
         };
 
+        let (cname, crealm) = (&self.client).try_into().unwrap();
+        let (server_name, server_realm) = (&self.server).try_into().unwrap();
+
         let auth_time = KerberosTime::from_system_time(self.auth_time).unwrap();
-        let start_time = KerberosTime::from_system_time(self.auth_time).unwrap();
-        let end_time = KerberosTime::from_system_time(self.auth_time).unwrap();
+        let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
+        let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
         let renew_till = self
             .renew_until
             .map(|t| KerberosTime::from_system_time(t).unwrap());
-
-        let mut flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
-        if renew_till.is_some() {
-            flags |= TicketFlags::Renewable;
-        };
-
-        let (cname, crealm) = (&self.client).try_into().unwrap();
-        let (server_name, server_realm) = (&self.server).try_into().unwrap();
 
         let enc_kdc_rep_part = EncKdcRepPart {
             key: session_key.clone(),
@@ -307,9 +322,9 @@ impl KerberosReplyAuthenticationBuilder {
             last_req: Vec::with_capacity(0),
             nonce: self.nonce,
             key_expiration: None,
-            flags,
+            flags: self.flags,
             auth_time,
-            start_time: Some(start_time),
+            start_time,
             end_time,
             renew_till,
             server_realm,
@@ -343,13 +358,13 @@ impl KerberosReplyAuthenticationBuilder {
         };
 
         let ticket_inner = EncTicketPart {
-            flags,
+            flags: self.flags,
             key: session_key,
             crealm,
             cname,
             transited,
             auth_time,
-            start_time: Some(start_time),
+            start_time,
             end_time,
             renew_till,
             client_addresses: None,
