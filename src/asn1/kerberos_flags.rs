@@ -7,7 +7,7 @@ flags! {
     ///                     -- but no fewer than 32
     /// ````
     #[repr(u32)]
-    pub(crate) enum KerberosFlags: u32 {
+    pub enum KerberosFlags: u32 {
         Reserved        = 1 << 0,
         Forwardable     = 1 << 1,
         Forwarded       = 1 << 2,

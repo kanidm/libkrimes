@@ -17,7 +17,7 @@
 #![deny(clippy::manual_let_else)]
 #![allow(clippy::unreachable)]
 
-mod asn1;
+pub mod asn1;
 pub mod ccache;
 pub(crate) mod constants;
 pub(crate) mod crypto;
