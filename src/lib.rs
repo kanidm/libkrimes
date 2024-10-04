@@ -22,6 +22,7 @@ pub mod ccache;
 pub(crate) mod constants;
 pub(crate) mod crypto;
 pub mod error;
+pub mod keytab;
 pub mod proto;
 
 use bytes::Buf;

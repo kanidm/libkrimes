@@ -28,6 +28,7 @@ pub enum KrbError {
     NameNotPrincipal,
 
     UnsupportedCredentialCacheType,
+    UnsupportedKeytabType,
     IoError(std::io::Error),
     BinRWError(binrw::Error),
 
