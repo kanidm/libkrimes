@@ -680,9 +680,7 @@ impl Name {
                 service,
                 instance,
                 realm,
-            } => {
-                service == "krbtgt" && check_realm == realm && instance.is_empty()
-            }
+            } => service == "krbtgt" && check_realm == realm && instance.is_empty(),
             _ => false,
         }
     }
@@ -750,10 +748,8 @@ impl TryInto<PrincipalName> for &Name {
                     .iter()
                     .map(|x| KerberosString(Ia5String::new(x).unwrap()))
                     .collect();
-                let name_string: Vec<KerberosString> = vec![primary, instance]
-                    .into_iter()
-                    .flatten()
-                    .collect();
+                let name_string: Vec<KerberosString> =
+                    vec![primary, instance].into_iter().flatten().collect();
 
                 Ok(PrincipalName {
                     name_type: PrincipalNameType::NtSrvInst as i32,

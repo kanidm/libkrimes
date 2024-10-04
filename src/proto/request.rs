@@ -3,16 +3,19 @@ use crate::asn1::{
         encryption_types::EncryptionType, message_types::KrbMessageType, pa_data_types::PaDataType,
     },
     encrypted_data::EncryptedData as KdcEncryptedData,
+    kdc_options,
     kdc_req::KdcReq,
     kdc_req_body::KdcReqBody,
+    kerberos_flags::KerberosFlags,
     kerberos_time::KerberosTime,
     krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
-    BitString, OctetString, kerberos_flags::KerberosFlags, kdc_options, ticket_flags::TicketFlags,
+    ticket_flags::TicketFlags,
+    BitString, OctetString,
 };
 use crate::error::KrbError;
-use der::{Encode, flagset::FlagSet};
+use der::{flagset::FlagSet, Encode};
 use rand::{thread_rng, Rng};
 
 use std::time::{Duration, SystemTime};
@@ -39,7 +42,7 @@ pub struct AuthenticationRequest {
     pub renew: Option<SystemTime>,
     pub preauth: Preauth,
     pub etypes: Vec<EncryptionType>,
-    pub kdc_options: FlagSet<KerberosFlags>
+    pub kdc_options: FlagSet<KerberosFlags>,
 }
 
 #[derive(Debug)]
@@ -87,7 +90,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                 renew,
                 preauth,
                 etypes,
-                kdc_options
+                kdc_options,
             }) => {
                 let padata = if preauth.pa_fx_cookie.is_some() || preauth.enc_timestamp.is_some() {
                     let mut padata_inner = Vec::with_capacity(2);
@@ -348,7 +351,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                     renew,
                     etypes,
                     preauth,
-                    kdc_options
+                    kdc_options,
                 }))
             }
             KrbMessageType::KrbTgsReq => {
