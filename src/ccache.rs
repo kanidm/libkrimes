@@ -199,9 +199,6 @@ impl TryFrom<&Name> for PrincipalV4 {
                     })
                     .collect();
                 components.extend(iv);
-                components.push(DataComponent {
-                    value: realm.as_bytes().into(),
-                });
 
                 let p: PrincipalV4 = PrincipalV4 {
                     name_type: PrincipalNameType::NtSrvInst as u32,
