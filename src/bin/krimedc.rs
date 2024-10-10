@@ -368,12 +368,26 @@ struct OptParser {
 #[derive(Debug, Subcommand)]
 #[clap(about = "The Worlds Worst KDC - A Krime, If You Please")]
 enum Opt {
-    Run { config: PathBuf },
-    // KeyTab { }
+    Run {
+        config: PathBuf,
+    },
+    KeyTab {
+        name: String,
+        output: PathBuf,
+        config: PathBuf,
+    },
 }
 
 #[derive(Debug, Deserialize)]
 struct UserPrincipal {
+    name: String,
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ServicePrincipal {
+    hostname: String,
+    srvname: String,
     password: String,
 }
 
@@ -384,8 +398,9 @@ struct Config {
     #[serde(deserialize_with = "hex::serde::deserialize")]
     primary_key: Vec<u8>,
 
-    user: BTreeMap<String, UserPrincipal>,
-    // services: BTreeMap<String, Service>,
+    user: Vec<UserPrincipal>,
+
+    service: Vec<ServicePrincipal>,
 }
 
 impl From<Config> for ServerState {
@@ -395,25 +410,48 @@ impl From<Config> for ServerState {
             address,
             primary_key,
             user,
+            service,
         } = cr;
 
         let primary_key = KdcPrimaryKey::try_from(primary_key.as_slice()).unwrap();
 
         let users = user
             .into_iter()
-            .map(|(n, u)| {
-                let salt = format!("{}{}", realm, n);
+            .map(|UserPrincipal { name, password }| {
+                let salt = format!("{}{}", realm, name);
 
-                let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&u.password, &salt).unwrap();
+                let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt).unwrap();
 
-                (n, UserRecord { base_key })
+                (name, UserRecord { base_key })
             })
+            .collect();
+
+        let services = service
+            .into_iter()
+            .map(
+                |ServicePrincipal {
+                     srvname,
+                     hostname,
+                     password,
+                 }| {
+                    let name = format!("{srvname}{hostname}");
+
+                    // Not sure about this on services, I think it doesn't need a bk?
+                    let salt = format!("{}{}", realm, name);
+
+                    let base_key =
+                        DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt).unwrap();
+
+                    (name, ServiceRecord { base_key })
+                },
+            )
             .collect();
 
         ServerState {
             realm,
             primary_key,
             users,
+            services,
         }
     }
 }
@@ -424,13 +462,18 @@ struct UserRecord {
 }
 
 #[derive(Debug)]
+struct ServiceRecord {
+    base_key: DerivedKey,
+}
+
+#[derive(Debug)]
 struct ServerState {
     realm: String,
     // address: SocketAddr,
     primary_key: KdcPrimaryKey,
 
     users: BTreeMap<String, UserRecord>,
-    // services: BTreeMap<String, Service>,
+    services: BTreeMap<String, ServiceRecord>,
 }
 
 async fn main_run(config: Config) -> io::Result<()> {
@@ -445,6 +488,50 @@ async fn main_run(config: Config) -> io::Result<()> {
         let state = server_state.clone();
         tokio::spawn(async move { process(socket, info, state).await });
     }
+}
+
+async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
+    use libkrime::keytab::*;
+
+    let principal = Principal {
+        components_count,
+        realm,
+        components: vec![
+            Data {
+                value_len,
+                value:
+            },
+        ],
+        name_type,
+    };
+
+    let key = Data { value_len, value };
+
+    let rdata = RecordData::Entry {
+        principal,
+        timestam,
+        key_version_u8,
+        enctype,
+        key,
+        key_version,
+    };
+
+    let record = Record {
+        // TODO: Samuel, how do I get rdata -> rlen here?
+        rlen: (),
+        rdata,
+    };
+
+    let kt_v2 = FileKeytabV2 {
+        records: vec![record],
+    };
+
+    let kt = FileKeytab::V2(kt_v2);
+
+    let mut f = File::create(output)?;
+
+    let keytab = Keytab::File(kt);
+    keytab.write(f)
 }
 
 fn parse_config<P: AsRef<Path>>(path: P) -> io::Result<Config> {
@@ -469,6 +556,14 @@ async fn main() -> io::Result<()> {
         Opt::Run { config } => {
             let cfg = parse_config(&config)?;
             main_run(cfg).await
+        }
+        Opt::Keytab {
+            name,
+            output,
+            config,
+        } => {
+            let cfg = parse_config(&config)?;
+            keytab_extract_run(cfg, name, output).await
         }
     }
 }
