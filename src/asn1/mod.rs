@@ -1,4 +1,5 @@
 pub mod ap_options;
+pub mod authenticator;
 pub mod authorization_data;
 pub mod checksum;
 pub mod constants;
