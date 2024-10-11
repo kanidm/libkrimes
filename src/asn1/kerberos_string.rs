@@ -47,3 +47,15 @@ impl KerberosString {
         self.0.as_str()
     }
 }
+
+impl From<String> for KerberosString {
+    fn from(value: String) -> Self {
+        KerberosString(Ia5String::new(&value).expect("Failed to build Ia5String"))
+    }
+}
+
+impl From<&str> for KerberosString {
+    fn from(value: &str) -> Self {
+        KerberosString(Ia5String::new(value).expect("Failed to build Ia5String"))
+    }
+}
