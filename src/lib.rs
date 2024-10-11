@@ -73,7 +73,11 @@ impl Decoder for KerberosTcpCodec {
         //   MIT does not set the end-of-record flag, assumes that a KRB PDU fits in a
         //   fragment, i.e, its length is always less that (2**31)-1.
         let mut xdr_hdr: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
-        reader.read(&mut xdr_hdr)?;
+        let nread = reader.read(&mut xdr_hdr)?;
+        if nread == 0 {
+            // Connection closed
+            return Ok(None);
+        }
 
         // Reset end-of-record flag before parsing header into record length
         xdr_hdr[0] &= 0xEF;
