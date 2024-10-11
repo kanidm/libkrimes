@@ -120,7 +120,6 @@ mod tests {
     use crate::asn1::encrypted_data::EncryptedData;
     use crate::asn1::kerberos_string::KerberosString;
     use crate::asn1::principal_name::PrincipalName;
-    use crate::asn1::realm::Realm;
     use crate::asn1::tagged_ticket::{TaggedTicket, Ticket};
     use der::asn1::Ia5String;
     use der::asn1::OctetString;

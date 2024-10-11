@@ -392,7 +392,7 @@ impl From<Config> for ServerState {
     fn from(cr: Config) -> ServerState {
         let Config {
             realm,
-            address,
+            address: _,
             primary_key,
             user,
         } = cr;
@@ -448,7 +448,6 @@ async fn main_run(config: Config) -> io::Result<()> {
 }
 
 fn parse_config<P: AsRef<Path>>(path: P) -> io::Result<Config> {
-    let p: &Path = path.as_ref();
     let mut contents = String::new();
     let mut f = fs::File::open(&path)?;
     f.read_to_string(&mut contents)?;

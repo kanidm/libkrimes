@@ -4,7 +4,10 @@ mod request;
 pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGrantReply};
 pub use self::request::{AuthenticationRequest, KerberosRequest, TicketGrantRequest};
 
+use crate::asn1::authenticator::Authenticator;
+use crate::asn1::checksum::Checksum;
 use crate::asn1::constants::PrincipalNameType;
+use crate::asn1::kdc_req_body::KdcReqBody;
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart,
@@ -23,13 +26,12 @@ use crate::asn1::{
 };
 use crate::constants::{AES_256_KEY_LEN, RFC_PKBDF2_SHA1_ITER};
 use crate::crypto::{
-    decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96,
-    encrypt_aes256_cts_hmac_sha1_96,
+    checksum_hmac_sha1_96_aes256, decrypt_aes256_cts_hmac_sha1_96,
+    derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode};
 
-use binrw::{binrw, BinWrite};
 use std::cmp::Ordering;
 use std::fmt;
 use std::time::{Duration, SystemTime};
@@ -213,6 +215,7 @@ impl fmt::Debug for DerivedKey {
     }
 }
 
+#[derive(Clone)]
 pub enum SessionKey {
     Aes256CtsHmacSha196 { k: [u8; AES_256_KEY_LEN] },
 }
@@ -224,6 +227,46 @@ impl fmt::Debug for SessionKey {
             SessionKey::Aes256CtsHmacSha196 { .. } => builder.field("k", &"Aes256"),
         }
         .finish()
+    }
+}
+
+impl SessionKey {
+    fn encrypt_ap_req_authenticator(
+        &self,
+        authenticator: &Authenticator,
+    ) -> Result<EncryptedData, KrbError> {
+        let data = authenticator
+            .to_der()
+            .map_err(|e| KrbError::DerEncodeAuthenticator(e))?;
+
+        let key_usage = 7;
+        match self {
+            SessionKey::Aes256CtsHmacSha196 { k } => {
+                encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)
+                    .map(|data| EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
+            }
+        }
+    }
+
+    fn checksum_kdc_req_body(&self, req_body: &KdcReqBody) -> Result<Checksum, KrbError> {
+        let req_body = req_body
+            .to_der()
+            .map_err(|e| KrbError::DerEncodeKdcReqBody(e))?;
+        self.checksum(req_body.as_slice(), 6)
+    }
+
+    fn checksum(&self, data: &[u8], key_usage: i32) -> Result<Checksum, KrbError> {
+        match self {
+            SessionKey::Aes256CtsHmacSha196 { k } => {
+                let checksum = checksum_hmac_sha1_96_aes256(data, k, key_usage)?;
+                let checksum = OctetString::new(checksum).expect("Failed to create OctetString");
+                let checksum = Checksum {
+                    checksum_type: 16, // RFC 3962
+                    checksum,
+                };
+                Ok(checksum)
+            }
+        }
     }
 }
 
@@ -256,7 +299,7 @@ impl TryFrom<&[u8]> for KdcPrimaryKey {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Ticket {
     tkt_vno: i8,
     service: Name,
@@ -284,7 +327,7 @@ pub struct KdcReplyPart {
     // client_addresses: Vec<HostAddress>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum EncryptedData {
     Aes256CtsHmacSha196 { kvno: Option<u32>, data: Vec<u8> },
 }
@@ -297,7 +340,7 @@ pub struct PreauthData {
     pub(crate) etype_info2: Vec<EtypeInfo2>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Name {
     Principal {
         name: String,
@@ -651,6 +694,14 @@ impl Name {
         }
     }
 
+    pub fn service(name: &str, hostname: &str, realm: &str) -> Self {
+        Self::SrvHst {
+            service: name.to_string(),
+            host: hostname.to_string(),
+            realm: realm.to_string(),
+        }
+    }
+
     pub fn service_krbtgt(realm: &str) -> Self {
         /*
          * RFC4120, section 7.3, Name of the TGS
@@ -740,7 +791,7 @@ impl TryInto<PrincipalName> for &Name {
             Name::SrvInst {
                 service,
                 instance,
-                realm,
+                realm: _,
             } => {
                 let primary: Vec<KerberosString> =
                     vec![KerberosString(Ia5String::new(&service).unwrap())];
@@ -759,12 +810,11 @@ impl TryInto<PrincipalName> for &Name {
             Name::SrvHst {
                 service,
                 host,
-                realm,
+                realm: _,
             } => {
                 let name_string = vec![
                     KerberosString(Ia5String::new(service).unwrap()),
                     KerberosString(Ia5String::new(host).unwrap()),
-                    KerberosString(Ia5String::new(realm).unwrap()),
                 ];
 
                 Ok(PrincipalName {
@@ -942,8 +992,9 @@ pub async fn get_tgt(
     let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
     let now = SystemTime::now();
+    let client_name = Name::principal(principal, realm);
     let as_req = KerberosRequest::build_as(
-        Name::principal(principal, realm),
+        &client_name,
         Name::service_krbtgt(realm),
         now + Duration::from_secs(3600),
     )
@@ -984,4 +1035,36 @@ pub async fn get_tgt(
     };
 
     Ok((name, ticket, kdc_reply))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::asn1::kdc_req_body::KdcReqBody;
+
+    use super::SessionKey;
+    use assert_hex::assert_eq_hex;
+    use der::Decode;
+
+    #[tokio::test]
+    async fn test_ap_req_authenticator_checksum() {
+        let kdc_req_body = "3072a0050303000081a20d1b0b4558414d504c452e434f4da3253023a003020103a11c301a1b04686f73741b127065707065722e6578616d706c652e636f6da511180f32303234313031313131303335395aa611180f32303234313031383130303335395aa706020436ce306ba8053003020112";
+        let kdc_req_body = hex::decode(kdc_req_body).expect("Failed to decode sample");
+        let kdc_req_body: KdcReqBody =
+            KdcReqBody::from_der(&kdc_req_body).expect("Failed to DER decode sample");
+        let session_key = "167391F64DA06DDE35752AFC110DCF6BFD797BF2B64027C98941ACDBDE3C356B";
+        let session_key = hex::decode(session_key).expect("Failed to decode sample");
+        let session_key = SessionKey::Aes256CtsHmacSha196 {
+            k: session_key
+                .try_into()
+                .expect("Failed to create session key"),
+        };
+        let checksum = "E101C395D98466F1FE8B6D79";
+        let checksum = hex::decode(checksum).expect("Failed to decode sample");
+        let calculated_checksum = session_key
+            .checksum_kdc_req_body(&kdc_req_body)
+            .expect("Failed to compute checksum");
+        let calculated_checksum = calculated_checksum.checksum.as_bytes();
+
+        assert_eq_hex!(checksum, calculated_checksum);
+    }
 }
