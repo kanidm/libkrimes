@@ -55,3 +55,9 @@ impl<'a> EncodeValue for TaggedTicket {
         Ok(())
     }
 }
+
+impl Into<Ticket> for TaggedTicket {
+    fn into(self) -> Ticket {
+        self.0
+    }
+}
