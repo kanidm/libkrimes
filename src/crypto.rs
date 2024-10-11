@@ -133,6 +133,54 @@ pub(crate) fn encrypt_aes256_cts_hmac_sha1_96(
     Ok(ciphertext)
 }
 
+fn dk_kc_aes_256(buf: &[u8; AES_256_KEY_LEN], key_usage: i32) -> [u8; AES_256_KEY_LEN] {
+    let kc_const = match key_usage {
+        0 => &N_FOLD_KEY_USAGE_KC_00,
+        1 => &N_FOLD_KEY_USAGE_KC_01,
+        2 => &N_FOLD_KEY_USAGE_KC_02,
+        3 => &N_FOLD_KEY_USAGE_KC_03,
+        4 => &N_FOLD_KEY_USAGE_KC_04,
+        5 => &N_FOLD_KEY_USAGE_KC_05,
+        6 => &N_FOLD_KEY_USAGE_KC_06,
+        7 => &N_FOLD_KEY_USAGE_KC_07,
+        8 => &N_FOLD_KEY_USAGE_KC_08,
+        9 => &N_FOLD_KEY_USAGE_KC_09,
+        10 => &N_FOLD_KEY_USAGE_KC_10,
+        11 => &N_FOLD_KEY_USAGE_KC_11,
+        12 => &N_FOLD_KEY_USAGE_KC_12,
+        13 => &N_FOLD_KEY_USAGE_KC_13,
+        14 => &N_FOLD_KEY_USAGE_KC_14,
+        15 => &N_FOLD_KEY_USAGE_KC_15,
+        16 => &N_FOLD_KEY_USAGE_KC_16,
+        17 => &N_FOLD_KEY_USAGE_KC_17,
+        18 => &N_FOLD_KEY_USAGE_KC_18,
+        19 => &N_FOLD_KEY_USAGE_KC_19,
+        20 => &N_FOLD_KEY_USAGE_KC_20,
+        21 => &N_FOLD_KEY_USAGE_KC_21,
+        22 => &N_FOLD_KEY_USAGE_KC_22,
+        23 => &N_FOLD_KEY_USAGE_KC_23,
+        24 => &N_FOLD_KEY_USAGE_KC_24,
+        25 => &N_FOLD_KEY_USAGE_KC_25,
+        26 => &N_FOLD_KEY_USAGE_KC_26,
+        27 => &N_FOLD_KEY_USAGE_KC_27,
+        28 => &N_FOLD_KEY_USAGE_KC_28,
+        29 => &N_FOLD_KEY_USAGE_KC_29,
+        30 => &N_FOLD_KEY_USAGE_KC_30,
+        31 => &N_FOLD_KEY_USAGE_KC_31,
+        _ => todo!(),
+    };
+
+    let mut kc = [0u8; AES_256_KEY_LEN];
+
+    let (lower, upper) = kc.split_at_mut(AES_BLOCK_SIZE);
+    debug_assert!(lower.len() == AES_BLOCK_SIZE);
+    debug_assert!(upper.len() == AES_BLOCK_SIZE);
+    dk_encrypt_aes_256_cbc(buf.into(), kc_const.into(), lower.into());
+    dk_encrypt_aes_256_cbc(buf.into(), (&*lower).into(), upper.into());
+
+    kc
+}
+
 fn dk_ki_ke_aes_256(
     buf: &[u8; AES_256_KEY_LEN],
     key_usage: i32,
@@ -388,11 +436,33 @@ fn decrypt_aes256_cts(key: &[u8; AES_256_KEY_LEN], ciphertext: &[u8]) -> Result<
     Ok(plaintext)
 }
 
+pub(crate) fn checksum_hmac_sha1_96_aes256(
+    plaintext: &[u8],
+    key: &[u8; AES_256_KEY_LEN],
+    key_usage: i32,
+) -> Result<Vec<u8>, KrbError> {
+    if plaintext.is_empty() {
+        return Err(KrbError::PlaintextEmpty);
+    };
+
+    let kc = dk_kc_aes_256(key, key_usage);
+    let mut mac = HmacSha1::new_from_slice(&kc).map_err(|_| KrbError::InvalidHmacSha1Key)?;
+    mac.update(&plaintext);
+
+    let mut buf = [0u8; 20];
+    mac.finalize_into((&mut buf).into());
+
+    // Truncate to 96 bits.
+    let my_hmac = &buf[0..SHA1_HMAC_LEN];
+    Ok(my_hmac.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
-    use crate::constants::RFC_PKBDF2_SHA1_ITER;
+    use crate::constants::{AES_256_KEY_LEN, RFC_PKBDF2_SHA1_ITER};
+    use assert_hex::assert_eq_hex;
     use der::Decode;
 
     #[test]
@@ -616,5 +686,56 @@ mod tests {
         let pa_enc_ts_enc = PaEncTsEnc::from_der(&data).unwrap();
 
         eprintln!("{:?}", pa_enc_ts_enc);
+    }
+
+    #[test]
+    fn test_checksum_hmac_sha1_96() {
+        let input = "3067a00703050000810000a20d1b0b4558414d504c452e434f4da3253023a003020103a11c301a1b04686f73741b127065707065722e6578616d706c652e636f6da511180f32303234313031303230333832335aa7060204769220c1a80b3009020112020113020114";
+
+        let input = hex::decode(input).unwrap();
+        let derived_key = "14AD9322E8134937815FB995067F8C1859A8237C599E450F2BC1E99330C94232";
+        let derived_key = hex::decode(derived_key).unwrap();
+        let checksum = "351E56F9FA207CDCA62A0BDC";
+        let checksum = hex::decode(checksum).unwrap();
+
+        let mut mac = HmacSha1::new_from_slice(&derived_key).unwrap();
+        mac.update(&input);
+
+        let mut buf = [0u8; 20];
+        mac.finalize_into((&mut buf).into());
+
+        // Truncate to 96 bits.
+        let my_hmac = &buf[0..SHA1_HMAC_LEN];
+        assert_eq_hex!(my_hmac, checksum);
+    }
+
+    #[test]
+    fn test_checksum_dk_hmac_sha1_96() {
+        let input = "3067a00703050000810000a20d1b0b4558414d504c452e434f4da3253023a003020103a11c301a1b04686f73741b127065707065722e6578616d706c652e636f6da511180f32303234313031303230333832335aa7060204769220c1a80b3009020112020113020114";
+
+        let input = hex::decode(input).unwrap();
+        let base_key = "3C4EEFA91060DC4000582C17885AA63A58CD5A57C5CD3E7601A0587E7E05F9D0";
+        let base_key = hex::decode(base_key).unwrap();
+        let derived_key = "14AD9322E8134937815FB995067F8C1859A8237C599E450F2BC1E99330C94232";
+        let derived_key = hex::decode(derived_key).unwrap();
+        let checksum = "351E56F9FA207CDCA62A0BDC";
+        let checksum = hex::decode(checksum).unwrap();
+
+        let mut b: [u8; AES_256_KEY_LEN] = [0; AES_256_KEY_LEN];
+        b.clone_from_slice(base_key.as_slice());
+
+        let kc = dk_kc_aes_256(&b, 6);
+
+        assert_eq_hex!(kc, derived_key.as_slice());
+
+        let mut mac = HmacSha1::new_from_slice(&derived_key).unwrap();
+        mac.update(&input);
+
+        let mut buf = [0u8; 20];
+        mac.finalize_into((&mut buf).into());
+
+        // Truncate to 96 bits.
+        let my_hmac = &buf[0..SHA1_HMAC_LEN];
+        assert_eq_hex!(my_hmac, checksum);
     }
 }

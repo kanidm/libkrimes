@@ -40,6 +40,7 @@ binrw = "0.14.0"
 toml = "^0.5.11"
 
 serde = { version = "^1.0.204", features = ["derive"] }
+assert_hex = "0.4.1"
 
 [dev-dependencies]
 base64 = "0.22.0"
