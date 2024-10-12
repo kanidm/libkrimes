@@ -320,6 +320,8 @@ impl TryFrom<KdcReq> for KerberosRequest {
                     .unwrap_or_default();
                 trace!(?preauth);
 
+                trace!(req_body = ?req.req_body);
+
                 let cname = req.req_body.cname.ok_or(KrbError::MissingClientName)?;
                 let realm = req.req_body.realm;
 

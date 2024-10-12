@@ -38,6 +38,7 @@ async fn process_authentication(
         .service_name
         .is_service_krbtgt(server_state.realm.as_str())
     {
+        error!("Request not for KRBTGT");
         return Err(KerberosReply::error_as_not_krbtgt(
             auth_req.service_name,
             stime,
@@ -334,6 +335,7 @@ async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerSt
     trace!(?info, "connection from");
 
     while let Some(Ok(kdc_req)) = kdc_stream.next().await {
+        trace!(?kdc_req);
         match kdc_req {
             KerberosRequest::AS(auth_req) => {
                 let reply = match process_authentication(auth_req, &server_state).await {
@@ -348,6 +350,7 @@ async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerSt
                 continue;
             }
             KerberosRequest::TGS(_) => {
+                error!("TGS TODO");
                 todo!();
             }
         }
@@ -371,10 +374,10 @@ enum Opt {
     Run {
         config: PathBuf,
     },
-    KeyTab {
+    Keytab {
+        config: PathBuf,
         name: String,
         output: PathBuf,
-        config: PathBuf,
     },
 }
 
@@ -434,9 +437,8 @@ impl From<Config> for ServerState {
                      hostname,
                      password,
                  }| {
-                    let name = format!("{srvname}{hostname}");
+                    let name = format!("{srvname}/{hostname}");
 
-                    // Not sure about this on services, I think it doesn't need a bk?
                     let salt = format!("{}{}", realm, name);
 
                     let base_key =
@@ -491,34 +493,78 @@ async fn main_run(config: Config) -> io::Result<()> {
 }
 
 async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
+    use binrw::BinWrite;
+    use libkrime::asn1::constants::encryption_types::EncryptionType;
     use libkrime::keytab::*;
+    use std::fs::File;
 
-    let principal = Principal {
-        components_count,
-        realm,
-        components: vec![
-            Data {
-                value_len,
-                value:
+    let server_state = Arc::new(ServerState::from(config));
+
+    let (key, principal) = if let Some((srv, host)) = name.split_once('/') {
+        let Some(srv_record) = server_state.services.get(&name) else {
+            todo!();
+        };
+
+        let principal = Principal {
+            realm: Data {
+                value: server_state.realm.as_bytes().to_vec(),
             },
-        ],
-        name_type,
-    };
+            components: vec![
+                Data {
+                    value: srv.as_bytes().to_vec(),
+                },
+                Data {
+                    value: host.as_bytes().to_vec(),
+                },
+            ],
+            // NtSrvHst
+            name_type: Some(3),
+        };
 
-    let key = Data { value_len, value };
+        let key = Data {
+            value: srv_record.base_key.k(),
+        };
+
+        (key, principal)
+    } else {
+        let Some(user_record) = server_state.users.get(&name) else {
+            todo!();
+        };
+
+        let principal = Principal {
+            realm: Data {
+                value: server_state.realm.as_bytes().to_vec(),
+            },
+            components: vec![Data {
+                value: name.as_bytes().to_vec(),
+            }],
+            // NtPrinc
+            name_type: Some(1),
+        };
+
+        let key = Data {
+            value: user_record.base_key.k(),
+        };
+
+        (key, principal)
+    };
 
     let rdata = RecordData::Entry {
         principal,
-        timestam,
-        key_version_u8,
-        enctype,
+        // I think this is NOT 2038 safe and requires a version change ...
+        // indicates when the key was emitted to the keytab.
+        timestamp: 0,
+        // Needs to be 2, nfi why.
+        key_version_u8: 2,
+        enctype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as _,
         key,
-        key_version,
+        // Needs to be set?
+        key_version_u32: Some(2),
     };
 
     let record = Record {
-        // TODO: Samuel, how do I get rdata -> rlen here?
-        rlen: (),
+        // Is there a way to actually calculate this with binrw?
+        rlen: 409_6,
         rdata,
     };
 
@@ -531,7 +577,9 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
     let mut f = File::create(output)?;
 
     let keytab = Keytab::File(kt);
-    keytab.write(f)
+    keytab.write(&mut f).unwrap();
+
+    Ok(())
 }
 
 fn parse_config<P: AsRef<Path>>(path: P) -> io::Result<Config> {
@@ -563,7 +611,7 @@ async fn main() -> io::Result<()> {
             config,
         } => {
             let cfg = parse_config(&config)?;
-            keytab_extract_run(cfg, name, output).await
+            keytab_extract_run(name, output, cfg).await
         }
     }
 }

@@ -59,6 +59,12 @@ pub enum DerivedKey {
 }
 
 impl DerivedKey {
+    pub fn k(&self) -> Vec<u8> {
+        match self {
+            DerivedKey::Aes256CtsHmacSha196 { k, .. } => k.to_vec(),
+        }
+    }
+
     pub fn new_aes256_cts_hmac_sha1_96(passphrase: &str, salt: &str) -> Result<Self, KrbError> {
         // let iter_count = PKBDF2_SHA1_ITER;
         let iter_count = RFC_PKBDF2_SHA1_ITER;
@@ -688,6 +694,7 @@ impl Name {
     /// If the name is a PRINCIPAL then return it's name and realm compontents. If
     /// not, then an error is returned.
     pub fn principal_name(&self) -> Result<(&str, &str), KrbError> {
+        trace!(principal_name = ?self);
         match self {
             Name::Principal { name, realm } => Ok((name.as_str(), realm.as_str())),
             _ => Err(KrbError::NameNotPrincipal),
@@ -850,6 +857,8 @@ impl TryFrom<PrincipalName> for Name {
         let name_type: PrincipalNameType = name_type
             .try_into()
             .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
+
+        trace!(?name_type, ?name_string);
 
         match name_type {
             PrincipalNameType::NtPrincipal => {
