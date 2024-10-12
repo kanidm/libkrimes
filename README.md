@@ -93,3 +93,26 @@ Valid starting     Expires            Service principal
         renew until 10/10/24 12:33:33
 
 ```
+
+## Getting A Service Keytab
+
+```
+$ cargo run --bin krimedc keytab $(pwd)/examples/krime.conf HOST/localhost /tmp/keytab
+```
+
+```
+$ KRB5_TRACE=/dev/stdout KRB5_CONFIG=$(pwd)/kdc_test/krb5.conf klist -e -k /tmp/keytab
+
+Keytab name: FILE:/tmp/key
+KVNO Principal
+---- --------------------------------------------------------------------------
+   2 HOST/localhost@EXAMPLE.COM (aes256-cts-hmac-sha1-96)
+```
+
+## Testing A Service Request
+
+
+```
+$ KRB5_TRACE=/dev/stdout KRB5_CONFIG=$(pwd)/kdc_test/krb5.conf kvno HOST/localhost
+```
+

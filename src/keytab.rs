@@ -7,12 +7,12 @@ use std::fmt;
 #[brw(big)]
 #[binread]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Data {
+pub struct Data {
     #[br(temp)]
     #[bw(try_calc(u16::try_from(value.len())))]
-    value_len: u16,
+    pub value_len: u16,
     #[br(count = value_len)]
-    value: Vec<u8>,
+    pub value: Vec<u8>,
 }
 
 #[binwrite]
@@ -20,16 +20,16 @@ struct Data {
 #[binread]
 #[br(import { version: u8 })]
 #[derive(Clone, PartialEq, Eq)]
-struct Principal {
+pub struct Principal {
     #[br(temp)]
     #[bw(try_calc(u16::try_from(components.len())))]
-    components_count: u16,
-    realm: Data,
+    pub components_count: u16,
+    pub realm: Data,
     // components includes the realm in version 1
     #[br(count = if version == 1 { components_count - 1 } else { components_count })]
-    components: Vec<Data>,
+    pub components: Vec<Data>,
     #[br(if(version > 1))]
-    name_type: Option<u32>,
+    pub name_type: Option<u32>,
 }
 
 impl fmt::Debug for Principal {
@@ -52,7 +52,7 @@ impl fmt::Debug for Principal {
 #[brw(big)]
 #[br(import { version: u8, rlen: i32 })]
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RecordData {
+pub enum RecordData {
     #[br(pre_assert(rlen > 0))]
     Entry {
         #[br(args { version })]
@@ -79,29 +79,29 @@ enum RecordData {
 #[brw(big)]
 #[br(import { version: u8 })]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Record {
+pub struct Record {
     #[br(dbg)]
     #[bw(if(*rlen > 0))]
-    rlen: i32,
+    pub rlen: i32,
     #[br(map_stream = |s| s.take_seek(rlen.abs() as u64), args { version, rlen })]
     #[bw(if(*rlen > 0))]
-    rdata: RecordData,
+    pub rdata: RecordData,
 }
 
 #[binread]
 #[binwrite]
 #[brw(big)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FileKeytabV2 {
+pub struct FileKeytabV2 {
     #[br(parse_with = until_eof, args { version: 2 })]
-    records: Vec<Record>,
+    pub records: Vec<Record>,
 }
 
 #[binread]
 #[binwrite]
 #[brw(big, magic = 5u8)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum FileKeytab {
+pub enum FileKeytab {
     #[brw(magic = 2u8)]
     V2(FileKeytabV2),
 }
@@ -110,7 +110,7 @@ enum FileKeytab {
 #[binwrite]
 #[brw(big)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Keytab {
+pub enum Keytab {
     File(FileKeytab),
 }
 
