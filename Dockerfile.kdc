@@ -2,8 +2,8 @@ FROM opensuse/leap:15.6 AS ref_repo
 
 RUN zypper --non-interactive mr -e -a &&\
     zypper --non-interactive --gpg-auto-import-keys ref --force && \
-    zypper --non-interactive si --build-deps-only krb5 && \
-    zypper --non-interactive in git-core vim tcpdump iputils iproute2 make gcc awk gcc-c++ resolv_wrapper libcmocka-devel python3 libverto-libev1 strace gdb lmdb-devel
+    zypper --non-interactive in git-core vim tcpdump iputils iproute2 libopenssl-3-devel openldap2-devel \
+    flex bison autoconf gettext-tools libtool make gcc awk gcc-c++ python3 strace gdb
 
 RUN pushd /root/ && git clone https://github.com/krb5/krb5.git && popd
 COPY kdc_test/*.patch /root/krb5
@@ -25,11 +25,11 @@ RUN pushd /root/krb5/src && autoreconf -fi && ./configure \
     --mandir=/usr/share/man \
     --infodir=/usr/share/info \
     --localedir=/usr/share/locale \
-    --with-system-et \
-    --with-system-verto \
-    --with-system-ss \
+    --without-system-et \
+    --without-system-verto \
+    --without-system-ss \
     --with-crypto-impl=openssl \
-    --with-lmdb \
+    --without-lmdb \
     --with-ldap \
     --with-pam \
     --without-selinux \
@@ -40,13 +40,17 @@ RUN pushd /root/krb5/src && autoreconf -fi && ./configure \
     --enable-pkinit \
     && make && make install && popd && ldconfig
 
+RUN ln -s /usr/lib64/krb5/plugins/kdb/db2.so /usr/lib64/krb5/plugins/kdb/db2
+RUN ln -s /usr/lib64/krb5/plugins/kdb/kldap.so /usr/lib64/krb5/plugins/kdb/kldap
+
 COPY kdc_test/kadm5.acl /var/lib/kerberos/krb5kdc/kadm5.acl
+COPY kdc_test/kadm5.dict /var/lib/kerberos/krb5kdc/kadm5.dict
 COPY kdc_test/kdc.conf /var/lib/kerberos/krb5kdc/kdc.conf
 COPY kdc_test/krb5.conf /etc/krb5.conf
+COPY kdc_test/provision.sh /tmp/provision.sh
 
 RUN id
-
-RUN bash -c 'yes master_password | kdb5_util create -s && yes admin_password | kadmin.local -q "addprinc root/admin" && yes password | kadmin.local -q "addprinc testuser" && yes password | kadmin.local -q "addprinc +requires_preauth testuser_preauth"'
+RUN /tmp/provision.sh
 
 EXPOSE 88/tcp
 EXPOSE 88/udp

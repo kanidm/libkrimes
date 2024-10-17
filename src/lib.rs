@@ -73,7 +73,11 @@ impl Decoder for KerberosTcpCodec {
         //   MIT does not set the end-of-record flag, assumes that a KRB PDU fits in a
         //   fragment, i.e, its length is always less that (2**31)-1.
         let mut xdr_hdr: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
-        reader.read(&mut xdr_hdr)?;
+        let nread = reader.read(&mut xdr_hdr)?;
+        if nread == 0 {
+            // Connection closed
+            return Ok(None);
+        }
 
         // Reset end-of-record flag before parsing header into record length
         xdr_hdr[0] &= 0xEF;
@@ -215,8 +219,6 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::KerberosTcpCodec;
-    use crate::asn1::constants::errors::KrbErrorCode;
-    use crate::asn1::constants::PaDataType;
     use crate::proto::{AuthenticationReply, DerivedKey, KerberosRequest, Name, PreauthReply};
     use futures::StreamExt;
     use tracing::trace;
@@ -232,8 +234,9 @@ mod tests {
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
         let now = SystemTime::now();
+        let client_name = Name::principal("testuser", "EXAMPLE.COM");
         let as_req = KerberosRequest::build_as(
-            Name::principal("testuser", "EXAMPLE.COM"),
+            &client_name,
             Name::service_krbtgt("EXAMPLE.COM"),
             now + Duration::from_secs(3600),
         )
@@ -248,13 +251,15 @@ mod tests {
 
         let response = krb_stream.next().await;
 
-        let cleartext = match response {
+        let (ticket, cleartext) = match response {
             Some(Ok(KerberosReply::AS(AuthenticationReply {
                 name,
                 enc_part,
                 pa_data,
                 ticket,
             }))) => {
+                assert_eq!(name, client_name);
+
                 let etype_info = pa_data
                     .as_ref()
                     .map(|pa_inner| pa_inner.etype_info2.as_slice());
@@ -268,10 +273,42 @@ mod tests {
                 )
                 .expect("Failed to derive base key");
 
-                enc_part
-                    .decrypt_enc_kdc_rep(&base_key)
-                    .expect("Failed to decrypt")
+                (
+                    ticket,
+                    enc_part
+                        .decrypt_enc_kdc_rep(&base_key)
+                        .expect("Failed to decrypt"),
+                )
             }
+            _ => unreachable!(),
+        };
+
+        // MIT expects UDP over TCP...
+        let stream = TcpStream::connect("127.0.0.1:55000")
+            .await
+            .expect("Unable to connect to localhost:55000");
+
+        let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
+
+        let session_key = cleartext.key;
+
+        let now = SystemTime::now();
+        let tgs_req = KerberosRequest::build_tgs(
+            Name::service("host", "pepper.example.com", "EXAMPLE.COM"),
+            now + Duration::from_secs(3600),
+        )
+        .renew_until(Some(now + Duration::from_secs(86400 * 7)))
+        .preauth_ap_req(&client_name, &ticket, &session_key)
+        .expect("Failed to build AP-REQ")
+        .build();
+
+        krb_stream
+            .send(tgs_req)
+            .await
+            .expect("Failed to transmit request");
+        let response = krb_stream.next().await;
+        let _cleartext = match response {
+            Some(Ok(KerberosReply::TGS(_))) => {}
             _ => unreachable!(),
         };
     }
@@ -288,8 +325,9 @@ mod tests {
 
         let now = SystemTime::now();
 
+        let client_name = Name::principal("testuser_preauth", "EXAMPLE.COM");
         let as_req = KerberosRequest::build_as(
-            Name::principal("testuser_preauth", "EXAMPLE.COM"),
+            &client_name,
             Name::service_krbtgt("EXAMPLE.COM"),
             now + Duration::from_secs(3600),
         )
@@ -310,11 +348,11 @@ mod tests {
         assert!(response.is_ok());
         let response = response.unwrap();
 
-        let (service, pa_data) = match response {
+        let (_service, pa_data) = match response {
             KerberosReply::PA(PreauthReply {
                 service,
                 pa_data,
-                stime,
+                stime: _,
             }) => (service, pa_data),
             _ => unreachable!(),
         };
@@ -348,8 +386,9 @@ mod tests {
         let now = SystemTime::now();
         let seconds_since_epoch = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
 
+        let client_name = Name::principal("testuser_preauth", "EXAMPLE.COM");
         let as_req = KerberosRequest::build_as(
-            Name::principal("testuser_preauth", "EXAMPLE.COM"),
+            &client_name,
             Name::service_krbtgt("EXAMPLE.COM"),
             now + Duration::from_secs(3600),
         )

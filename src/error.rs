@@ -19,6 +19,9 @@ pub enum KrbError {
     DerEncodeEncKdcRepPart,
     DerEncodeOctetString(der::Error),
     DerEncodeEncTicketPart,
+    DerEncodeAuthenticator(der::Error),
+    DerEncodeApReq(der::Error),
+    DerEncodeKdcReqBody(der::Error),
 
     PreauthUnsupported,
     PreauthMissingEtypeInfo2,
