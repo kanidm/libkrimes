@@ -3,6 +3,8 @@ use binrw::io::TakeSeekExt;
 use binrw::{binread, binwrite};
 use std::fmt;
 
+use crate::proto::Name;
+
 #[binwrite]
 #[brw(big)]
 #[binread]
@@ -112,6 +114,59 @@ pub enum FileKeytab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Keytab {
     File(FileKeytab),
+}
+
+impl From<Name> for Principal {
+    fn from(value: Name) -> Self {
+        match value {
+            Name::Principal { name, realm } => Principal {
+                realm: Data {
+                    value: realm.as_bytes().to_vec(),
+                },
+                components: vec![Data {
+                    value: name.as_bytes().to_vec(),
+                }],
+                name_type: Some(1),
+            },
+            Name::SrvInst {
+                service,
+                instance,
+                realm,
+            } => {
+                let mut c: Vec<Data> = vec![Data {
+                    value: service.as_bytes().to_vec(),
+                }];
+                c.extend(instance.iter().map(|x| Data {
+                    value: x.as_bytes().to_vec(),
+                }));
+                Principal {
+                    realm: Data {
+                        value: realm.as_bytes().to_vec(),
+                    },
+                    components: c,
+                    name_type: Some(2),
+                }
+            }
+            Name::SrvHst {
+                service,
+                host,
+                realm,
+            } => Principal {
+                realm: Data {
+                    value: realm.as_bytes().to_vec(),
+                },
+                components: vec![
+                    Data {
+                        value: service.as_bytes().to_vec(),
+                    },
+                    Data {
+                        value: host.as_bytes().to_vec(),
+                    },
+                ],
+                name_type: Some(3),
+            },
+        }
+    }
 }
 
 #[cfg(test)]

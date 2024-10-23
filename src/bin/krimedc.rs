@@ -505,21 +505,7 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
             todo!();
         };
 
-        let principal = Principal {
-            realm: Data {
-                value: server_state.realm.as_bytes().to_vec(),
-            },
-            components: vec![
-                Data {
-                    value: srv.as_bytes().to_vec(),
-                },
-                Data {
-                    value: host.as_bytes().to_vec(),
-                },
-            ],
-            // NtSrvHst
-            name_type: Some(3),
-        };
+        let principal = Name::service(srv, host, server_state.realm.as_str()).into();
 
         let key = Data {
             value: srv_record.base_key.k(),
@@ -531,16 +517,7 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
             todo!();
         };
 
-        let principal = Principal {
-            realm: Data {
-                value: server_state.realm.as_bytes().to_vec(),
-            },
-            components: vec![Data {
-                value: name.as_bytes().to_vec(),
-            }],
-            // NtPrinc
-            name_type: Some(1),
-        };
+        let principal = Name::principal(name.as_str(), server_state.realm.as_str()).into();
 
         let key = Data {
             value: user_record.base_key.k(),
