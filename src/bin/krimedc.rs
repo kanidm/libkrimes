@@ -458,7 +458,7 @@ impl From<Config> for ServerState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct UserRecord {
     base_key: DerivedKey,
 }
@@ -494,7 +494,6 @@ async fn main_run(config: Config) -> io::Result<()> {
 
 async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
     use binrw::BinWrite;
-    use libkrime::asn1::constants::encryption_types::EncryptionType;
     use libkrime::keytab::*;
     use std::fs::File;
 
@@ -507,9 +506,7 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
 
         let principal = Name::service(srv, host, server_state.realm.as_str()).into();
 
-        let key = Data {
-            value: srv_record.base_key.k(),
-        };
+        let key = srv_record.base_key.clone();
 
         (key, principal)
     } else {
@@ -519,34 +516,20 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
 
         let principal = Name::principal(name.as_str(), server_state.realm.as_str()).into();
 
-        let key = Data {
-            value: user_record.base_key.k(),
-        };
+        let key = user_record.base_key.clone();
 
         (key, principal)
     };
 
-    let rdata = RecordData::Entry {
+    let entry = KeytabEntry {
         principal,
-        // I think this is NOT 2038 safe and requires a version change ...
-        // indicates when the key was emitted to the keytab.
         timestamp: 0,
-        // Needs to be 2, nfi why.
-        key_version_u8: 2,
-        enctype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as _,
         key,
-        // Needs to be set?
-        key_version_u32: Some(2),
-    };
-
-    let record = Record {
-        // Is there a way to actually calculate this with binrw?
-        rlen: 409_6,
-        rdata,
+        kvno: 2,
     };
 
     let kt_v2 = FileKeytabV2 {
-        records: vec![record],
+        records: vec![entry.into()],
     };
 
     let kt = FileKeytab::V2(kt_v2);
