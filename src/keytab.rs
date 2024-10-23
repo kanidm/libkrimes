@@ -3,7 +3,8 @@ use binrw::io::TakeSeekExt;
 use binrw::{binread, binwrite};
 use std::fmt;
 
-use crate::proto::Name;
+use crate::asn1::constants::encryption_types::EncryptionType;
+use crate::proto::{DerivedKey, Name};
 
 #[binwrite]
 #[brw(big)]
@@ -114,6 +115,38 @@ pub enum FileKeytab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Keytab {
     File(FileKeytab),
+}
+
+/** External API **/
+pub struct KeytabEntry {
+    pub principal: Name,
+    pub key: DerivedKey,
+    pub timestamp: u32,
+    pub kvno: u32,
+}
+
+impl From<KeytabEntry> for Record {
+    fn from(value: KeytabEntry) -> Self {
+        let rdata = RecordData::Entry {
+            principal: value.principal.into(),
+            // I think this is NOT 2038 safe and requires a version change ...
+            // indicates when the key was emitted to the keytab.
+            timestamp: value.timestamp,
+            // Needs to be 2, nfi why.
+            key_version_u8: 0,
+            enctype: match value.key {
+                DerivedKey::Aes256CtsHmacSha196 { k: _, i: _, s: _ } => {
+                    EncryptionType::AES256_CTS_HMAC_SHA1_96 as _
+                }
+            },
+            key: Data {
+                value: value.key.k(),
+            },
+            // Needs to be set?
+            key_version_u32: Some(value.kvno),
+        };
+        Record { rdata, rlen: 409_6 }
+    }
 }
 
 impl From<Name> for Principal {

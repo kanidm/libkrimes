@@ -52,6 +52,7 @@ pub struct Preauth {
     pa_fx_cookie: Option<Vec<u8>>,
 }
 
+#[derive(Clone)]
 pub enum DerivedKey {
     Aes256CtsHmacSha196 {
         k: [u8; AES_256_KEY_LEN],
