@@ -1,9 +1,11 @@
 use binrw::helpers::until_eof;
 use binrw::io::TakeSeekExt;
-use binrw::{binread, binwrite};
+use binrw::io::{Seek, Write};
+use binrw::{binread, binwrite, BinWrite};
 use std::fmt;
 
 use crate::asn1::constants::encryption_types::EncryptionType;
+use crate::error::KrbError;
 use crate::proto::{DerivedKey, Name};
 
 #[binwrite]
@@ -109,14 +111,6 @@ pub enum FileKeytab {
     V2(FileKeytabV2),
 }
 
-#[binread]
-#[binwrite]
-#[brw(big)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Keytab {
-    File(FileKeytab),
-}
-
 /** External API **/
 pub struct KeytabEntry {
     pub principal: Name,
@@ -125,10 +119,14 @@ pub struct KeytabEntry {
     pub kvno: u32,
 }
 
-impl From<KeytabEntry> for Record {
-    fn from(value: KeytabEntry) -> Self {
+pub enum Keytab {
+    File(Vec<KeytabEntry>),
+}
+
+impl From<&KeytabEntry> for Record {
+    fn from(value: &KeytabEntry) -> Self {
         let rdata = RecordData::Entry {
-            principal: value.principal.into(),
+            principal: value.principal.clone().into(),
             // I think this is NOT 2038 safe and requires a version change ...
             // indicates when the key was emitted to the keytab.
             timestamp: value.timestamp,
@@ -202,11 +200,33 @@ impl From<Name> for Principal {
     }
 }
 
+impl Keytab {
+    pub fn write<W: Write + Seek>(self: &Self, writer: &mut W) -> Result<(), KrbError> {
+        match self {
+            Keytab::File(_) => {
+                let fk: FileKeytab = self.into();
+                fk.write(writer).map_err(|e| KrbError::BinRWError(e))
+            }
+        }
+    }
+}
+
+impl From<&Keytab> for FileKeytab {
+    fn from(value: &Keytab) -> Self {
+        match value {
+            Keytab::File(entries) => {
+                let records: Vec<Record> = entries.iter().map(|x| x.into()).collect();
+                let fk2: FileKeytabV2 = FileKeytabV2 { records };
+                let fk: FileKeytab = FileKeytab::V2(fk2);
+                fk
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::KrbError;
-    use binrw::io::{Seek, Write};
     use binrw::{BinReaderExt, BinWrite};
     use std::env;
     use std::fs;
@@ -222,11 +242,6 @@ mod tests {
                 .read_type(binrw::Endian::Big)
                 .map_err(|e| KrbError::BinRWError(e))?;
             Ok(keytab)
-        }
-
-        pub fn write<W: Write + Seek>(self: &Self, writer: &mut W) -> Result<(), KrbError> {
-            let keytab = Keytab::File(self.clone());
-            keytab.write(writer).map_err(|e| KrbError::BinRWError(e))
         }
 
         pub fn load(path: Option<PathBuf>) -> Result<Self, KrbError> {
@@ -271,7 +286,7 @@ mod tests {
                     }
                 },
             }?;
-            self.write(&mut f)
+            self.write(&mut f).map_err(|x| KrbError::BinRWError(x))
         }
     }
 
