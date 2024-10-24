@@ -493,7 +493,6 @@ async fn main_run(config: Config) -> io::Result<()> {
 }
 
 async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
-    use binrw::BinWrite;
     use libkrime::keytab::*;
     use std::fs::File;
 
@@ -528,16 +527,9 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
         kvno: 2,
     };
 
-    let kt_v2 = FileKeytabV2 {
-        records: vec![entry.into()],
-    };
-
-    let kt = FileKeytab::V2(kt_v2);
-
+    let kt = Keytab::File(vec![entry]);
     let mut f = File::create(output)?;
-
-    let keytab = Keytab::File(kt);
-    keytab.write(&mut f).unwrap();
+    kt.write(&mut f).unwrap();
 
     Ok(())
 }
