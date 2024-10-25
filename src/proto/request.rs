@@ -48,15 +48,8 @@ pub struct AuthenticationRequest {
 
 #[derive(Debug)]
 pub struct TicketGrantRequest {
-    pub nonce: u32,
-    pub service_name: Name,
-    pub from: Option<SystemTime>,
-    pub until: SystemTime,
-    pub renew: Option<SystemTime>,
     pub preauth: Preauth,
-    pub etypes: Vec<EncryptionType>,
-    pub kdc_options: FlagSet<KerberosFlags>,
-    ap_req: Option<ApReqBuilder>,
+    pub(crate) req_body: KdcReqBody,
 }
 
 #[derive(Debug)]
@@ -85,7 +78,7 @@ pub struct TicketGrantRequestBuilder {
     renew: Option<SystemTime>,
     preauth: Option<Preauth>,
     etypes: Vec<EncryptionType>,
-    ap_req: Option<ApReqBuilder>,
+    ap_req_builder: Option<ApReqBuilder>,
 }
 
 impl KerberosRequest {
@@ -107,6 +100,7 @@ impl KerberosRequest {
         }
     }
 
+    // TODO: ap_req_builder should not allow Option as it's required.
     pub fn build_tgs(service_name: Name, until: SystemTime) -> TicketGrantRequestBuilder {
         let etypes = vec![EncryptionType::AES256_CTS_HMAC_SHA1_96];
 
@@ -117,7 +111,7 @@ impl KerberosRequest {
             renew: None,
             preauth: None,
             etypes,
-            ap_req: None,
+            ap_req_builder: None,
         }
     }
 }
@@ -166,6 +160,7 @@ impl KerberosAuthenticationBuilder {
         self.preauth = Some(Preauth {
             enc_timestamp: Some(enc_timestamp),
             pa_fx_cookie,
+            ..Default::default()
         });
 
         Ok(self)
@@ -228,11 +223,11 @@ impl TicketGrantRequestBuilder {
             ticket: ticket.clone(),
             session_key: session_key.clone(),
         };
-        self.ap_req = Some(ap_req_builder);
+        self.ap_req_builder = Some(ap_req_builder);
         Ok(self)
     }
 
-    pub fn build(self) -> KerberosRequest {
+    pub fn build(self) -> Result<KerberosRequest, KrbError> {
         let TicketGrantRequestBuilder {
             service_name,
             from,
@@ -240,8 +235,13 @@ impl TicketGrantRequestBuilder {
             renew,
             preauth,
             etypes,
-            ap_req,
+            ap_req_builder,
         } = self;
+
+        let ap_req_builder = ap_req_builder.ok_or(
+            // This will be removed soon
+            KrbError::MissingPaData
+        )?;
 
         // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
         // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
@@ -254,17 +254,86 @@ impl TicketGrantRequestBuilder {
         kdc_options |= KerberosFlags::Renewable;
         kdc_options |= KerberosFlags::Canonicalize;
 
-        KerberosRequest::TGS(TicketGrantRequest {
-            nonce,
-            service_name,
-            from,
-            until,
-            renew,
-            preauth,
-            etypes,
+        let (_, realm) = (&service_name).try_into().unwrap();
+        let sname = (&service_name).try_into().unwrap();
+
+        let req_body = KdcReqBody {
             kdc_options,
-            ap_req,
-        })
+            cname: None,
+            realm,
+            sname: Some(sname),
+            from: from.map(|t| {
+                KerberosTime::from_system_time(t)
+                    .expect("Failed to build KerberosTime from SystemTime")
+            }),
+            till: KerberosTime::from_system_time(until)
+                .expect("Failed to build KerberosTime from SystemTime"),
+            rtime: renew.map(|t| {
+                KerberosTime::from_system_time(t)
+                    .expect("Failed to build KerberosTime from SystemTime")
+            }),
+            nonce,
+            etype: etypes.iter().map(|e| *e as i32).collect(),
+            addresses: None,
+            enc_authorization_data: None,
+            additional_tickets: None,
+        };
+
+        //  The checksum in the authenticator is to be computed over the KDC-REQ-BODY encoding.
+        let checksum = ap_req_builder.session_key.checksum_kdc_req_body(&req_body)?;
+
+        // The encrypted authenticator is included in the AP-REQ; it certifies
+        // to a server that the sender has recent knowledge of the encryption
+        // key in the accompanying ticket, to help the server detect replays.
+        // It also assists in the selection of a "true session key" to use with
+        // the particular session. It is encrypted in the ticket's session key,
+        // with a key usage value of 11 in normal application exchanges, or 7
+        // when used as the PA-TGS-REQ PA-DATA field of a TGS-REQ exchange (see
+        // Section 5.4.1)
+        let (client_name, client_realm) = (&ap_req_builder.client_name).try_into()?;
+        let client_time: SystemTime = SystemTime::now();
+        let subkey: Option<EncryptionKey> = None;
+        let sequence_number: Option<u32> = None;
+        let authorization_data: Option<AuthorizationData> = None;
+        let authenticator: Authenticator = Authenticator::new(
+            client_name,
+            client_realm,
+            client_time,
+            Some(checksum),
+            subkey,
+            sequence_number,
+            authorization_data,
+        );
+        let authenticator: EncryptedData = ap_req_builder
+            .session_key
+            .encrypt_ap_req_authenticator(&authenticator)?;
+        let authenticator: KdcEncryptedData = match authenticator {
+            EncryptedData::Aes256CtsHmacSha196 { kvno, data } => {
+                let cipher = OctetString::new(data.clone())
+                    .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                KdcEncryptedData {
+                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
+                    kvno,
+                    cipher,
+                }
+            }
+        };
+
+        let ap_options: ApOptions =
+            FlagSet::<ApFlags>::new(0b0).expect("Failed to create flagset.");
+
+        let ticket: TaggedTicket = ap_req_builder.ticket.try_into()?;
+        let ap_req: ApReq = ApReq::new(ap_options, ticket, authenticator);
+
+        let preauth = Preauth {
+            tgs_req: Some(ap_req),
+            ..Default::default()
+        };
+
+        Ok(KerberosRequest::TGS(TicketGrantRequest {
+            preauth,
+            req_body,
+        }))
     }
 }
 
@@ -374,90 +443,17 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                 }))
             }
             KerberosRequest::TGS(TicketGrantRequest {
-                nonce,
-                service_name,
-                from,
-                until,
-                renew,
-                preauth: _,
-                etypes,
-                kdc_options,
-                ap_req,
+                preauth,
+                req_body,
             }) => {
-                let (_, realm) = (&service_name).try_into().unwrap();
-                let sname = (&service_name).try_into().unwrap();
+                let padata = if preauth.tgs_req.is_some() {
 
-                let req_body = KdcReqBody {
-                    kdc_options,
-                    cname: None,
-                    realm,
-                    sname: Some(sname),
-                    from: from.map(|t| {
-                        KerberosTime::from_system_time(t)
-                            .expect("Failed to build KerberosTime from SystemTime")
-                    }),
-                    till: KerberosTime::from_system_time(until)
-                        .expect("Failed to build KerberosTime from SystemTime"),
-                    rtime: renew.map(|t| {
-                        KerberosTime::from_system_time(t)
-                            .expect("Failed to build KerberosTime from SystemTime")
-                    }),
-                    nonce,
-                    etype: etypes.iter().map(|e| *e as i32).collect(),
-                    addresses: None,
-                    enc_authorization_data: None,
-                    additional_tickets: None,
-                };
+                    assert!(false);
 
-                let mut padata: Vec<PaData> = Vec::with_capacity(1);
+                    Some(Vec::new())
 
-                if let Some(ap_req) = ap_req {
-                    //  The checksum in the authenticator is to be computed over the KDC-REQ-BODY encoding.
-                    let checksum = ap_req.session_key.checksum_kdc_req_body(&req_body)?;
 
-                    // The encrypted authenticator is included in the AP-REQ; it certifies
-                    // to a server that the sender has recent knowledge of the encryption
-                    // key in the accompanying ticket, to help the server detect replays.
-                    // It also assists in the selection of a "true session key" to use with
-                    // the particular session. It is encrypted in the ticket's session key,
-                    // with a key usage value of 11 in normal application exchanges, or 7
-                    // when used as the PA-TGS-REQ PA-DATA field of a TGS-REQ exchange (see
-                    // Section 5.4.1)
-                    let (client_name, client_realm) = (&ap_req.client_name).try_into()?;
-                    let client_time: SystemTime = SystemTime::now();
-                    let subkey: Option<EncryptionKey> = None;
-                    let sequence_number: Option<u32> = None;
-                    let authorization_data: Option<AuthorizationData> = None;
-                    let authenticator: Authenticator = Authenticator::new(
-                        client_name,
-                        client_realm,
-                        client_time,
-                        Some(checksum),
-                        subkey,
-                        sequence_number,
-                        authorization_data,
-                    );
-                    let authenticator: EncryptedData = ap_req
-                        .session_key
-                        .encrypt_ap_req_authenticator(&authenticator)?;
-                    let authenticator: KdcEncryptedData = match authenticator {
-                        EncryptedData::Aes256CtsHmacSha196 { kvno, data } => {
-                            let cipher = OctetString::new(data.clone())
-                                .map_err(|e| KrbError::DerEncodeOctetString(e))?;
-                            KdcEncryptedData {
-                                etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
-                                kvno,
-                                cipher,
-                            }
-                        }
-                    };
-
-                    let ap_options: ApOptions =
-                        FlagSet::<ApFlags>::new(0b0).expect("Failed to create flagset.");
-
-                    let ticket: TaggedTicket = ap_req.ticket.try_into()?;
-                    let ap_req: ApReq = ApReq::new(ap_options, ticket, authenticator);
-
+                    /*
                     let padata_value = ap_req
                         .to_der()
                         .and_then(OctetString::new)
@@ -466,12 +462,9 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                         padata_type: PaDataType::PaTgsReq as u32,
                         padata_value,
                     });
-                }
-
-                let padata = if !padata.is_empty() {
-                    Some(padata)
+                    */
                 } else {
-                    None
+                    return Err(KrbError::MissingPaData)
                 };
 
                 Ok(KrbKdcReq::TgsReq(KdcReq {
@@ -570,7 +563,29 @@ impl TryFrom<KdcReq> for KerberosRequest {
                 }))
             }
             KrbMessageType::KrbTgsReq => {
-                todo!();
+                trace!("{:#?}", req);
+
+                // IMPORTANT! At this point, since we don't yet have the session key, req_body
+                // shouldn't be parsed. We need to process padata first to get the tgs and
+                // relevant info *before* we can proceed, as we need to checksum the bytes
+                // of the req_body.
+                //
+                // There is a MAJOR RISK that at this point, we will fail to checksum, since
+                // our current design forces us to recanonicalise req_body to checksum it!!!
+                //
+                // We might be able to avoid this by the use of pa-fx-fast but that has it's
+                // own bag of complexity ...
+                let preauth = req
+                    .padata
+                    .map(|pavec| Preauth::try_from(pavec))
+                    .transpose()?
+                    .unwrap_or_default();
+                trace!(?preauth);
+
+                Ok(KerberosRequest::TGS(TicketGrantRequest {
+                    preauth,
+                    req_body: req.req_body,
+                }))
             }
             _ => Err(KrbError::InvalidMessageDirection),
         }

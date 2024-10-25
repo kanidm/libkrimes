@@ -6,6 +6,7 @@ pub use self::request::{AuthenticationRequest, KerberosRequest, TicketGrantReque
 
 use crate::asn1::authenticator::Authenticator;
 use crate::asn1::checksum::Checksum;
+use crate::asn1::ap_req::ApReq;
 use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::kdc_req_body::KdcReqBody;
 use crate::asn1::{
@@ -48,6 +49,8 @@ use tokio_util::codec::Framed;
 
 #[derive(Debug, Default)]
 pub struct Preauth {
+    tgs_req: Option<ApReq>,
+    pa_fx_fast: Option<PaFxFastRequest>,
     enc_timestamp: Option<EncryptedData>,
     pa_fx_cookie: Option<Vec<u8>>,
 }
@@ -500,6 +503,13 @@ impl TryFrom<Vec<PaData>> for Preauth {
             };
 
             match padt {
+                PaDataType::PaTgsReq => {
+                    // 5.2.7.1 - The padata_value contains an encoded AP-REQ
+                    let ap_req = ApReq::from_der(padata_value.as_bytes())
+                        .map_err(|_| KrbError::DerDecodePaData)?;
+
+                    preauth.tgs_req = Some(ap_req);
+                }
                 PaDataType::PaEncTimestamp => {
                     let enc_timestamp = KdcEncryptedData::from_der(padata_value.as_bytes())
                         .map_err(|_| KrbError::DerDecodePaData)
@@ -508,6 +518,12 @@ impl TryFrom<Vec<PaData>> for Preauth {
                 }
                 PaDataType::PaFxCookie => {
                     preauth.pa_fx_cookie = Some(padata_value.as_bytes().to_vec())
+                }
+                PaDataType::PaFxFast => {
+                    let pa_fx_data = PaFxFastRequest::from_der(padata_value.as_bytes())
+                        .map_err(|_| KrbError::DerDecodePaData)
+                        .and_then(EncryptedData::try_from)?;
+                    preauth.pa_fix_data = Some(pa_fx_data);
                 }
                 _ => {
                     // Ignore unsupported pa data types.
