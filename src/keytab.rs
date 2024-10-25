@@ -1,6 +1,6 @@
 use binrw::helpers::until_eof;
 use binrw::io::TakeSeekExt;
-use binrw::io::{Seek, Write};
+use binrw::io::{Seek, SeekFrom, Write};
 use binrw::{binread, binwrite, BinWrite};
 use std::fmt;
 
@@ -79,17 +79,32 @@ pub enum RecordData {
     },
 }
 
+// Custom writer to seek back to fill the record length
+#[binrw::writer(writer, endian)]
+fn write_rdata(rdata: &RecordData) -> binrw::BinResult<()> {
+    let start = writer.stream_position()?;
+    rdata.write_options(writer, endian, ())?;
+    let end = writer.stream_position()?;
+    let rlen: i32 = end as i32 - start as i32;
+
+    writer.seek(SeekFrom::Start(start - 4))?;
+    rlen.write_options(writer, endian, ())?;
+    writer.seek(SeekFrom::Start(end))?;
+    Ok(())
+}
+
 #[binread]
 #[binwrite]
 #[brw(big)]
 #[br(import { version: u8 })]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
-    #[br(dbg)]
-    #[bw(if(*rlen > 0))]
+    #[br(temp)]
+    #[bw(if (matches!(rdata, RecordData::Entry { .. })), calc = 0)]
+    // This field is always written as 0, the custom rdata writer will seek back to fill it
     pub rlen: i32,
     #[br(map_stream = |s| s.take_seek(rlen.abs() as u64), args { version, rlen })]
-    #[bw(if(*rlen > 0))]
+    #[bw(if (matches!(rdata, RecordData::Entry { .. })), write_with = write_rdata)]
     pub rdata: RecordData,
 }
 
@@ -123,9 +138,9 @@ pub enum Keytab {
     File(Vec<KeytabEntry>),
 }
 
-impl From<&KeytabEntry> for Record {
+impl From<&KeytabEntry> for RecordData {
     fn from(value: &KeytabEntry) -> Self {
-        let rdata = RecordData::Entry {
+        RecordData::Entry {
             principal: value.principal.clone().into(),
             // I think this is NOT 2038 safe and requires a version change ...
             // indicates when the key was emitted to the keytab.
@@ -142,8 +157,7 @@ impl From<&KeytabEntry> for Record {
             },
             // Needs to be set?
             key_version_u32: Some(value.kvno),
-        };
-        Record { rdata, rlen: 409_6 }
+        }
     }
 }
 
@@ -215,7 +229,15 @@ impl From<&Keytab> for FileKeytab {
     fn from(value: &Keytab) -> Self {
         match value {
             Keytab::File(entries) => {
-                let records: Vec<Record> = entries.iter().map(|x| x.into()).collect();
+                let records: Vec<Record> = entries
+                    .iter()
+                    .map(|x| {
+                        let rdata: RecordData = x.into();
+                        Record {
+                            rdata
+                        }
+                    })
+                    .collect();
                 let fk2: FileKeytabV2 = FileKeytabV2 { records };
                 let fk: FileKeytab = FileKeytab::V2(fk2);
                 fk
@@ -323,7 +345,13 @@ mod tests {
         assert!(matches!(k.records[4].rdata, RecordData::Hole { .. }));
         assert!(matches!(k.records[5].rdata, RecordData::Entry { .. }));
 
-        let holes_len = 4 + k.records[1].rlen.abs() + 4 + k.records[4].rlen.abs();
+        let mut holes_len = 0;
+        for r in &k.records {
+            match &r.rdata {
+                RecordData::Hole { pad } => holes_len += pad.len() + 4,
+                _ => ()
+            }
+        }
 
         let mut c = std::io::Cursor::new(Vec::new());
         let krime_keytab = FileKeytab::read(&mit_buf).expect("Failed to read from buffer");
