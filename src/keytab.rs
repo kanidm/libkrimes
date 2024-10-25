@@ -12,12 +12,12 @@ use crate::proto::{DerivedKey, Name};
 #[brw(big)]
 #[binread]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Data {
+struct Data {
     #[br(temp)]
     #[bw(try_calc(u16::try_from(value.len())))]
-    pub value_len: u16,
+    value_len: u16,
     #[br(count = value_len)]
-    pub value: Vec<u8>,
+    value: Vec<u8>,
 }
 
 #[binwrite]
@@ -25,16 +25,16 @@ pub struct Data {
 #[binread]
 #[br(import { version: u8 })]
 #[derive(Clone, PartialEq, Eq)]
-pub struct Principal {
+struct Principal {
     #[br(temp)]
     #[bw(try_calc(u16::try_from(components.len())))]
-    pub components_count: u16,
-    pub realm: Data,
+    components_count: u16,
+    realm: Data,
     // components includes the realm in version 1
     #[br(count = if version == 1 { components_count - 1 } else { components_count })]
-    pub components: Vec<Data>,
+    components: Vec<Data>,
     #[br(if(version > 1))]
-    pub name_type: Option<u32>,
+    name_type: Option<u32>,
 }
 
 impl fmt::Debug for Principal {
@@ -57,7 +57,7 @@ impl fmt::Debug for Principal {
 #[brw(big)]
 #[br(import { version: u8, rlen: i32 })]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RecordData {
+enum RecordData {
     #[br(pre_assert(rlen > 0))]
     Entry {
         #[br(args { version })]
@@ -98,30 +98,30 @@ fn write_rdata(rdata: &RecordData) -> binrw::BinResult<()> {
 #[brw(big)]
 #[br(import { version: u8 })]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Record {
+struct Record {
     #[br(temp)]
     #[bw(if (matches!(rdata, RecordData::Entry { .. })), calc = 0)]
     // This field is always written as 0, the custom rdata writer will seek back to fill it
-    pub rlen: i32,
+    rlen: i32,
     #[br(map_stream = |s| s.take_seek(rlen.abs() as u64), args { version, rlen })]
     #[bw(if (matches!(rdata, RecordData::Entry { .. })), write_with = write_rdata)]
-    pub rdata: RecordData,
+    rdata: RecordData,
 }
 
 #[binread]
 #[binwrite]
 #[brw(big)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileKeytabV2 {
+struct FileKeytabV2 {
     #[br(parse_with = until_eof, args { version: 2 })]
-    pub records: Vec<Record>,
+    records: Vec<Record>,
 }
 
 #[binread]
 #[binwrite]
 #[brw(big, magic = 5u8)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileKeytab {
+enum FileKeytab {
     #[brw(magic = 2u8)]
     V2(FileKeytabV2),
 }
