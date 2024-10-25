@@ -50,7 +50,8 @@ use tokio_util::codec::Framed;
 #[derive(Debug, Default)]
 pub struct Preauth {
     tgs_req: Option<ApReq>,
-    pa_fx_fast: Option<PaFxFastRequest>,
+    // pa_fx_fast: Option<PaFxFastRequest>,
+    pa_fx_fast: Option<Vec<u8>>,
     enc_timestamp: Option<EncryptedData>,
     pa_fx_cookie: Option<Vec<u8>>,
 }
@@ -520,10 +521,13 @@ impl TryFrom<Vec<PaData>> for Preauth {
                     preauth.pa_fx_cookie = Some(padata_value.as_bytes().to_vec())
                 }
                 PaDataType::PaFxFast => {
+                    /*
                     let pa_fx_data = PaFxFastRequest::from_der(padata_value.as_bytes())
                         .map_err(|_| KrbError::DerDecodePaData)
                         .and_then(EncryptedData::try_from)?;
-                    preauth.pa_fix_data = Some(pa_fx_data);
+                    preauth.pa_fix_fast = Some(pa_fx_data);
+                    */
+                    preauth.pa_fx_fast = None;
                 }
                 _ => {
                     // Ignore unsupported pa data types.

@@ -5,6 +5,7 @@ use libkrime::asn1::kerberos_flags::KerberosFlags;
 use libkrime::asn1::ticket_flags::TicketFlags;
 use libkrime::proto::{
     AuthenticationRequest, DerivedKey, KdcPrimaryKey, KerberosReply, KerberosRequest, Name,
+    TicketGrantRequest,
 };
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
@@ -330,6 +331,31 @@ async fn process_authentication(
         })
 }
 
+#[instrument(level = "trace", skip_all)]
+async fn process_ticket_grant(
+    tgs_req: TicketGrantRequest,
+    server_state: &ServerState,
+) -> Result<KerberosReply, KerberosReply> {
+    let stime = SystemTime::now();
+
+
+
+
+
+
+    
+
+
+    let builder = KerberosReply::ticket_grant_builder();
+
+    builder
+        .build()
+        .map_err(|kdc_err| {
+            error!(?kdc_err);
+            KerberosReply::error_internal(auth_req.service_name.clone(), stime)
+        })
+}
+
 async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerState>) {
     let mut kdc_stream = Framed::new(socket, KdcTcpCodec::default());
     trace!(?info, "connection from");
@@ -349,9 +375,17 @@ async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerSt
                 }
                 continue;
             }
-            KerberosRequest::TGS(_) => {
-                error!("TGS TODO");
-                todo!();
+            KerberosRequest::TGS(tgs_req) => {
+                let reply = match process_ticket_grant(tgs_req, &server_state).await {
+                    Ok(rep) => rep,
+                    Err(krb_err) => krb_err,
+                };
+
+                if let Err(err) = kdc_stream.send(reply).await {
+                    error!(?err, "error writing response, disconnecting");
+                    break;
+                }
+                continue;
             }
         }
     }

@@ -47,7 +47,9 @@ pub struct AuthenticationReply {
 }
 
 #[derive(Debug)]
-pub struct TicketGrantReply {}
+pub struct TicketGrantReply {
+    
+}
 
 #[derive(Debug)]
 pub struct PreauthReply {
@@ -88,6 +90,10 @@ pub struct KerberosReplyAuthenticationBuilder {
     flags: FlagSet<TicketFlags>,
 }
 
+pub struct KerberosReplyTicketGrantBuilder {
+    
+}
+
 impl KerberosReply {
     pub fn preauth_builder(service: Name, stime: SystemTime) -> KerberosReplyPreauthBuilder {
         let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;
@@ -125,6 +131,12 @@ impl KerberosReply {
             end_time,
             renew_until,
             flags,
+        }
+    }
+
+    pub fn ticket_grant_builder(
+    ) -> KerberosReplyTicketGrantBuilder {
+        KerberosReplyTicketGrantBuilder {
         }
     }
 
@@ -404,6 +416,15 @@ impl KerberosReplyAuthenticationBuilder {
     }
 }
 
+impl KerberosReplyTicketGrantBuilder {
+    pub fn build(
+        self,
+    ) -> Result<KerberosReply, KrbError> {
+        Ok(KerberosReply::TGS(TicketGrantReply {
+        }))
+    }
+}
+
 impl TryFrom<KrbKdcRep> for KerberosReply {
     type Error = KrbError;
 
@@ -543,7 +564,19 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                 Ok(KrbKdcRep::AsRep(as_rep))
             }
             KerberosReply::TGS(TicketGrantReply {}) => {
-                todo!();
+                // So how to build all these now?
+
+                let tgs_rep = KdcRep {
+                    pvno: 5,
+                    msg_type: KrbMessageType::KrbTgsRep as u8,
+                    padata: pa_data,
+                    crealm: (&name).try_into()?,
+                    cname: (&name).try_into()?,
+                    ticket: ticket.try_into()?,
+                    enc_part: enc_part.try_into()?,
+                };
+
+                Ok(KrbKdcRep::TgsRep(tgs_rep))
             }
             KerberosReply::PA(PreauthReply {
                 pa_data,
