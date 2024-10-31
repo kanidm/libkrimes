@@ -572,7 +572,10 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                     padata: pa_data,
                     crealm: (&name).try_into()?,
                     cname: (&name).try_into()?,
+
+                    // Ticket for the requested server.
                     ticket: ticket.try_into()?,
+                    // 
                     enc_part: enc_part.try_into()?,
                 };
 
