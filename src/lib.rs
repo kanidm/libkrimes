@@ -299,8 +299,9 @@ mod tests {
         )
         .renew_until(Some(now + Duration::from_secs(86400 * 7)))
         .preauth_ap_req(&client_name, &ticket, &session_key)
-        .expect("Failed to build AP-REQ")
-        .build();
+        .expect("Failed to build PREAUTH-AP-REQ")
+        .build()
+        .expect("Failed to build AP-REQ");
 
         krb_stream
             .send(tgs_req)

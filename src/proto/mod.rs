@@ -32,7 +32,7 @@ use crate::crypto::{
     derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{flagset::FlagSet, Decode, Encode};
+use der::{asn1::Any, flagset::FlagSet, Decode, Encode};
 use rand::{thread_rng, Rng};
 
 use std::cmp::Ordering;
@@ -326,7 +326,7 @@ impl SessionKey {
         }
     }
 
-    fn checksum_kdc_req_body(&self, req_body: &KdcReqBody) -> Result<Checksum, KrbError> {
+    fn checksum_kdc_req_body(&self, req_body: &Any) -> Result<Checksum, KrbError> {
         let req_body = req_body
             .to_der()
             .map_err(|e| KrbError::DerEncodeKdcReqBody(e))?;
@@ -1146,14 +1146,14 @@ mod tests {
 
     use super::SessionKey;
     use assert_hex::assert_eq_hex;
-    use der::Decode;
+    use der::{asn1::Any, Decode};
 
     #[tokio::test]
     async fn test_ap_req_authenticator_checksum() {
         let kdc_req_body = "3072a0050303000081a20d1b0b4558414d504c452e434f4da3253023a003020103a11c301a1b04686f73741b127065707065722e6578616d706c652e636f6da511180f32303234313031313131303335395aa611180f32303234313031383130303335395aa706020436ce306ba8053003020112";
         let kdc_req_body = hex::decode(kdc_req_body).expect("Failed to decode sample");
-        let kdc_req_body: KdcReqBody =
-            KdcReqBody::from_der(&kdc_req_body).expect("Failed to DER decode sample");
+        let kdc_req_body: Any = Any::from_der(&kdc_req_body).expect("Failed to DER decode sample");
+
         let session_key = "167391F64DA06DDE35752AFC110DCF6BFD797BF2B64027C98941ACDBDE3C356B";
         let session_key = hex::decode(session_key).expect("Failed to decode sample");
         let session_key = SessionKey::Aes256CtsHmacSha196 {
@@ -1163,6 +1163,7 @@ mod tests {
         };
         let checksum = "E101C395D98466F1FE8B6D79";
         let checksum = hex::decode(checksum).expect("Failed to decode sample");
+
         let calculated_checksum = session_key
             .checksum_kdc_req_body(&kdc_req_body)
             .expect("Failed to compute checksum");

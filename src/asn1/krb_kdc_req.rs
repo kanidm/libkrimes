@@ -103,6 +103,7 @@ impl ::der::Encode for KrbKdcReq {
 mod tests {
     use crate::asn1::constants::{EncryptionType, KrbMessageType, PaDataType};
     use crate::asn1::kdc_req::KdcReq;
+    use crate::asn1::kdc_req_body::KdcReqBody;
     use crate::asn1::kerberos_flags::KerberosFlags;
     use crate::asn1::kerberos_time::KerberosTime;
     use crate::asn1::krb_kdc_req::KrbKdcReq;
@@ -147,39 +148,42 @@ mod tests {
         // let bits = asreq.req_body.kdc_options;
         // assert_eq!(bits, tasreq.kdc_options);
 
-        let ref cname = &asreq.req_body.cname.as_ref().unwrap();
+        // Needed because we have to hold the req body as Any (raw bytes) until
+        // we perform checksums in the TGS path.
+        let req_body = asreq.req_body.decode_as::<KdcReqBody>().unwrap();
+
+        let ref cname = req_body.cname.as_ref().unwrap();
         assert_eq!(cname.name_type, 1);
         assert_eq!(cname.name_string[0].0.to_string(), tasreq.principal);
 
-        assert_eq!(asreq.req_body.realm.0.to_string(), tasreq.realm);
+        assert_eq!(req_body.realm.0.to_string(), tasreq.realm);
 
-        let ref sname = &asreq.req_body.sname.as_ref().unwrap();
+        let ref sname = req_body.sname.as_ref().unwrap();
         assert_eq!(sname.name_type, 2);
         assert_eq!(sname.name_string[0].0.to_string(), "krbtgt");
         assert_eq!(sname.name_string[1].0.to_string(), tasreq.realm);
 
         if let Some(trtime) = tasreq.rtime {
-            let rtime = asreq.req_body.rtime.expect("rtime must be there");
+            let rtime = req_body.rtime.expect("rtime must be there");
             assert_eq!(rtime, trtime);
         } else {
-            assert!(asreq.req_body.rtime.is_none());
+            assert!(req_body.rtime.is_none());
         }
 
-        assert_eq!(asreq.req_body.till, tasreq.till);
+        assert_eq!(req_body.till, tasreq.till);
 
         if let Some(tfrom) = tasreq.from {
-            let from = asreq.req_body.from.expect("from must be there");
+            let from = req_body.from.expect("from must be there");
             assert_eq!(from, tfrom);
         } else {
-            assert!(asreq.req_body.from.is_none());
+            assert!(req_body.from.is_none());
         }
 
-        assert_eq!(asreq.req_body.nonce, tasreq.nonce);
-        assert_eq!(asreq.req_body.etype, tasreq.etype);
+        assert_eq!(req_body.nonce, tasreq.nonce);
+        assert_eq!(req_body.etype, tasreq.etype);
 
         if let Some(taddrs) = &tasreq.addresses {
-            let addrs = asreq
-                .req_body
+            let addrs = req_body
                 .addresses
                 .as_ref()
                 .expect("addresses must be there");
@@ -191,7 +195,7 @@ mod tests {
                 assert_eq!(addr.address, taddr.1);
             }
         } else {
-            assert!(asreq.req_body.addresses.is_none());
+            assert!(req_body.addresses.is_none());
         }
     }
 
