@@ -28,7 +28,9 @@ use rand::{thread_rng, Rng};
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
-use super::{DerivedKey, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, Ticket};
+use super::{
+    DerivedKey, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, SessionKey, Ticket,
+};
 
 #[derive(Debug)]
 pub enum KerberosReply {
@@ -47,9 +49,7 @@ pub struct AuthenticationReply {
 }
 
 #[derive(Debug)]
-pub struct TicketGrantReply {
-    
-}
+pub struct TicketGrantReply {}
 
 #[derive(Debug)]
 pub struct PreauthReply {
@@ -90,9 +90,7 @@ pub struct KerberosReplyAuthenticationBuilder {
     flags: FlagSet<TicketFlags>,
 }
 
-pub struct KerberosReplyTicketGrantBuilder {
-    
-}
+pub struct KerberosReplyTicketGrantBuilder {}
 
 impl KerberosReply {
     pub fn preauth_builder(service: Name, stime: SystemTime) -> KerberosReplyPreauthBuilder {
@@ -134,10 +132,8 @@ impl KerberosReply {
         }
     }
 
-    pub fn ticket_grant_builder(
-    ) -> KerberosReplyTicketGrantBuilder {
-        KerberosReplyTicketGrantBuilder {
-        }
+    pub fn ticket_grant_builder() -> KerberosReplyTicketGrantBuilder {
+        KerberosReplyTicketGrantBuilder {}
     }
 
     pub fn error_no_etypes(service: Name, stime: SystemTime) -> KerberosReply {
@@ -308,15 +304,8 @@ impl KerberosReplyAuthenticationBuilder {
         primary_key: &KdcPrimaryKey,
     ) -> Result<KerberosReply, KrbError> {
         // Build and encrypt the reply.
-        let mut session_key = [0u8; AES_256_KEY_LEN];
-        thread_rng().fill(&mut session_key);
-        let key_value =
-            OctetString::new(session_key).map_err(|e| KrbError::DerEncodeOctetString(e))?;
-
-        let session_key = KdcEncryptionKey {
-            key_type: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
-            key_value,
-        };
+        let session_key = SessionKey::new();
+        let session_key: KdcEncryptionKey = session_key.try_into()?;
 
         let (cname, crealm) = (&self.client).try_into().unwrap();
         let (server_name, server_realm) = (&self.server).try_into().unwrap();
@@ -383,16 +372,7 @@ impl KerberosReplyAuthenticationBuilder {
             authorization_data: None,
         };
 
-        let data = ticket_inner
-            .to_der()
-            .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
-
-        let ticket_enc_part = match primary_key {
-            KdcPrimaryKey::Aes256 { k } => {
-                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, 3)?;
-                EncryptedData::Aes256CtsHmacSha196 { kvno: None, data }
-            }
-        };
+        let ticket_enc_part = primary_key.encrypt_tgt(ticket_inner)?;
 
         let ticket = Ticket {
             tkt_vno: 5,
@@ -417,11 +397,8 @@ impl KerberosReplyAuthenticationBuilder {
 }
 
 impl KerberosReplyTicketGrantBuilder {
-    pub fn build(
-        self,
-    ) -> Result<KerberosReply, KrbError> {
-        Ok(KerberosReply::TGS(TicketGrantReply {
-        }))
+    pub fn build(self) -> Result<KerberosReply, KrbError> {
+        Ok(KerberosReply::TGS(TicketGrantReply {}))
     }
 }
 
@@ -563,8 +540,15 @@ impl TryInto<KrbKdcRep> for KerberosReply {
 
                 Ok(KrbKdcRep::AsRep(as_rep))
             }
-            KerberosReply::TGS(TicketGrantReply {}) => {
+            KerberosReply::TGS(TicketGrantReply {
+                // What is needed here?
+            }) => {
                 // So how to build all these now?
+
+                todo!();
+
+                /*
+
 
                 let tgs_rep = KdcRep {
                     pvno: 5,
@@ -580,6 +564,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                 };
 
                 Ok(KrbKdcRep::TgsRep(tgs_rep))
+                */
             }
             KerberosReply::PA(PreauthReply {
                 pa_data,

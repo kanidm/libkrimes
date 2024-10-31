@@ -1,7 +1,7 @@
 use crate::asn1::{
     ap_options::{ApFlags, ApOptions},
-    ap_req::ApReq,
-    authenticator::Authenticator,
+    ap_req::{ApReq, ApReqInner},
+    authenticator::{Authenticator, AuthenticatorInner},
     authorization_data::AuthorizationData,
     constants::{
         encryption_types::EncryptionType, message_types::KrbMessageType, pa_data_types::PaDataType,
@@ -25,7 +25,9 @@ use rand::{thread_rng, Rng};
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
-use super::{DerivedKey, EncryptedData, Name, Preauth, PreauthData, SessionKey, Ticket};
+use super::{
+    DerivedKey, EncryptedData, KdcPrimaryKey, Name, Preauth, PreauthData, SessionKey, Ticket,
+};
 
 #[derive(Debug)]
 pub enum KerberosRequest {
@@ -240,7 +242,7 @@ impl TicketGrantRequestBuilder {
 
         let ap_req_builder = ap_req_builder.ok_or(
             // This will be removed soon
-            KrbError::MissingPaData
+            KrbError::MissingPaData,
         )?;
 
         // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
@@ -280,7 +282,9 @@ impl TicketGrantRequestBuilder {
         };
 
         //  The checksum in the authenticator is to be computed over the KDC-REQ-BODY encoding.
-        let checksum = ap_req_builder.session_key.checksum_kdc_req_body(&req_body)?;
+        let checksum = ap_req_builder
+            .session_key
+            .checksum_kdc_req_body(&req_body)?;
 
         // The encrypted authenticator is included in the AP-REQ; it certifies
         // to a server that the sender has recent knowledge of the encryption
@@ -334,6 +338,99 @@ impl TicketGrantRequestBuilder {
             preauth,
             req_body,
         }))
+    }
+}
+
+impl TicketGrantRequest {
+    pub fn validate(self, primary_key: &KdcPrimaryKey, realm: &str) -> Result<(), KrbError> {
+        // Destructure the ticket grant to make it easier to handle.
+        let TicketGrantRequest {
+            preauth:
+                Preauth {
+                    tgs_req,
+                    pa_fx_fast,
+                    enc_timestamp: _,
+                    pa_fx_cookie: _,
+                },
+            req_body,
+        } = self;
+
+        let Some(ap_req) = tgs_req else {
+            return Err(KrbError::TgsMissingPaApReq);
+        };
+
+        let ap_req: ApReqInner = ap_req.into();
+
+        if ap_req.pvno != 5 || ap_req.msg_type != 14 {
+            return Err(KrbError::TgsInvalidPaApReq);
+        };
+
+        let ap_req_ticket = ap_req.ticket.0;
+        let ap_req_authenticator = EncryptedData::try_from(ap_req.authenticator)?;
+        let ap_req_options = ap_req.ap_options;
+
+        trace!("{:#?}", ap_req_ticket);
+        trace!("{:#?}", ap_req_authenticator);
+
+        // Decrypt the ticket. This should be the TGT and contains the session
+        // key used for encryption of the authenticator.
+
+        if ap_req_ticket.realm.as_str() != realm {
+            todo!();
+        }
+
+        let ap_req_ticket_service_name = Name::try_from(ap_req_ticket.sname)?;
+
+        if !ap_req_ticket_service_name.is_service_krbtgt(realm) {
+            todo!();
+        }
+
+        let ap_req_ticket_enc = EncryptedData::try_from(ap_req_ticket.enc_part)?;
+
+        let enc_ticket_part = ap_req_ticket_enc.decrypt_enc_tgt(primary_key)?;
+
+        trace!("{:#?}", enc_ticket_part);
+
+        // TODO! Validate the start_time / enc_time / auth_time.
+
+        // Do we need to do anything with cname/crealm?
+
+        // Get the session Key.
+
+        let session_key = SessionKey::try_from(enc_ticket_part.key)?;
+
+        // Decrypt the authenticator
+        let authenticator = session_key.decrypt_ap_req_authenticator(ap_req_authenticator)?;
+
+        let authenticator: AuthenticatorInner = authenticator.into();
+
+        trace!("{:#?}", authenticator);
+
+        let Some(authenticator_checksum) = authenticator.cksum else {
+            return Err(KrbError::TgsAuthMissingChecksum);
+        };
+
+        // WARNING WARNING WARNING WARNING
+        //
+        // This currently has to re-serialise the req_body to computer the checksum
+        // which may cause issues with canonicalisation. We need to potentially
+        // keep the reqbody as raw u8 until we perform this step, and then perform
+        // a from-der on it!
+        //
+        // WARNING WARNING WARNING WARNING
+        let checksum = session_key.checksum_kdc_req_body(&req_body)?;
+
+        // Validate that the checksum matches what our authenticator contains.
+
+        if checksum != authenticator_checksum {
+            tracing::debug!(?checksum, ?authenticator_checksum);
+            return Err(KrbError::TgsAuthChecksumFailure);
+        }
+
+        // Now at this point, we can actually release all the parts of the TicketGrantRequest
+        // for the KDC to handle and form into a TicketGrantResponse
+
+        todo!();
     }
 }
 
@@ -442,29 +539,24 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                     },
                 }))
             }
-            KerberosRequest::TGS(TicketGrantRequest {
-                preauth,
-                req_body,
-            }) => {
+            KerberosRequest::TGS(TicketGrantRequest { preauth, req_body }) => {
                 let padata = if preauth.tgs_req.is_some() {
+                    let mut padata_inner = Vec::with_capacity(1);
 
-                    assert!(false);
+                    if let Some(ap_req) = &preauth.tgs_req {
+                        let padata_value = ap_req
+                            .to_der()
+                            .and_then(OctetString::new)
+                            .map_err(|e| KrbError::DerEncodeApReq(e))?;
+                        padata_inner.push(PaData {
+                            padata_type: PaDataType::PaTgsReq as u32,
+                            padata_value,
+                        });
+                    }
 
-                    Some(Vec::new())
-
-
-                    /*
-                    let padata_value = ap_req
-                        .to_der()
-                        .and_then(OctetString::new)
-                        .map_err(|e| KrbError::DerEncodeApReq(e))?;
-                    padata.push(PaData {
-                        padata_type: PaDataType::PaTgsReq as u32,
-                        padata_value,
-                    });
-                    */
+                    Some(padata_inner)
                 } else {
-                    return Err(KrbError::MissingPaData)
+                    None
                 };
 
                 Ok(KrbKdcReq::TgsReq(KdcReq {

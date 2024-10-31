@@ -338,12 +338,11 @@ async fn process_ticket_grant(
 ) -> Result<KerberosReply, KerberosReply> {
     let stime = SystemTime::now();
 
+    tgs_req
+        .validate(&server_state.primary_key, &server_state.realm)
+        .unwrap();
 
-
-
-
-
-    
+    /*
 
 
     let builder = KerberosReply::ticket_grant_builder();
@@ -352,8 +351,11 @@ async fn process_ticket_grant(
         .build()
         .map_err(|kdc_err| {
             error!(?kdc_err);
-            KerberosReply::error_internal(auth_req.service_name.clone(), stime)
+            KerberosReply::error_internal(tgs_req.service_name.clone(), stime)
         })
+        */
+
+    todo!();
 }
 
 async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerState>) {
