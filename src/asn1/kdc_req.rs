@@ -1,5 +1,6 @@
 use super::kdc_req_body::KdcReqBody;
 use super::pa_data::PaData;
+use der::asn1::Any;
 use der::Sequence;
 
 /// ```text
@@ -21,5 +22,6 @@ pub struct KdcReq {
     #[asn1(context_specific = "3", optional = "true")]
     pub(crate) padata: Option<Vec<PaData>>,
     #[asn1(context_specific = "4")]
-    pub(crate) req_body: KdcReqBody,
+    pub(crate) req_body: Any,
+    // pub(crate) req_body: KdcReqBody,
 }

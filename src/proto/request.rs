@@ -19,7 +19,7 @@ use crate::asn1::{
     OctetString,
 };
 use crate::error::KrbError;
-use der::{flagset::FlagSet, Encode};
+use der::{asn1::Any, flagset::FlagSet, Decode, Encode};
 use rand::{thread_rng, Rng};
 
 use std::time::{Duration, SystemTime};
@@ -51,7 +51,8 @@ pub struct AuthenticationRequest {
 #[derive(Debug)]
 pub struct TicketGrantRequest {
     pub preauth: Preauth,
-    pub(crate) req_body: KdcReqBody,
+    // pub(crate) req_body: Vec<u8>,
+    pub(crate) req_body: Any,
 }
 
 #[derive(Debug)]
@@ -281,6 +282,8 @@ impl TicketGrantRequestBuilder {
             additional_tickets: None,
         };
 
+        let req_body = Any::encode_from(&req_body).unwrap();
+
         //  The checksum in the authenticator is to be computed over the KDC-REQ-BODY encoding.
         let checksum = ap_req_builder
             .session_key
@@ -507,36 +510,40 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                 let (cname, realm) = (&client_name).try_into().unwrap();
                 let sname = (&service_name).try_into().unwrap();
 
+                let req_body = KdcReqBody {
+                    kdc_options,
+                    cname: Some(cname),
+                    // Per the RFC this is the "servers realm" in an AsReq but also the clients. So it's really
+                    // not clear if the sname should have the realm or not or if this can be divergent between
+                    // the client and server realm. What a clownshow, completely of their own making by trying
+                    // to reuse structures in inconsistent ways. For now, we copy whatever bad behaviour mit
+                    // krb does, because it's probably wrong, but it's the reference impl.
+                    realm,
+                    sname: Some(sname),
+                    from: from.map(|t| {
+                        KerberosTime::from_system_time(t)
+                            .expect("Failed to build KerberosTime from SystemTime")
+                    }),
+                    till: KerberosTime::from_system_time(until)
+                        .expect("Failed to build KerberosTime from SystemTime"),
+                    rtime: renew.map(|t| {
+                        KerberosTime::from_system_time(t)
+                            .expect("Failed to build KerberosTime from SystemTime")
+                    }),
+                    nonce,
+                    etype: etypes.iter().map(|e| *e as i32).collect(),
+                    addresses: None,
+                    enc_authorization_data: None,
+                    additional_tickets: None,
+                };
+
+                let req_body = Any::encode_from(&req_body).unwrap();
+
                 Ok(KrbKdcReq::AsReq(KdcReq {
                     pvno: 5,
                     msg_type: KrbMessageType::KrbAsReq as u8,
                     padata,
-                    req_body: KdcReqBody {
-                        kdc_options,
-                        cname: Some(cname),
-                        // Per the RFC this is the "servers realm" in an AsReq but also the clients. So it's really
-                        // not clear if the sname should have the realm or not or if this can be divergent between
-                        // the client and server realm. What a clownshow, completely of their own making by trying
-                        // to reuse structures in inconsistent ways. For now, we copy whatever bad behaviour mit
-                        // krb does, because it's probably wrong, but it's the reference impl.
-                        realm,
-                        sname: Some(sname),
-                        from: from.map(|t| {
-                            KerberosTime::from_system_time(t)
-                                .expect("Failed to build KerberosTime from SystemTime")
-                        }),
-                        till: KerberosTime::from_system_time(until)
-                            .expect("Failed to build KerberosTime from SystemTime"),
-                        rtime: renew.map(|t| {
-                            KerberosTime::from_system_time(t)
-                                .expect("Failed to build KerberosTime from SystemTime")
-                        }),
-                        nonce,
-                        etype: etypes.iter().map(|e| *e as i32).collect(),
-                        addresses: None,
-                        enc_authorization_data: None,
-                        additional_tickets: None,
-                    },
+                    req_body,
                 }))
             }
             KerberosRequest::TGS(TicketGrantRequest { preauth, req_body }) => {
@@ -596,9 +603,10 @@ impl TryFrom<KdcReq> for KerberosRequest {
 
         match msg_type {
             KrbMessageType::KrbAsReq => {
+                let req_body = req.req_body.decode_as::<KdcReqBody>().unwrap();
+
                 // Filter and use only the finest of etypes.
-                let etypes = req
-                    .req_body
+                let etypes = req_body
                     .etype
                     .iter()
                     .filter_map(|etype| {
@@ -618,25 +626,24 @@ impl TryFrom<KdcReq> for KerberosRequest {
                     .unwrap_or_default();
                 trace!(?preauth);
 
-                trace!(req_body = ?req.req_body);
+                trace!(?req_body);
 
-                let cname = req.req_body.cname.ok_or(KrbError::MissingClientName)?;
-                let realm = req.req_body.realm;
+                let cname = req_body.cname.ok_or(KrbError::MissingClientName)?;
+                let realm = req_body.realm;
 
                 let client_name: Name = (cname, realm).try_into().unwrap();
 
                 // Is realm from .realm? In the service? Who knows! The krb spec is cooked.
-                let service_name: Name = req
-                    .req_body
+                let service_name: Name = req_body
                     .sname
                     .ok_or(KrbError::MissingServiceNameWithRealm)
                     .and_then(|s| s.try_into())?;
 
-                let from = req.req_body.from.map(|t| t.to_system_time());
-                let until = req.req_body.till.to_system_time();
-                let renew = req.req_body.rtime.map(|t| t.to_system_time());
-                let nonce = req.req_body.nonce;
-                let kdc_options = req.req_body.kdc_options;
+                let from = req_body.from.map(|t| t.to_system_time());
+                let until = req_body.till.to_system_time();
+                let renew = req_body.rtime.map(|t| t.to_system_time());
+                let nonce = req_body.nonce;
+                let kdc_options = req_body.kdc_options;
 
                 // addresses,
                 // enc_authorization_data,
