@@ -12,7 +12,7 @@ use der::{Decode, DecodeValue, Encode, EncodeValue, FixedTag, Sequence, Tag, Tag
 ///    }
 ///```
 #[derive(Debug, Eq, PartialEq, Sequence)]
-struct ApReqInner {
+pub(crate) struct ApReqInner {
     #[asn1(context_specific = "0")]
     pub(crate) pvno: u8,
     #[asn1(context_specific = "1")]

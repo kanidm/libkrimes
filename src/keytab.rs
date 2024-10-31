@@ -233,9 +233,7 @@ impl From<&Keytab> for FileKeytab {
                     .iter()
                     .map(|x| {
                         let rdata: RecordData = x.into();
-                        Record {
-                            rdata
-                        }
+                        Record { rdata }
                     })
                     .collect();
                 let fk2: FileKeytabV2 = FileKeytabV2 { records };
@@ -349,7 +347,7 @@ mod tests {
         for r in &k.records {
             match &r.rdata {
                 RecordData::Hole { pad } => holes_len += pad.len() + 4,
-                _ => ()
+                _ => (),
             }
         }
 

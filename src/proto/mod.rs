@@ -4,14 +4,15 @@ mod request;
 pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGrantReply};
 pub use self::request::{AuthenticationRequest, KerberosRequest, TicketGrantRequest};
 
+use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;
 use crate::asn1::checksum::Checksum;
-use crate::asn1::ap_req::ApReq;
 use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::kdc_req_body::KdcReqBody;
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart,
+    enc_ticket_part::EncTicketPart,
     encrypted_data::EncryptedData as KdcEncryptedData,
     encryption_key::EncryptionKey as KdcEncryptionKey,
     etype_info2::ETypeInfo2 as KdcETypeInfo2,
@@ -32,6 +33,7 @@ use crate::crypto::{
 };
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode};
+use rand::{thread_rng, Rng};
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -241,7 +243,72 @@ impl fmt::Debug for SessionKey {
     }
 }
 
+impl TryInto<KdcEncryptionKey> for SessionKey {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<KdcEncryptionKey, KrbError> {
+        match self {
+            SessionKey::Aes256CtsHmacSha196 { k } => {
+                let key_value =
+                    OctetString::new(k).map_err(|e| KrbError::DerEncodeOctetString(e))?;
+
+                Ok(KdcEncryptionKey {
+                    key_type: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
+                    key_value,
+                })
+            }
+        }
+    }
+}
+
+impl TryFrom<KdcEncryptionKey> for SessionKey {
+    type Error = KrbError;
+
+    fn try_from(kdc_enc_key: KdcEncryptionKey) -> Result<SessionKey, KrbError> {
+        let etype: EncryptionType = EncryptionType::try_from(kdc_enc_key.key_type)
+            .map_err(|_| KrbError::UnsupportedEncryption)?;
+
+        match etype {
+            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
+                let mut k = [0; AES_256_KEY_LEN];
+                let byte_ref = kdc_enc_key.key_value.as_bytes();
+
+                if byte_ref.len() != k.len() {
+                    return Err(KrbError::InvalidEncryptionKey);
+                }
+
+                k.copy_from_slice(byte_ref);
+
+                Ok(SessionKey::Aes256CtsHmacSha196 { k })
+            }
+            _ => Err(KrbError::UnsupportedEncryption),
+        }
+    }
+}
+
 impl SessionKey {
+    fn new() -> Self {
+        let mut k = [0u8; AES_256_KEY_LEN];
+        thread_rng().fill(&mut k);
+        SessionKey::Aes256CtsHmacSha196 { k }
+    }
+
+    fn decrypt_ap_req_authenticator(
+        &self,
+        enc_data: EncryptedData,
+    ) -> Result<Authenticator, KrbError> {
+        let key_usage = 7;
+
+        let data = match (enc_data, self) {
+            (
+                EncryptedData::Aes256CtsHmacSha196 { kvno: _, data },
+                SessionKey::Aes256CtsHmacSha196 { k },
+            ) => decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?,
+        };
+
+        Authenticator::from_der(&data).map_err(KrbError::DerDecodeAuthenticator)
+    }
+
     fn encrypt_ap_req_authenticator(
         &self,
         authenticator: &Authenticator,
@@ -306,6 +373,23 @@ impl TryFrom<&[u8]> for KdcPrimaryKey {
         } else {
             tracing::error!(key_len = %key.len(), expected = %AES_256_KEY_LEN);
             Err(KrbError::InvalidEncryptionKey)
+        }
+    }
+}
+
+impl KdcPrimaryKey {
+    pub fn encrypt_tgt(&self, ticket_inner: EncTicketPart) -> Result<EncryptedData, KrbError> {
+        let data = ticket_inner
+            .to_der()
+            .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
+
+        let key_usage = 3;
+
+        match self {
+            KdcPrimaryKey::Aes256 { k } => {
+                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
+            }
         }
     }
 }
@@ -549,16 +633,26 @@ impl EncryptedData {
         }
     }
 
+    pub fn decrypt_enc_tgt(&self, primary_key: &KdcPrimaryKey) -> Result<EncTicketPart, KrbError> {
+        let key_usage = 3;
+
+        let data = match (self, primary_key) {
+            (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, KdcPrimaryKey::Aes256 { k }) => {
+                decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?
+            }
+        };
+
+        EncTicketPart::from_der(&data).map_err(|err| KrbError::DerDecodeEncKdcRepPart)
+    }
+
     pub fn decrypt_enc_kdc_rep(&self, base_key: &DerivedKey) -> Result<KdcReplyPart, KrbError> {
         // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
         // message, using the client's long-term key or another key selected
         // via pre-authentication mechanisms.
         let data = self.decrypt_data(base_key, 3)?;
 
-        let tagged_kdc_enc_part = TaggedEncKdcRepPart::from_der(&data).map_err(|e| {
-            println!("{:#?}", e);
-            KrbError::DerDecodeEncKdcRepPart
-        })?;
+        let tagged_kdc_enc_part =
+            TaggedEncKdcRepPart::from_der(&data).map_err(|e| KrbError::DerDecodeEncKdcRepPart)?;
 
         // RFC states we should relax the tag check on these.
 
@@ -689,27 +783,6 @@ impl TryFrom<EncKdcRepPart> for KdcReplyPart {
             renew_until,
             server,
         })
-    }
-}
-
-impl TryFrom<KdcEncryptionKey> for SessionKey {
-    type Error = KrbError;
-
-    fn try_from(kdc_key: KdcEncryptionKey) -> Result<Self, Self::Error> {
-        let key_type = EncryptionType::try_from(kdc_key.key_type)
-            .map_err(|_| KrbError::UnsupportedEncryption)?;
-        match key_type {
-            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
-                if kdc_key.key_value.as_bytes().len() == AES_256_KEY_LEN {
-                    let mut k = [0u8; AES_256_KEY_LEN];
-                    k.copy_from_slice(kdc_key.key_value.as_bytes());
-                    Ok(SessionKey::Aes256CtsHmacSha196 { k })
-                } else {
-                    Err(KrbError::InvalidEncryptionKey)
-                }
-            }
-            _ => Err(KrbError::UnsupportedEncryption),
-        }
     }
 }
 

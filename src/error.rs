@@ -20,6 +20,7 @@ pub enum KrbError {
     DerEncodeOctetString(der::Error),
     DerEncodeEncTicketPart,
     DerEncodeAuthenticator(der::Error),
+    DerDecodeAuthenticator(der::Error),
     DerEncodeApReq(der::Error),
     DerEncodeKdcReqBody(der::Error),
 
@@ -27,6 +28,12 @@ pub enum KrbError {
     PreauthMissingEtypeInfo2,
     PreauthInvalidUnixTs,
     PreauthInvalidS2KParams,
+
+    TgsMissingPaApReq,
+    TgsInvalidPaApReq,
+
+    TgsAuthMissingChecksum,
+    TgsAuthChecksumFailure,
 
     NameNotPrincipal,
 

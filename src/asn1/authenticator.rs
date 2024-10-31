@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// }
 ///```
 #[derive(Debug, Eq, PartialEq, Sequence)]
-struct AuthenticatorInner {
+pub(crate) struct AuthenticatorInner {
     #[asn1(context_specific = "0")]
     // This field specifies the version number for the format of the
     // authenticator.
