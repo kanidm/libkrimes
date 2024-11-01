@@ -7,7 +7,7 @@ use super::realm::Realm;
 use super::ticket_flags::TicketFlags;
 use super::transited_encoding::TransitedEncoding;
 use der::flagset::FlagSet;
-use der::Sequence;
+use der::{Decode, DecodeValue, Encode, EncodeValue, FixedTag, Sequence, Tag, TagNumber};
 
 /// ```text
 /// EncTicketPart   ::= [APPLICATION 3] SEQUENCE {
@@ -51,4 +51,43 @@ pub(crate) struct EncTicketPart {
     /// "restrictions".
     #[asn1(context_specific = "10", optional = "true")]
     pub authorization_data: Option<Vec<AuthorizationData>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct TaggedEncTicketPart(pub EncTicketPart);
+
+impl TaggedEncTicketPart {
+    pub fn new(tkt: EncTicketPart) -> Self {
+        Self(tkt)
+    }
+}
+
+impl FixedTag for TaggedEncTicketPart {
+    const TAG: Tag = Tag::Application {
+        constructed: true,
+        number: TagNumber::N3,
+    };
+}
+
+impl<'a> DecodeValue<'a> for TaggedEncTicketPart {
+    fn decode_value<R: der::Reader<'a>>(reader: &mut R, _header: der::Header) -> der::Result<Self> {
+        let t: EncTicketPart = EncTicketPart::decode(reader)?;
+        Ok(Self(t))
+    }
+}
+
+impl<'a> EncodeValue for TaggedEncTicketPart {
+    fn value_len(&self) -> der::Result<der::Length> {
+        self.0.encoded_len()
+    }
+    fn encode_value(&self, encoder: &mut impl der::Writer) -> der::Result<()> {
+        self.0.encode(encoder)?;
+        Ok(())
+    }
+}
+
+impl Into<EncTicketPart> for TaggedEncTicketPart {
+    fn into(self) -> EncTicketPart {
+        self.0
+    }
 }

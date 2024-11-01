@@ -1,3 +1,4 @@
+pub mod authorization_data_types;
 pub mod encryption_types;
 pub mod errors;
 pub mod message_types;

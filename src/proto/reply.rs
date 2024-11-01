@@ -1,7 +1,8 @@
 use crate::asn1::{
+    authorization_data::AuthorizationData,
     constants::{
-        encryption_types::EncryptionType, errors::KrbErrorCode, message_types::KrbMessageType,
-        pa_data_types::PaDataType,
+        authorization_data_types::AuthorizationDataType, encryption_types::EncryptionType,
+        errors::KrbErrorCode, message_types::KrbMessageType, pa_data_types::PaDataType,
     },
     enc_kdc_rep_part::EncKdcRepPart,
     enc_ticket_part::EncTicketPart,
@@ -30,7 +31,9 @@ use tracing::trace;
 
 use super::{
     DerivedKey, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, SessionKey, Ticket,
+    TicketGrantRequest,
 };
+use crate::proto::ms_pac::AdWin2kPac;
 
 #[derive(Debug)]
 pub enum KerberosReply {
@@ -49,7 +52,11 @@ pub struct AuthenticationReply {
 }
 
 #[derive(Debug)]
-pub struct TicketGrantReply {}
+pub struct TicketGrantReply {
+    pub client_name: Name,
+    pub enc_part: EncryptedData,
+    pub ticket: Ticket,
+}
 
 #[derive(Debug)]
 pub struct PreauthReply {
@@ -90,7 +97,23 @@ pub struct KerberosReplyAuthenticationBuilder {
     flags: FlagSet<TicketFlags>,
 }
 
-pub struct KerberosReplyTicketGrantBuilder {}
+pub struct KerberosReplyTicketGrantBuilder {
+    nonce: u32,
+    client_name: Name,
+    service_name: Name,
+    etypes: Vec<EncryptionType>,
+    session_key: SessionKey,
+    sub_session_key: Option<SessionKey>,
+
+    pac: Option<AdWin2kPac>,
+
+    auth_time: SystemTime,
+    start_time: SystemTime,
+    end_time: SystemTime,
+    renew_until: Option<SystemTime>,
+
+    flags: FlagSet<TicketFlags>,
+}
 
 impl KerberosReply {
     pub fn preauth_builder(service: Name, stime: SystemTime) -> KerberosReplyPreauthBuilder {
@@ -132,8 +155,42 @@ impl KerberosReply {
         }
     }
 
-    pub fn ticket_grant_builder() -> KerberosReplyTicketGrantBuilder {
-        KerberosReplyTicketGrantBuilder {}
+    pub fn ticket_grant_builder(
+        ticket_grant_request: TicketGrantRequest,
+        flags: FlagSet<TicketFlags>,
+        now: SystemTime,
+    ) -> KerberosReplyTicketGrantBuilder {
+        let TicketGrantRequest {
+            nonce,
+            client_name,
+            service_name,
+            auth_time,
+            from,
+            until,
+            renew,
+            etypes,
+            session_key,
+            sub_session_key,
+        } = ticket_grant_request;
+
+        KerberosReplyTicketGrantBuilder {
+            nonce,
+            client_name,
+            service_name,
+
+            etypes,
+            session_key,
+            sub_session_key,
+
+            pac: None,
+
+            auth_time,
+            start_time: from.unwrap_or(now),
+            end_time: until,
+            renew_until: renew,
+
+            flags,
+        }
     }
 
     pub fn error_no_etypes(service: Name, stime: SystemTime) -> KerberosReply {
@@ -185,6 +242,15 @@ impl KerberosReply {
             error_text: Some(
                 "Preauthentication Failed - Check your username is correct.".to_string(),
             ),
+            stime,
+        })
+    }
+
+    pub fn error_service_name(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KdcErrSPrincipalUnknown,
+            service,
+            error_text: Some("Ticket Request Failed - Service Name not found.".to_string()),
             stime,
         })
     }
@@ -333,24 +399,7 @@ impl KerberosReplyAuthenticationBuilder {
             client_addresses: None,
         };
 
-        let data = TaggedEncKdcRepPart::EncAsRepPart(enc_kdc_rep_part)
-            .to_der()
-            .map_err(|_| KrbError::DerEncodeEncKdcRepPart)?;
-
-        let (etype_info2, enc_part) = match user_key {
-            DerivedKey::Aes256CtsHmacSha196 { i, s, k } => {
-                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, 3)?;
-                let enc_part = EncryptedData::Aes256CtsHmacSha196 { kvno: None, data };
-
-                let ei = EtypeInfo2 {
-                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
-                    salt: Some(s.clone()),
-                    s2kparams: Some(i.to_be_bytes().to_vec()),
-                };
-
-                (ei, enc_part)
-            }
-        };
+        let (etype_info2, enc_part) = user_key.encrypt_as_rep_part(enc_kdc_rep_part)?;
 
         let transited = TransitedEncoding {
             tr_type: 1,
@@ -397,8 +446,111 @@ impl KerberosReplyAuthenticationBuilder {
 }
 
 impl KerberosReplyTicketGrantBuilder {
-    pub fn build(self) -> Result<KerberosReply, KrbError> {
-        Ok(KerberosReply::TGS(TicketGrantReply {}))
+    pub fn build(self, service_key: &DerivedKey) -> Result<KerberosReply, KrbError> {
+        let service_session_key = SessionKey::new();
+        let service_session_key: KdcEncryptionKey = service_session_key.try_into()?;
+
+        let (cname, crealm) = (&self.client_name).try_into().unwrap();
+        let (server_name, server_realm) = (&self.service_name).try_into().unwrap();
+
+        let auth_time = KerberosTime::from_system_time(self.auth_time).unwrap();
+        let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
+        let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
+        let renew_till = self
+            .renew_until
+            .map(|t| KerberosTime::from_system_time(t).unwrap());
+
+        // TGS_REP The ciphertext is encrypted with the sub-session key
+        // from the authenticator.
+        // If absent, the session key is used (with no kvno).
+        // 5.4.2 reads as though the the clients version number is used here for kvno?
+
+        // KeyUsage == 8 for session key, or == 9 for subkey.
+        // let enc_part = EncTGSRepPart == EncKDCRepPart;
+
+        let enc_kdc_rep_part = EncKdcRepPart {
+            key: service_session_key.clone(),
+            // Not 100% clear on this field.
+            last_req: Vec::with_capacity(0),
+            nonce: self.nonce,
+            key_expiration: None,
+            flags: self.flags,
+            auth_time,
+            start_time,
+            end_time,
+            renew_till,
+            server_realm,
+            server_name,
+            client_addresses: None,
+        };
+
+        let enc_part = if let Some(sub_session_key) = self.sub_session_key {
+            sub_session_key.encrypt_tgs_rep_part(enc_kdc_rep_part, true)?
+        } else {
+            self.session_key
+                .encrypt_tgs_rep_part(enc_kdc_rep_part, false)?
+        };
+
+        // An MS-PAC is required for Samba to work.
+        let authorization_data = if let Some(pac) = self.pac {
+            // Need to work out the signatures here.
+
+            let pac_data_inner =
+                OctetString::new(pac.to_bytes()).map_err(|e| KrbError::DerEncodeOctetString(e))?;
+
+            let pac_data = AuthorizationData {
+                ad_type: AuthorizationDataType::AdWin2kPac.into(),
+                ad_data: pac_data_inner,
+            }
+            .to_der()
+            .and_then(OctetString::new)
+            .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+
+            Some(vec![AuthorizationData {
+                ad_type: AuthorizationDataType::AdIfRelevant.into(),
+                ad_data: pac_data,
+            }])
+        } else {
+            None
+        };
+
+        let transited = TransitedEncoding {
+            tr_type: 1,
+            // Since no transit has occured, we record an empty str.
+            contents: OctetString::new(b"").unwrap(),
+        };
+
+        // EncTicketPart
+        // Encrypted to the key of the service
+        let ticket_inner = EncTicketPart {
+            flags: self.flags,
+            key: service_session_key,
+            crealm,
+            cname,
+            transited,
+            auth_time,
+            start_time,
+            end_time,
+            renew_till,
+            client_addresses: None,
+            authorization_data,
+        };
+
+        let ticket_enc_part = service_key.encrypt_tgs(ticket_inner)?;
+
+        let ticket = Ticket {
+            tkt_vno: 5,
+            service: self.service_name,
+            enc_part: ticket_enc_part,
+        };
+
+        let client_name = self.client_name;
+
+        Ok(KerberosReply::TGS(TicketGrantReply {
+            client_name,
+            enc_part,
+            ticket,
+        }))
     }
 }
 
@@ -541,30 +693,21 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                 Ok(KrbKdcRep::AsRep(as_rep))
             }
             KerberosReply::TGS(TicketGrantReply {
-                // What is needed here?
+                client_name,
+                enc_part,
+                ticket,
             }) => {
-                // So how to build all these now?
-
-                todo!();
-
-                /*
-
-
                 let tgs_rep = KdcRep {
                     pvno: 5,
                     msg_type: KrbMessageType::KrbTgsRep as u8,
-                    padata: pa_data,
-                    crealm: (&name).try_into()?,
-                    cname: (&name).try_into()?,
-
-                    // Ticket for the requested server.
+                    padata: None,
+                    crealm: (&client_name).try_into()?,
+                    cname: (&client_name).try_into()?,
                     ticket: ticket.try_into()?,
-                    // 
                     enc_part: enc_part.try_into()?,
                 };
 
                 Ok(KrbKdcRep::TgsRep(tgs_rep))
-                */
             }
             KerberosReply::PA(PreauthReply {
                 pa_data,

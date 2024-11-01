@@ -1,8 +1,11 @@
+mod ms_pac;
 mod reply;
 mod request;
 
 pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGrantReply};
-pub use self::request::{AuthenticationRequest, KerberosRequest, TicketGrantRequest};
+pub use self::request::{
+    AuthenticationRequest, KerberosRequest, TicketGrantRequest, TicketGrantRequestUnverified,
+};
 
 use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;
@@ -12,7 +15,7 @@ use crate::asn1::kdc_req_body::KdcReqBody;
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart,
-    enc_ticket_part::EncTicketPart,
+    enc_ticket_part::{EncTicketPart, TaggedEncTicketPart},
     encrypted_data::EncryptedData as KdcEncryptedData,
     encryption_key::EncryptionKey as KdcEncryptionKey,
     etype_info2::ETypeInfo2 as KdcETypeInfo2,
@@ -213,6 +216,47 @@ impl DerivedKey {
             }
         }
     }
+
+    pub fn encrypt_as_rep_part(
+        &self,
+        enc_kdc_rep_part: EncKdcRepPart,
+    ) -> Result<(EtypeInfo2, EncryptedData), KrbError> {
+        let data = TaggedEncKdcRepPart::EncAsRepPart(enc_kdc_rep_part)
+            .to_der()
+            .map_err(|_| KrbError::DerEncodeEncKdcRepPart)?;
+
+        let key_usage = 3;
+
+        match self {
+            DerivedKey::Aes256CtsHmacSha196 { i, s, k } => {
+                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                let enc_part = EncryptedData::Aes256CtsHmacSha196 { kvno: None, data };
+
+                let ei = EtypeInfo2 {
+                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
+                    salt: Some(s.clone()),
+                    s2kparams: Some(i.to_be_bytes().to_vec()),
+                };
+
+                Ok((ei, enc_part))
+            }
+        }
+    }
+
+    pub fn encrypt_tgs(&self, ticket_inner: EncTicketPart) -> Result<EncryptedData, KrbError> {
+        let data = TaggedEncTicketPart(ticket_inner)
+            .to_der()
+            .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
+
+        let key_usage = 2;
+
+        match self {
+            DerivedKey::Aes256CtsHmacSha196 { k, .. } => {
+                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
+            }
+        }
+    }
 }
 
 impl fmt::Debug for DerivedKey {
@@ -309,6 +353,31 @@ impl SessionKey {
         Authenticator::from_der(&data).map_err(KrbError::DerDecodeAuthenticator)
     }
 
+    pub fn encrypt_tgs_rep_part(
+        &self,
+        enc_kdc_rep_part: EncKdcRepPart,
+        is_sub_session_key: bool,
+    ) -> Result<EncryptedData, KrbError> {
+        let data = TaggedEncKdcRepPart::EncTgsRepPart(enc_kdc_rep_part)
+            .to_der()
+            .map_err(|_| KrbError::DerEncodeEncKdcRepPart)?;
+
+        let (key_usage, kvno) = if is_sub_session_key {
+            (9, Some(5))
+        } else {
+            (8, None)
+        };
+
+        match self {
+            SessionKey::Aes256CtsHmacSha196 { k } => {
+                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                let enc_part = EncryptedData::Aes256CtsHmacSha196 { kvno, data };
+
+                Ok(enc_part)
+            }
+        }
+    }
+
     fn encrypt_ap_req_authenticator(
         &self,
         authenticator: &Authenticator,
@@ -379,7 +448,7 @@ impl TryFrom<&[u8]> for KdcPrimaryKey {
 
 impl KdcPrimaryKey {
     pub fn encrypt_tgt(&self, ticket_inner: EncTicketPart) -> Result<EncryptedData, KrbError> {
-        let data = ticket_inner
+        let data = TaggedEncTicketPart(ticket_inner)
             .to_der()
             .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
 
@@ -439,6 +508,11 @@ pub struct PreauthData {
 pub enum Name {
     Principal {
         name: String,
+        realm: String,
+    },
+    SrvPrincipal {
+        service: String,
+        host: String,
         realm: String,
     },
     SrvInst {
@@ -642,7 +716,9 @@ impl EncryptedData {
             }
         };
 
-        EncTicketPart::from_der(&data).map_err(|err| KrbError::DerDecodeEncKdcRepPart)
+        TaggedEncTicketPart::from_der(&data)
+            .map_err(|err| KrbError::DerDecodeEncKdcRepPart)
+            .map(|TaggedEncTicketPart(part)| part)
     }
 
     pub fn decrypt_enc_kdc_rep(&self, base_key: &DerivedKey) -> Result<KdcReplyPart, KrbError> {
@@ -655,7 +731,6 @@ impl EncryptedData {
             TaggedEncKdcRepPart::from_der(&data).map_err(|e| KrbError::DerDecodeEncKdcRepPart)?;
 
         // RFC states we should relax the tag check on these.
-
         let kdc_enc_part = match tagged_kdc_enc_part {
             TaggedEncKdcRepPart::EncTgsRepPart(part) | TaggedEncKdcRepPart::EncAsRepPart(part) => {
                 part
@@ -795,7 +870,7 @@ impl Name {
     }
 
     pub fn service(name: &str, hostname: &str, realm: &str) -> Self {
-        Self::SrvHst {
+        Self::SrvPrincipal {
             service: name.to_string(),
             host: hostname.to_string(),
             realm: realm.to_string(),
@@ -845,6 +920,18 @@ impl Name {
             _ => Err(KrbError::NameNotPrincipal),
         }
     }
+
+    pub fn service_principal_name(&self) -> Result<(String, &str), KrbError> {
+        trace!(principal_name = ?self);
+        match self {
+            Name::SrvPrincipal {
+                service,
+                host,
+                realm,
+            } => Ok((format!("{service}/{host}"), realm.as_str())),
+            _ => Err(KrbError::NameNotServiceHost),
+        }
+    }
 }
 
 impl TryInto<Realm> for &Name {
@@ -853,6 +940,14 @@ impl TryInto<Realm> for &Name {
     fn try_into(self) -> Result<Realm, KrbError> {
         match self {
             Name::Principal { name: _, realm } => {
+                let realm = KerberosString(Ia5String::new(realm).unwrap());
+                Ok(realm)
+            }
+            Name::SrvPrincipal {
+                service: _,
+                host: _,
+                realm,
+            } => {
                 let realm = KerberosString(Ia5String::new(realm).unwrap());
                 Ok(realm)
             }
@@ -883,6 +978,21 @@ impl TryInto<PrincipalName> for &Name {
         match self {
             Name::Principal { name, realm: _ } => {
                 let name_string = vec![KerberosString(Ia5String::new(name).unwrap())];
+
+                Ok(PrincipalName {
+                    name_type: PrincipalNameType::NtPrincipal as i32,
+                    name_string,
+                })
+            }
+            Name::SrvPrincipal {
+                service,
+                host,
+                realm: _,
+            } => {
+                let name_string = vec![
+                    KerberosString(Ia5String::new(&service).unwrap()),
+                    KerberosString(Ia5String::new(&host).unwrap()),
+                ];
 
                 Ok(PrincipalName {
                     name_type: PrincipalNameType::NtPrincipal as i32,
@@ -934,6 +1044,25 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
         match self {
             Name::Principal { name, realm } => {
                 let name_string = vec![KerberosString(Ia5String::new(&name).unwrap())];
+                let realm = KerberosString(Ia5String::new(realm).unwrap());
+
+                Ok((
+                    PrincipalName {
+                        name_type: PrincipalNameType::NtPrincipal as i32,
+                        name_string,
+                    },
+                    realm,
+                ))
+            }
+            Name::SrvPrincipal {
+                service,
+                host,
+                realm,
+            } => {
+                let name_string = vec![
+                    KerberosString(Ia5String::new(&service).unwrap()),
+                    KerberosString(Ia5String::new(&host).unwrap()),
+                ];
                 let realm = KerberosString(Ia5String::new(realm).unwrap());
 
                 Ok((
@@ -1005,11 +1134,24 @@ impl TryFrom<PrincipalName> for Name {
         trace!(?name_type, ?name_string);
 
         match name_type {
-            PrincipalNameType::NtPrincipal => {
-                let name = name_string.get(0).unwrap().into();
-                let realm = name_string.get(1).unwrap().into();
-                Ok(Name::Principal { name, realm })
-            }
+            PrincipalNameType::NtPrincipal => match name_string.len() {
+                2 => {
+                    let name = name_string.get(0).unwrap().into();
+                    let realm = name_string.get(1).unwrap().into();
+                    Ok(Name::Principal { name, realm })
+                }
+                3 => {
+                    let service = name_string.get(0).unwrap().into();
+                    let host = name_string.get(1).unwrap().into();
+                    let realm = name_string.get(2).unwrap().into();
+                    Ok(Name::SrvPrincipal {
+                        service,
+                        host,
+                        realm,
+                    })
+                }
+                _ => Err(KrbError::NameNumberOfComponents),
+            },
             PrincipalNameType::NtSrvInst => {
                 let (service, instance) = name_string.split_first().unwrap();
                 let service: String = service.into();
@@ -1046,14 +1188,37 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
         } = princ;
 
         let realm = realm.into();
-        let name_type: PrincipalNameType = name_type
+        let mut name_type: PrincipalNameType = name_type
             .try_into()
             .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
 
+        // IMPORTANT!!!!!
+        // MIT KRB5 has a bug in it's KVNO tool that causes it to send NtSrvHst as
+        // NtPrinc instead. We need to detect this by checking how many elements are in the
+        // name string and working around it!
+        //
+        // This is the sname from a TGS_REP sent by MIT KRB5
+        // sname: Some(PrincipalName { name_type: 1, name_string: [KerberosString(Ia5String("HOST")), KerberosString(Ia5String("localhost"))] })
+
         match name_type {
             PrincipalNameType::NtPrincipal => {
-                let name = name_string.get(0).unwrap().into();
-                Ok(Name::Principal { name, realm })
+                // MIT KRB will encode services an NtPrinc, so check the length.
+                match name_string.len() {
+                    1 => {
+                        let name = name_string.get(0).unwrap().into();
+                        Ok(Name::Principal { name, realm })
+                    }
+                    2 => {
+                        let service = name_string.get(0).unwrap().into();
+                        let host = name_string.get(1).unwrap().into();
+                        Ok(Name::SrvPrincipal {
+                            service,
+                            host,
+                            realm,
+                        })
+                    }
+                    _ => Err(KrbError::NameNumberOfComponents),
+                }
             }
             PrincipalNameType::NtSrvInst => {
                 let (service, instance) = name_string.split_first().unwrap();

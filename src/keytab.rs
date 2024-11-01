@@ -173,6 +173,24 @@ impl From<Name> for Principal {
                 }],
                 name_type: Some(1),
             },
+            Name::SrvPrincipal {
+                service,
+                host,
+                realm,
+            } => Principal {
+                realm: Data {
+                    value: realm.as_bytes().to_vec(),
+                },
+                components: vec![
+                    Data {
+                        value: service.as_bytes().to_vec(),
+                    },
+                    Data {
+                        value: host.as_bytes().to_vec(),
+                    },
+                ],
+                name_type: Some(1),
+            },
             Name::SrvInst {
                 service,
                 instance,

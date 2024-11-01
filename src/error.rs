@@ -36,6 +36,8 @@ pub enum KrbError {
     TgsAuthChecksumFailure,
 
     NameNotPrincipal,
+    NameNotServiceHost,
+    NameNumberOfComponents,
 
     UnsupportedCredentialCacheType,
     UnsupportedKeytabType,
