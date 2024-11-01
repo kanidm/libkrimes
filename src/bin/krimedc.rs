@@ -5,7 +5,7 @@ use libkrime::asn1::kerberos_flags::KerberosFlags;
 use libkrime::asn1::ticket_flags::TicketFlags;
 use libkrime::proto::{
     AuthenticationRequest, DerivedKey, KdcPrimaryKey, KerberosReply, KerberosRequest, Name,
-    TicketGrantRequest,
+    TicketGrantRequest, TicketGrantRequestUnverified,
 };
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
@@ -333,29 +333,36 @@ async fn process_authentication(
 
 #[instrument(level = "trace", skip_all)]
 async fn process_ticket_grant(
-    tgs_req: TicketGrantRequest,
+    tgs_req: TicketGrantRequestUnverified,
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
     let stime = SystemTime::now();
 
-    tgs_req
+    let tgs_req_valid = tgs_req
         .validate(&server_state.primary_key, &server_state.realm)
         .unwrap();
 
-    /*
+    let service_name = tgs_req_valid.service_name().clone();
 
+    trace!(?service_name);
 
-    let builder = KerberosReply::ticket_grant_builder();
+    let service_name_str = service_name.service_principal_name().unwrap().0;
 
-    builder
-        .build()
-        .map_err(|kdc_err| {
-            error!(?kdc_err);
-            KerberosReply::error_internal(tgs_req.service_name.clone(), stime)
-        })
-        */
+    // Is the service in our db?
+    let Some(service_record) = server_state.services.get(&service_name_str) else {
+        return Err(KerberosReply::error_service_name(service_name, stime));
+    };
 
-    todo!();
+    trace!(?tgs_req_valid);
+
+    let mut tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+
+    let builder = KerberosReply::ticket_grant_builder(tgs_req_valid, tkt_flags, stime);
+
+    builder.build(&service_record.base_key).map_err(|kdc_err| {
+        error!(?kdc_err);
+        KerberosReply::error_internal(service_name, stime)
+    })
 }
 
 async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerState>) {
@@ -560,7 +567,7 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
         principal,
         timestamp: 0,
         key,
-        kvno: 2,
+        kvno: 0,
     };
 
     let kt = Keytab::File(vec![entry]);

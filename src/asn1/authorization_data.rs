@@ -10,7 +10,7 @@ use der::Sequence;
 #[derive(Debug, Eq, PartialEq, Sequence)]
 pub(crate) struct AuthorizationData {
     #[asn1(context_specific = "0")]
-    ad_type: i32,
+    pub ad_type: i32,
     #[asn1(context_specific = "1")]
-    ad_data: OctetString,
+    pub ad_data: OctetString,
 }

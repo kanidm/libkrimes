@@ -32,7 +32,7 @@ use super::{
 #[derive(Debug)]
 pub enum KerberosRequest {
     AS(AuthenticationRequest),
-    TGS(TicketGrantRequest),
+    TGS(TicketGrantRequestUnverified),
 }
 
 #[derive(Debug)]
@@ -49,10 +49,24 @@ pub struct AuthenticationRequest {
 }
 
 #[derive(Debug)]
-pub struct TicketGrantRequest {
+pub struct TicketGrantRequestUnverified {
     pub preauth: Preauth,
     // pub(crate) req_body: Vec<u8>,
     pub(crate) req_body: Any,
+}
+
+#[derive(Debug)]
+pub struct TicketGrantRequest {
+    pub(crate) nonce: u32,
+    pub(crate) client_name: Name,
+    pub(crate) service_name: Name,
+    pub(crate) etypes: Vec<EncryptionType>,
+    pub(crate) session_key: SessionKey,
+    pub(crate) sub_session_key: Option<SessionKey>,
+    pub(crate) auth_time: SystemTime,
+    pub(crate) from: Option<SystemTime>,
+    pub(crate) until: SystemTime,
+    pub(crate) renew: Option<SystemTime>,
 }
 
 #[derive(Debug)]
@@ -337,17 +351,21 @@ impl TicketGrantRequestBuilder {
             ..Default::default()
         };
 
-        Ok(KerberosRequest::TGS(TicketGrantRequest {
+        Ok(KerberosRequest::TGS(TicketGrantRequestUnverified {
             preauth,
             req_body,
         }))
     }
 }
 
-impl TicketGrantRequest {
-    pub fn validate(self, primary_key: &KdcPrimaryKey, realm: &str) -> Result<(), KrbError> {
+impl TicketGrantRequestUnverified {
+    pub fn validate(
+        self,
+        primary_key: &KdcPrimaryKey,
+        realm: &str,
+    ) -> Result<TicketGrantRequest, KrbError> {
         // Destructure the ticket grant to make it easier to handle.
-        let TicketGrantRequest {
+        let TicketGrantRequestUnverified {
             preauth:
                 Preauth {
                     tgs_req,
@@ -372,8 +390,8 @@ impl TicketGrantRequest {
         let ap_req_authenticator = EncryptedData::try_from(ap_req.authenticator)?;
         let ap_req_options = ap_req.ap_options;
 
-        trace!("{:#?}", ap_req_ticket);
-        trace!("{:#?}", ap_req_authenticator);
+        trace!(?ap_req_ticket);
+        trace!(?ap_req_authenticator);
 
         // Decrypt the ticket. This should be the TGT and contains the session
         // key used for encryption of the authenticator.
@@ -392,7 +410,7 @@ impl TicketGrantRequest {
 
         let enc_ticket_part = ap_req_ticket_enc.decrypt_enc_tgt(primary_key)?;
 
-        trace!("{:#?}", enc_ticket_part);
+        trace!(?enc_ticket_part);
 
         // TODO! Validate the start_time / enc_time / auth_time.
 
@@ -407,20 +425,14 @@ impl TicketGrantRequest {
 
         let authenticator: AuthenticatorInner = authenticator.into();
 
-        trace!("{:#?}", authenticator);
+        trace!(?authenticator);
+
+        // TODO: Validate that the ctime is within a valid window.
 
         let Some(authenticator_checksum) = authenticator.cksum else {
             return Err(KrbError::TgsAuthMissingChecksum);
         };
 
-        // WARNING WARNING WARNING WARNING
-        //
-        // This currently has to re-serialise the req_body to computer the checksum
-        // which may cause issues with canonicalisation. We need to potentially
-        // keep the reqbody as raw u8 until we perform this step, and then perform
-        // a from-der on it!
-        //
-        // WARNING WARNING WARNING WARNING
         let checksum = session_key.checksum_kdc_req_body(&req_body)?;
 
         // Validate that the checksum matches what our authenticator contains.
@@ -430,10 +442,70 @@ impl TicketGrantRequest {
             return Err(KrbError::TgsAuthChecksumFailure);
         }
 
-        // Now at this point, we can actually release all the parts of the TicketGrantRequest
-        // for the KDC to handle and form into a TicketGrantResponse
+        let req_body = req_body.decode_as::<KdcReqBody>().unwrap();
 
-        todo!();
+        trace!(?req_body);
+
+        // ==================================================================
+        //
+        // WARNING WARNING WARNING WARNING
+        //
+        // Below this line is where we now trust that the inputs are valid and checksummed
+        // so that we can proceed with the release of the TGS to the KDC.
+
+        let sub_session_key = authenticator
+            .subkey
+            .map(|subkey| SessionKey::try_from(subkey))
+            // Invert the Option<Result> to Result<Option>
+            .transpose()?;
+
+        let Some(service_princ) = req_body.sname else {
+            todo!();
+        };
+
+        let nonce = req_body.nonce;
+
+        let client_name = Name::try_from((enc_ticket_part.cname, enc_ticket_part.crealm))?;
+
+        let service_name = Name::try_from((service_princ, req_body.realm))?;
+
+        let from = req_body.from.map(|t| t.to_system_time());
+        let until = req_body.till.to_system_time();
+        let renew = req_body.rtime.map(|t| t.to_system_time());
+
+        let auth_time = enc_ticket_part.auth_time.to_system_time();
+
+        let etypes = req_body
+            .etype
+            .iter()
+            .filter_map(|etype| {
+                EncryptionType::try_from(*etype)
+                    .ok()
+                    .and_then(|etype| match etype {
+                        EncryptionType::AES256_CTS_HMAC_SHA1_96 => Some(etype),
+                        _ => None,
+                    })
+            })
+            .collect();
+
+        Ok(TicketGrantRequest {
+            nonce,
+            client_name,
+            service_name,
+            auth_time,
+            from,
+            until,
+            renew,
+            etypes,
+            session_key,
+            sub_session_key,
+        })
+    }
+}
+
+impl TicketGrantRequest {
+    pub fn service_name(&self) -> &Name {
+        &self.service_name
     }
 }
 
@@ -546,7 +618,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                     req_body,
                 }))
             }
-            KerberosRequest::TGS(TicketGrantRequest { preauth, req_body }) => {
+            KerberosRequest::TGS(TicketGrantRequestUnverified { preauth, req_body }) => {
                 let padata = if preauth.tgs_req.is_some() {
                     let mut padata_inner = Vec::with_capacity(1);
 
@@ -662,7 +734,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                 }))
             }
             KrbMessageType::KrbTgsReq => {
-                trace!("{:#?}", req);
+                trace!(?req);
 
                 // IMPORTANT! At this point, since we don't yet have the session key, req_body
                 // shouldn't be parsed. We need to process padata first to get the tgs and
@@ -681,7 +753,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                     .unwrap_or_default();
                 trace!(?preauth);
 
-                Ok(KerberosRequest::TGS(TicketGrantRequest {
+                Ok(KerberosRequest::TGS(TicketGrantRequestUnverified {
                     preauth,
                     req_body: req.req_body,
                 }))
