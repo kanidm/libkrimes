@@ -41,6 +41,7 @@ pub enum KrbError {
 
     UnsupportedCredentialCacheType,
     UnsupportedKeytabType,
+    UnsupportedDerivedKeySize,
     IoError(std::io::Error),
     BinRWError(binrw::Error),
 

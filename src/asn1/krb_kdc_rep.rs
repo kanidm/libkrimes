@@ -7,7 +7,7 @@ use der::{Tag, TagNumber, Writer};
 /// TGS-REP         ::= [APPLICATION 13] KDC-REP
 /// ```
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum KrbKdcRep {
+pub enum KrbKdcRep {
     AsRep(KdcRep),
     TgsRep(KdcRep),
     ErrRep(KrbError),
