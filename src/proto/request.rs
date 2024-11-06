@@ -19,14 +19,15 @@ use crate::asn1::{
     OctetString,
 };
 use crate::error::KrbError;
-use der::{asn1::Any, flagset::FlagSet, Decode, Encode};
+use der::{asn1::Any, flagset::FlagSet, Encode};
 use rand::{thread_rng, Rng};
 
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
 use super::{
-    DerivedKey, EncryptedData, KdcPrimaryKey, Name, Preauth, PreauthData, SessionKey, Ticket,
+    DerivedKey, EncTicket, EncryptedData, KdcPrimaryKey, Name, Preauth, PreauthData, SessionKey,
+    Ticket,
 };
 
 #[derive(Debug)]
@@ -58,15 +59,15 @@ pub struct TicketGrantRequestUnverified {
 #[derive(Debug)]
 pub struct TicketGrantRequest {
     pub(crate) nonce: u32,
-    pub(crate) client_name: Name,
     pub(crate) service_name: Name,
     pub(crate) etypes: Vec<EncryptionType>,
-    pub(crate) session_key: SessionKey,
     pub(crate) sub_session_key: Option<SessionKey>,
-    pub(crate) auth_time: SystemTime,
+    pub(crate) client_time: SystemTime,
     pub(crate) from: Option<SystemTime>,
     pub(crate) until: SystemTime,
     pub(crate) renew: Option<SystemTime>,
+
+    pub(crate) ticket: Ticket,
 }
 
 #[derive(Debug)]
@@ -83,17 +84,18 @@ pub struct KerberosAuthenticationBuilder {
 #[derive(Debug)]
 pub struct ApReqBuilder {
     client_name: Name,
-    ticket: Ticket,
+    ticket: EncTicket,
     session_key: SessionKey,
 }
 
 #[derive(Debug)]
 pub struct TicketGrantRequestBuilder {
     service_name: Name,
+    client_time: SystemTime,
     from: Option<SystemTime>,
     until: SystemTime,
     renew: Option<SystemTime>,
-    preauth: Option<Preauth>,
+    // preauth: Option<Preauth>,
     etypes: Vec<EncryptionType>,
     ap_req_builder: Option<ApReqBuilder>,
 }
@@ -117,8 +119,11 @@ impl KerberosRequest {
         }
     }
 
-    // TODO: ap_req_builder should not allow Option as it's required.
-    pub fn build_tgs(service_name: Name, until: SystemTime) -> TicketGrantRequestBuilder {
+    pub fn build_tgs(
+        service_name: Name,
+        now: SystemTime,
+        until: SystemTime,
+    ) -> TicketGrantRequestBuilder {
         let etypes = vec![EncryptionType::AES256_CTS_HMAC_SHA1_96];
 
         TicketGrantRequestBuilder {
@@ -126,9 +131,10 @@ impl KerberosRequest {
             from: None,
             until,
             renew: None,
-            preauth: None,
+            // preauth: None,
             etypes,
             ap_req_builder: None,
+            client_time: now,
         }
     }
 }
@@ -232,7 +238,7 @@ impl TicketGrantRequestBuilder {
     pub fn preauth_ap_req(
         mut self,
         client: &Name,
-        ticket: &Ticket,
+        ticket: &EncTicket,
         session_key: &SessionKey,
     ) -> Result<Self, KrbError> {
         let ap_req_builder: ApReqBuilder = ApReqBuilder {
@@ -250,9 +256,10 @@ impl TicketGrantRequestBuilder {
             from,
             until,
             renew,
-            preauth,
+            // preauth: _,
             etypes,
             ap_req_builder,
+            client_time,
         } = self;
 
         let ap_req_builder = ap_req_builder.ok_or(
@@ -265,7 +272,8 @@ impl TicketGrantRequestBuilder {
         let nonce: u32 = thread_rng().gen();
         let nonce = nonce & 0x7fff_ffff;
 
-        let preauth = preauth.unwrap_or_default();
+        // So far we don't use preauth-here
+        // let preauth = preauth.unwrap_or_default();
 
         let mut kdc_options = FlagSet::<KerberosFlags>::new(0b0).expect("Failed to build FlagSet");
         kdc_options |= KerberosFlags::Renewable;
@@ -312,7 +320,6 @@ impl TicketGrantRequestBuilder {
         // when used as the PA-TGS-REQ PA-DATA field of a TGS-REQ exchange (see
         // Section 5.4.1)
         let (client_name, client_realm) = (&ap_req_builder.client_name).try_into()?;
-        let client_time: SystemTime = SystemTime::now();
         let subkey: Option<EncryptionKey> = None;
         let sequence_number: Option<u32> = None;
         let authorization_data: Option<AuthorizationData> = None;
@@ -369,7 +376,7 @@ impl TicketGrantRequestUnverified {
             preauth:
                 Preauth {
                     tgs_req,
-                    pa_fx_fast,
+                    // pa_fx_fast: _,
                     enc_timestamp: _,
                     pa_fx_cookie: _,
                 },
@@ -388,22 +395,21 @@ impl TicketGrantRequestUnverified {
 
         let ap_req_ticket = ap_req.ticket.0;
         let ap_req_authenticator = EncryptedData::try_from(ap_req.authenticator)?;
-        let ap_req_options = ap_req.ap_options;
+        // let ap_req_options = ap_req.ap_options;
 
         trace!(?ap_req_ticket);
         trace!(?ap_req_authenticator);
 
         // Decrypt the ticket. This should be the TGT and contains the session
         // key used for encryption of the authenticator.
-
         if ap_req_ticket.realm.as_str() != realm {
-            todo!();
+            return Err(KrbError::TgsNotForRealm);
         }
 
         let ap_req_ticket_service_name = Name::try_from(ap_req_ticket.sname)?;
 
         if !ap_req_ticket_service_name.is_service_krbtgt(realm) {
-            todo!();
+            return Err(KrbError::TgsTicketIsNotTgt);
         }
 
         let ap_req_ticket_enc = EncryptedData::try_from(ap_req_ticket.enc_part)?;
@@ -411,10 +417,6 @@ impl TicketGrantRequestUnverified {
         let enc_ticket_part = ap_req_ticket_enc.decrypt_enc_tgt(primary_key)?;
 
         trace!(?enc_ticket_part);
-
-        // TODO! Validate the start_time / enc_time / auth_time.
-
-        // Do we need to do anything with cname/crealm?
 
         // Get the session Key.
 
@@ -426,8 +428,6 @@ impl TicketGrantRequestUnverified {
         let authenticator: AuthenticatorInner = authenticator.into();
 
         trace!(?authenticator);
-
-        // TODO: Validate that the ctime is within a valid window.
 
         let Some(authenticator_checksum) = authenticator.cksum else {
             return Err(KrbError::TgsAuthMissingChecksum);
@@ -446,6 +446,10 @@ impl TicketGrantRequestUnverified {
 
         trace!(?req_body);
 
+        let Some(service_princ) = req_body.sname else {
+            return Err(KrbError::TgsKdcReqMissingServiceName);
+        };
+
         // ==================================================================
         //
         // WARNING WARNING WARNING WARNING
@@ -459,21 +463,36 @@ impl TicketGrantRequestUnverified {
             // Invert the Option<Result> to Result<Option>
             .transpose()?;
 
-        let Some(service_princ) = req_body.sname else {
-            todo!();
-        };
-
         let nonce = req_body.nonce;
 
-        let client_name = Name::try_from((enc_ticket_part.cname, enc_ticket_part.crealm))?;
+        let ticket = {
+            let client_name = Name::try_from((enc_ticket_part.cname, enc_ticket_part.crealm))?;
+            let auth_time = enc_ticket_part.auth_time.to_system_time();
+
+            let start_time = enc_ticket_part
+                .start_time
+                .map(|t| t.to_system_time())
+                .ok_or(KrbError::TgsKdcMissingStartTime)?;
+
+            let end_time = enc_ticket_part.end_time.to_system_time();
+            let renew_until = enc_ticket_part.renew_till.map(|t| t.to_system_time());
+
+            Ticket {
+                client_name,
+                session_key,
+                start_time,
+                end_time,
+                renew_until,
+                auth_time,
+            }
+        };
 
         let service_name = Name::try_from((service_princ, req_body.realm))?;
 
         let from = req_body.from.map(|t| t.to_system_time());
         let until = req_body.till.to_system_time();
         let renew = req_body.rtime.map(|t| t.to_system_time());
-
-        let auth_time = enc_ticket_part.auth_time.to_system_time();
+        let client_time = authenticator.ctime.to_system_time();
 
         let etypes = req_body
             .etype
@@ -490,15 +509,14 @@ impl TicketGrantRequestUnverified {
 
         Ok(TicketGrantRequest {
             nonce,
-            client_name,
             service_name,
-            auth_time,
+            client_time,
             from,
             until,
             renew,
             etypes,
-            session_key,
             sub_session_key,
+            ticket,
         })
     }
 }
@@ -506,6 +524,38 @@ impl TicketGrantRequestUnverified {
 impl TicketGrantRequest {
     pub fn service_name(&self) -> &Name {
         &self.service_name
+    }
+
+    pub fn client_time(&self) -> &SystemTime {
+        &self.client_time
+    }
+
+    /// This is the time the client requested the ticket grant to start at. This value
+    /// MUST be validated within the bounds of the ticket validity.
+    pub fn requested_start_time(&self) -> Option<&SystemTime> {
+        self.from.as_ref()
+    }
+
+    /// This is the time the client requested the ticket grant to end at. This value
+    /// MUST be validated within the bounds of the ticket validity.
+    pub fn requested_end_time(&self) -> &SystemTime {
+        &self.until
+    }
+
+    /// This is the time the client requested the ticket grant to be renewable until.
+    /// This value MUST be validated within the bounds of the tickets renewable validity.
+    pub fn requested_renew_until(&self) -> Option<&SystemTime> {
+        self.renew.as_ref()
+    }
+
+    /// The cryptographically verified ticket granting ticket that this KDC or a trusted
+    /// KDC issued to the client.
+    pub fn ticket_granting_ticket(&self) -> &Ticket {
+        &self.ticket
+    }
+
+    pub fn etypes(&self) -> &[EncryptionType] {
+        &self.etypes
     }
 }
 

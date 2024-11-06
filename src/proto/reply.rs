@@ -15,23 +15,20 @@ use crate::asn1::{
     krb_error::MethodData,
     krb_kdc_rep::KrbKdcRep,
     pa_data::PaData,
-    tagged_enc_kdc_rep_part::TaggedEncKdcRepPart,
     ticket_flags::TicketFlags,
     transited_encoding::TransitedEncoding,
     Ia5String, OctetString,
 };
-use crate::constants::{AES_256_KEY_LEN, PKBDF2_SHA1_ITER};
-use crate::crypto::encrypt_aes256_cts_hmac_sha1_96;
+use crate::constants::PKBDF2_SHA1_ITER;
 use crate::error::KrbError;
 use der::{flagset::FlagSet, Decode, Encode};
-use rand::{thread_rng, Rng};
 
 use std::time::{Duration, SystemTime};
 use tracing::trace;
 
 use super::{
-    DerivedKey, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, SessionKey, Ticket,
-    TicketGrantRequest,
+    DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, SessionKey,
+    Ticket, TicketGrantRequest,
 };
 use crate::proto::ms_pac::AdWin2kPac;
 
@@ -48,14 +45,14 @@ pub struct AuthenticationReply {
     pub name: Name,
     pub enc_part: EncryptedData,
     pub pa_data: Option<PreauthData>,
-    pub ticket: Ticket,
+    pub ticket: EncTicket,
 }
 
 #[derive(Debug)]
 pub struct TicketGrantReply {
     pub client_name: Name,
     pub enc_part: EncryptedData,
-    pub ticket: Ticket,
+    pub ticket: EncTicket,
 }
 
 #[derive(Debug)]
@@ -99,18 +96,17 @@ pub struct KerberosReplyAuthenticationBuilder {
 
 pub struct KerberosReplyTicketGrantBuilder {
     nonce: u32,
-    client_name: Name,
     service_name: Name,
-    etypes: Vec<EncryptionType>,
-    session_key: SessionKey,
+    // etypes: Vec<EncryptionType>,
     sub_session_key: Option<SessionKey>,
 
     pac: Option<AdWin2kPac>,
 
-    auth_time: SystemTime,
     start_time: SystemTime,
     end_time: SystemTime,
     renew_until: Option<SystemTime>,
+
+    ticket: Ticket,
 
     flags: FlagSet<TicketFlags>,
 }
@@ -158,36 +154,40 @@ impl KerberosReply {
     pub fn ticket_grant_builder(
         ticket_grant_request: TicketGrantRequest,
         flags: FlagSet<TicketFlags>,
-        now: SystemTime,
+        start_time: SystemTime,
+        end_time: SystemTime,
+        renew_until: Option<SystemTime>,
     ) -> KerberosReplyTicketGrantBuilder {
         let TicketGrantRequest {
             nonce,
-            client_name,
             service_name,
-            auth_time,
-            from,
-            until,
-            renew,
-            etypes,
-            session_key,
+            from: _,
+            until: _,
+            renew: _,
+            etypes: _,
             sub_session_key,
+            client_time: _,
+            ticket,
         } = ticket_grant_request;
+
+        // From is what the client requested.
+        // Now is the kdc time.
+        // ticket.start_time is when the ticket began.
 
         KerberosReplyTicketGrantBuilder {
             nonce,
-            client_name,
             service_name,
 
-            etypes,
-            session_key,
+            // etypes,
             sub_session_key,
 
             pac: None,
 
-            auth_time,
-            start_time: from.unwrap_or(now),
-            end_time: until,
-            renew_until: renew,
+            start_time,
+            end_time,
+            renew_until,
+
+            ticket,
 
             flags,
         }
@@ -338,7 +338,7 @@ impl KerberosReplyPreauthBuilder {
 
         KerberosReply::PA(PreauthReply {
             pa_data: PreauthData {
-                pa_fx_fast: false,
+                // pa_fx_fast: false,
                 enc_timestamp: true,
                 pa_fx_cookie: self.pa_fx_cookie,
                 etype_info2: vec![EtypeInfo2 {
@@ -423,7 +423,7 @@ impl KerberosReplyAuthenticationBuilder {
 
         let ticket_enc_part = primary_key.encrypt_tgt(ticket_inner)?;
 
-        let ticket = Ticket {
+        let ticket = EncTicket {
             tkt_vno: 5,
             service: self.server,
             enc_part: ticket_enc_part,
@@ -446,14 +446,19 @@ impl KerberosReplyAuthenticationBuilder {
 }
 
 impl KerberosReplyTicketGrantBuilder {
+    pub fn renew_until(mut self, renew_until: Option<SystemTime>) -> Self {
+        self.renew_until = renew_until;
+        self
+    }
+
     pub fn build(self, service_key: &DerivedKey) -> Result<KerberosReply, KrbError> {
         let service_session_key = SessionKey::new();
         let service_session_key: KdcEncryptionKey = service_session_key.try_into()?;
 
-        let (cname, crealm) = (&self.client_name).try_into().unwrap();
+        let (cname, crealm) = (&self.ticket.client_name).try_into().unwrap();
         let (server_name, server_realm) = (&self.service_name).try_into().unwrap();
 
-        let auth_time = KerberosTime::from_system_time(self.auth_time).unwrap();
+        let auth_time = KerberosTime::from_system_time(self.ticket.auth_time).unwrap();
         let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
         let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
         let renew_till = self
@@ -487,7 +492,8 @@ impl KerberosReplyTicketGrantBuilder {
         let enc_part = if let Some(sub_session_key) = self.sub_session_key {
             sub_session_key.encrypt_tgs_rep_part(enc_kdc_rep_part, true)?
         } else {
-            self.session_key
+            self.ticket
+                .session_key
                 .encrypt_tgs_rep_part(enc_kdc_rep_part, false)?
         };
 
@@ -538,13 +544,13 @@ impl KerberosReplyTicketGrantBuilder {
 
         let ticket_enc_part = service_key.encrypt_tgs(ticket_inner)?;
 
-        let ticket = Ticket {
+        let ticket = EncTicket {
             tkt_vno: 5,
             service: self.service_name,
             enc_part: ticket_enc_part,
         };
 
-        let client_name = self.client_name;
+        let client_name = self.ticket.client_name;
 
         Ok(KerberosReply::TGS(TicketGrantReply {
             client_name,
@@ -861,7 +867,7 @@ impl TryFrom<KdcRep> for KerberosReply {
                 trace!(?pa_data);
 
                 let name = (rep.cname, rep.crealm).try_into()?;
-                let ticket = Ticket::try_from(rep.ticket)?;
+                let ticket = EncTicket::try_from(rep.ticket)?;
 
                 Ok(KerberosReply::AS(AuthenticationReply {
                     name,

@@ -9,4 +9,4 @@ impl AdWin2kPac {
     }
 }
 
-pub struct AdWin2kPacBuilder {}
+// pub struct AdWin2kPacBuilder {}

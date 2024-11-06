@@ -5,7 +5,7 @@ use libkrime::asn1::kerberos_flags::KerberosFlags;
 use libkrime::asn1::ticket_flags::TicketFlags;
 use libkrime::proto::{
     AuthenticationRequest, DerivedKey, KdcPrimaryKey, KerberosReply, KerberosRequest, Name,
-    TicketGrantRequest, TicketGrantRequestUnverified,
+    TicketGrantRequestUnverified,
 };
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
@@ -46,80 +46,74 @@ async fn process_authentication(
         ));
     }
 
-    let Ok((cname, crealm)) = auth_req.client_name.principal_name() else {
-        return Err(KerberosReply::error_client_principal(
-            auth_req.service_name,
-            stime,
-        ));
-    };
-
     // Is the client for our realm?
-    if crealm != server_state.realm.as_str() {
-        return Err(KerberosReply::error_client_realm(
-            auth_req.service_name,
-            stime,
-        ));
-    };
-
     // Is the client in our user db?
-    let Some(user_record) = server_state.users.get(cname) else {
+    // This look up answer both as the client_name contains realm given how we structure
+    // the name enum
+    let Some(principal_record) = server_state.principals.get(&auth_req.client_name) else {
         return Err(KerberosReply::error_client_username(
             auth_req.service_name,
             stime,
         ));
     };
 
-    let Some(pre_enc_timestamp) = auth_req.preauth.enc_timestamp() else {
-        info!("ENC-TS Preauth not present, returning pre-auth parameters.");
-        let parep = KerberosReply::preauth_builder(auth_req.service_name, stime)
-            .set_key_params(&user_record.base_key)
-            .build();
+    // Now, if the req is a user princ or a service princ we have to take different paths.
+    // This is because user princs demand pre-auth, but service ones don't. Service princs
+    // are required to have stronger keys which is why they are exempted.
 
-        // Request pre-auth.
-        return Ok(parep);
-    };
-    info!("ENC-TS Preauth present.");
+    if !principal_record.service {
+        let Some(pre_enc_timestamp) = auth_req.preauth.enc_timestamp() else {
+            info!("ENC-TS Preauth not present, returning pre-auth parameters.");
+            let parep = KerberosReply::preauth_builder(auth_req.service_name, stime)
+                .set_key_params(&principal_record.base_key)
+                .build();
 
-    // Start to process and validate the enc timestamp.
+            // Request pre-auth.
+            return Ok(parep);
+        };
+        info!("ENC-TS Preauth present.");
 
-    let pa_timestamp = pre_enc_timestamp
-        .decrypt_pa_enc_timestamp(&user_record.base_key)
-        .map_err(|err| {
-            error!(?err, "pre_enc_timestamp.decrypt");
-            KerberosReply::error_preauth_failed(auth_req.service_name.clone(), stime)
+        // Start to process and validate the enc timestamp.
+
+        let pa_timestamp = pre_enc_timestamp
+            .decrypt_pa_enc_timestamp(&principal_record.base_key)
+            .map_err(|err| {
+                error!(?err, "pre_enc_timestamp.decrypt");
+                KerberosReply::error_preauth_failed(auth_req.service_name.clone(), stime)
+            })?;
+
+        trace!(?pa_timestamp, ?stime);
+
+        let abs_offset = if pa_timestamp > stime {
+            pa_timestamp.duration_since(stime)
+        } else {
+            stime.duration_since(pa_timestamp)
+        }
+        // This error shouldn't be possible. The error condition on duration_since is
+        // when the right side of the term is actually *before* the left. Our if
+        // condition should guard against thin.
+        // However, let's do the right thing and check it anyway.
+        .map_err(|kdc_err| {
+            error!(?kdc_err);
+            KerberosReply::error_internal(auth_req.service_name.clone(), stime)
         })?;
 
-    trace!(?pa_timestamp, ?stime);
+        trace!(?abs_offset);
 
-    let abs_offset = if pa_timestamp > stime {
-        pa_timestamp.duration_since(stime)
-    } else {
-        stime.duration_since(pa_timestamp)
+        // Check for the timestamp being in a valid range. If not, reject for clock skew.
+        if abs_offset > server_state.allowed_clock_skew {
+            error!(?abs_offset, "clock skew");
+            // ClockSkew
+            return Err(KerberosReply::error_clock_skew(
+                auth_req.service_name.clone(),
+                stime,
+            ));
+        }
+
+        // Preauthentication SUCCESS. Now we can consider issuing a ticket.
+
+        trace!("PREAUTH SUCCESS");
     }
-    // This error shouldn't be possible. The error condition on duration_since is
-    // when the right side of the term is actually *before* the left. Our if
-    // condition should guard against thin.
-    // However, let's do the right thing and check it anyway.
-    .map_err(|kdc_err| {
-        error!(?kdc_err);
-        KerberosReply::error_internal(auth_req.service_name.clone(), stime)
-    })?;
-
-    trace!(?abs_offset);
-
-    // Check for the timestamp being in a valid range. If not, reject for clock skew.
-    if abs_offset > Duration::from_secs(300) {
-        error!(?abs_offset, "clock skew");
-        // ClockSkew
-        return Err(KerberosReply::error_clock_skew(
-            auth_req.service_name.clone(),
-            stime,
-        ));
-    }
-
-    // Preauthentication SUCCESS. Now we can consider issuing a ticket.
-
-    trace!("PREAUTH SUCCESS");
 
     let mut tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
 
@@ -174,25 +168,18 @@ async fn process_authentication(
         match tkt_auth_time.duration_since(from) {
             Ok(_) => {
                 // From is in the past
-                return Ok(tkt_auth_time);
+                Ok(tkt_auth_time)
             }
             Err(diff) => {
                 // From is in the future
-                if auth_req.kdc_options.contains(KerberosFlags::Postdated) {
-                    // TODO Define a policy for allowed postdated tickets
-                    tkt_flags |= TicketFlags::Invalid;
-                    return Ok(from);
-                } else {
-                    // TODO hardcoded clock skew
-                    if diff.duration() > Duration::from_secs(300) {
-                        // Beyond clock skew and no postdated requested
-                        return Err(KerberosReply::error_cannot_postdate(
-                            auth_req.service_name.clone(),
-                            stime,
-                        ));
-                    }
-                };
-                return Ok(tkt_auth_time);
+                if diff.duration() > server_state.allowed_clock_skew {
+                    // Beyond clock skew and we refuse to post date
+                    return Err(KerberosReply::error_cannot_postdate(
+                        auth_req.service_name.clone(),
+                        stime,
+                    ));
+                }
+                Ok(tkt_auth_time)
             }
         }
     })?;
@@ -238,25 +225,23 @@ async fn process_authentication(
      */
     // TODO hardcoded lifetime, define KDC policy for default ticket lifetime
     let tkt_end_time = if auth_req.until == SystemTime::UNIX_EPOCH {
-        tkt_start_time + Duration::from_secs(3600 * 4)
+        tkt_start_time + server_state.ticket_lifetime
     } else {
         cmp::min(
             auth_req.until,
-            tkt_start_time + Duration::from_secs(3600 * 4),
+            tkt_start_time + server_state.ticket_lifetime,
         )
     };
-    // TODO hardcoded lifetime, define KDC policy for minimum life time
+
     let tkt_duration = tkt_end_time
         .duration_since(tkt_start_time)
         .map_err(|_| KerberosReply::error_never_valid(auth_req.service_name.clone(), stime))?;
-    if tkt_duration < Duration::from_secs(3600) {
+
+    if tkt_duration < server_state.ticket_min_lifetime {
         return Err(KerberosReply::error_never_valid(
             auth_req.service_name.clone(),
             stime,
         ));
-    }
-    if auth_req.kdc_options.contains(KerberosFlags::RenewableOk) {
-        tkt_flags |= TicketFlags::Renewable;
     }
 
     /*
@@ -287,11 +272,15 @@ async fn process_authentication(
     {
         tkt_flags |= TicketFlags::Renewable;
         // TODO hardcoded lifetime, create a kdc policy for default renew time
-        auth_req
-            .renew
-            .map_or(Some(tkt_start_time + Duration::from_secs(86400 * 7)), |t| {
-                Some(cmp::min(t, tkt_start_time + Duration::from_secs(86400 * 7)))
-            })
+        auth_req.renew.map_or(
+            Some(tkt_start_time + server_state.ticket_max_renew_time),
+            |t| {
+                Some(cmp::min(
+                    t,
+                    tkt_start_time + server_state.ticket_max_renew_time,
+                ))
+            },
+        )
     } else {
         tkt_flags.retain(|f| f != TicketFlags::Renewable);
         None
@@ -304,13 +293,9 @@ async fn process_authentication(
      * If the new ticket is postdated (the starttime is in the future), its
      * INVALID flag will also be set.
      */
-    // TODO Enforce valid flags
-    //tkt_flags &= TicketFlags::Forwardable
-    //    | TicketFlags::MayPostdate
-    //    | TicketFlags::Postdated
-    //    | TicketFlags::Proxiable
-    //    | TicketFlags::Renewable
-    //    | TicketFlags::Invalid;
+
+    // We should not bother with forwarded/proxiable until there is a genuine
+    // need for them.
 
     let builder = KerberosReply::authentication_builder(
         auth_req.client_name,
@@ -324,7 +309,7 @@ async fn process_authentication(
     );
 
     builder
-        .build(&user_record.base_key, &server_state.primary_key)
+        .build(&principal_record.base_key, &server_state.primary_key)
         .map_err(|kdc_err| {
             error!(?kdc_err);
             KerberosReply::error_internal(auth_req.service_name.clone(), stime)
@@ -342,22 +327,76 @@ async fn process_ticket_grant(
         .validate(&server_state.primary_key, &server_state.realm)
         .unwrap();
 
-    let service_name = tgs_req_valid.service_name().clone();
+    trace!(?tgs_req_valid);
+
+    let service_name = tgs_req_valid.service_name().clone().service_hst_normalise();
 
     trace!(?service_name);
 
-    let service_name_str = service_name.service_principal_name().unwrap().0;
-
     // Is the service in our db?
-    let Some(service_record) = server_state.services.get(&service_name_str) else {
+    let Some(service_record) = server_state.principals.get(&service_name) else {
+        error!(?service_name, "Unable to find service name");
         return Err(KerberosReply::error_service_name(service_name, stime));
     };
 
-    trace!(?tgs_req_valid);
+    let client_tgt = tgs_req_valid.ticket_granting_ticket();
 
-    let mut tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+    let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
+        if requested_start_time < client_tgt.start_time() {
+            todo!();
+        }
 
-    let builder = KerberosReply::ticket_grant_builder(tgs_req_valid, tkt_flags, stime);
+        if requested_start_time > client_tgt.end_time() {
+            todo!();
+        }
+
+        // It's within valid bounds, lets go.
+
+        *requested_start_time
+    } else {
+        // Start from *now*.
+        stime
+    };
+
+    let requested_end_time = tgs_req_valid.requested_end_time();
+    // Can't be past the tgt end.
+    if requested_end_time > client_tgt.end_time() {
+        todo!();
+    }
+
+    // Can't be before the start.
+    if requested_end_time < &start_time {
+        todo!();
+    }
+
+    let end_time = *requested_end_time;
+
+    let renew_until = match (
+        tgs_req_valid.requested_renew_until(),
+        client_tgt.renew_until(),
+    ) {
+        (Some(requested_renew_until), Some(ticket_renew_until)) => {
+            if requested_renew_until > ticket_renew_until {
+                todo!();
+            }
+
+            Some(*requested_renew_until)
+        }
+        (Some(_), None) => {
+            todo!();
+        }
+        (_, _) => None,
+    };
+
+    let tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+
+    let builder = KerberosReply::ticket_grant_builder(
+        tgs_req_valid,
+        tkt_flags,
+        start_time,
+        end_time,
+        renew_until,
+    );
 
     builder.build(&service_record.base_key).map_err(|kdc_err| {
         error!(?kdc_err);
@@ -461,53 +500,71 @@ impl From<Config> for ServerState {
 
         let primary_key = KdcPrimaryKey::try_from(primary_key.as_slice()).unwrap();
 
-        let users = user
+        let principals = user
             .into_iter()
             .map(|UserPrincipal { name, password }| {
                 let salt = format!("{}{}", realm, name);
 
                 let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt).unwrap();
 
-                (name, UserRecord { base_key })
-            })
-            .collect();
+                let princ_name = Name::principal(&name, &realm);
 
-        let services = service
-            .into_iter()
-            .map(
+                (
+                    princ_name,
+                    PrincipalRecord {
+                        service: false,
+                        base_key,
+                    },
+                )
+            })
+            .chain(service.into_iter().map(
                 |ServicePrincipal {
                      srvname,
                      hostname,
                      password,
                  }| {
                     let name = format!("{srvname}/{hostname}");
-
                     let salt = format!("{}{}", realm, name);
+
+                    let princ_name = Name::service(&srvname, &hostname, &realm);
 
                     let base_key =
                         DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt).unwrap();
 
-                    (name, ServiceRecord { base_key })
+                    (
+                        princ_name,
+                        PrincipalRecord {
+                            service: true,
+                            base_key,
+                        },
+                    )
                 },
-            )
+            ))
             .collect();
+
+        let allowed_clock_skew = Duration::from_secs(300);
+
+        let ticket_lifetime = Duration::from_secs(3600 * 4);
+
+        let ticket_min_lifetime = Duration::from_secs(60);
+
+        let ticket_max_renew_time = Duration::from_secs(86400);
 
         ServerState {
             realm,
             primary_key,
-            users,
-            services,
+            principals,
+            allowed_clock_skew,
+            ticket_min_lifetime,
+            ticket_max_renew_time,
+            ticket_lifetime,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-struct UserRecord {
-    base_key: DerivedKey,
-}
-
-#[derive(Debug)]
-struct ServiceRecord {
+struct PrincipalRecord {
+    service: bool,
     base_key: DerivedKey,
 }
 
@@ -516,9 +573,13 @@ struct ServerState {
     realm: String,
     // address: SocketAddr,
     primary_key: KdcPrimaryKey,
+    allowed_clock_skew: Duration,
 
-    users: BTreeMap<String, UserRecord>,
-    services: BTreeMap<String, ServiceRecord>,
+    ticket_lifetime: Duration,
+    ticket_min_lifetime: Duration,
+    ticket_max_renew_time: Duration,
+
+    principals: BTreeMap<Name, PrincipalRecord>,
 }
 
 async fn main_run(config: Config) -> io::Result<()> {
@@ -541,30 +602,20 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
 
     let server_state = Arc::new(ServerState::from(config));
 
-    let (key, principal) = if let Some((srv, host)) = name.split_once('/') {
-        let Some(srv_record) = server_state.services.get(&name) else {
-            todo!();
-        };
-
-        let principal = Name::service(srv, host, server_state.realm.as_str()).into();
-
-        let key = srv_record.base_key.clone();
-
-        (key, principal)
+    let principal_name = if let Some((srv, host)) = name.split_once('/') {
+        Name::service(srv, host, server_state.realm.as_str())
     } else {
-        let Some(user_record) = server_state.users.get(&name) else {
-            todo!();
-        };
-
-        let principal = Name::principal(name.as_str(), server_state.realm.as_str()).into();
-
-        let key = user_record.base_key.clone();
-
-        (key, principal)
+        Name::principal(name.as_str(), server_state.realm.as_str())
     };
 
+    let Some(principal_record) = server_state.principals.get(&principal_name) else {
+        todo!();
+    };
+
+    let key = principal_record.base_key.clone();
+
     let entry = KeytabEntry {
-        principal,
+        principal: principal_name.into(),
         timestamp: 0,
         key,
         kvno: 0,

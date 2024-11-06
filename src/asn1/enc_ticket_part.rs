@@ -56,11 +56,13 @@ pub(crate) struct EncTicketPart {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct TaggedEncTicketPart(pub EncTicketPart);
 
+/*
 impl TaggedEncTicketPart {
     pub fn new(tkt: EncTicketPart) -> Self {
         Self(tkt)
     }
 }
+*/
 
 impl FixedTag for TaggedEncTicketPart {
     const TAG: Tag = Tag::Application {

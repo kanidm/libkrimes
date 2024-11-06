@@ -1,4 +1,3 @@
-use super::kdc_req_body::KdcReqBody;
 use super::pa_data::PaData;
 use der::asn1::Any;
 use der::Sequence;
