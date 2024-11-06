@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+  krimedc:
+    restart: no
+    build:
+      context: ../../
+      dockerfile: ./examples/samba/Dockerfile.krimedc
+    image: libkrimes:kdc
+    container_name: libkrimes_kdc
+    command: krimedc
+    privileged: false
+    hostname: krimedc
+    domainname: example.com
+    dns_search: example.com
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "88"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - samba-keytab:/tmp/samba/
+    networks:
+      static-network:
+        ipv4_address: 192.168.238.10
+    expose:
+      - "88"
+      - "88/udp"
+
+  samba:
+    depends_on:
+      krimedc:
+        condition: service_healthy
+    restart: unless-stopped
+    build:
+      context: ../../
+      dockerfile: ./examples/samba/Dockerfile.samba
+    image: libkrimes:smb
+    container_name: libkrimes_smb
+    command: smbd
+    hostname: samba
+    domainname: example.com
+    dns_search: example.com
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "445" ]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - samba-keytab:/tmp/samba/
+    networks:
+      static-network:
+        ipv4_address: 192.168.238.11
+    expose:
+      - "445"
+
+volumes:
+  samba-keytab:
+
+networks:
+  static-network:
+    ipam:
+      config:
+        - subnet: 192.168.238.0/24
+          gateway: 192.168.238.1

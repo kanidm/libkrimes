@@ -1,0 +1,22 @@
+FROM opensuse/leap:15.6 AS ref_repo
+
+RUN zypper --non-interactive mr -e -a &&\
+    zypper --non-interactive --gpg-auto-import-keys ref --force && \
+    zypper --non-interactive in hostname vim tcpdump iputils iproute2 netcat-openbsd krb5-client sudo samba
+
+RUN useradd --shell /bin/bash --create-home --home-dir /home/krime krime
+RUN echo "krime ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers.d/krime
+
+COPY examples/samba/smb.conf /etc/samba/smb.conf
+COPY examples/samba/krb5.conf /etc/krb5.conf
+COPY examples/samba/fun.sh /home/krime/fun.sh
+
+COPY examples/samba/entrypoint.samba /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+SHELL ["/bin/bash", "--login", "-c"]
+CMD ["/bin/bash", "--login"]
+
+USER krime
+WORKDIR /home/krime
+
+EXPOSE 445/tcp
