@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+# Exit if any error
+set -euo pipefail
+
+if [ "$1" == "smbd" ]; then
+    mkdir -p /tmp/test
+    chmod 777 /tmp/test
+    echo "Starting smbd..."
+    sudo -s smbd -F
+    exit 0
+else
+    eval "$1"
+    exit 0
+fi
