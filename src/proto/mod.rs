@@ -11,7 +11,6 @@ use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;
 use crate::asn1::checksum::Checksum;
 use crate::asn1::constants::PrincipalNameType;
-use crate::asn1::kdc_req_body::KdcReqBody;
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart,
@@ -41,7 +40,7 @@ use rand::{thread_rng, Rng};
 use std::cmp::Ordering;
 use std::fmt;
 use std::time::{Duration, SystemTime};
-use tracing::trace;
+use tracing::{error, trace};
 
 use crate::KerberosTcpCodec;
 use futures::SinkExt;
@@ -56,7 +55,7 @@ use tokio_util::codec::Framed;
 pub struct Preauth {
     tgs_req: Option<ApReq>,
     // pa_fx_fast: Option<PaFxFastRequest>,
-    pa_fx_fast: Option<Vec<u8>>,
+    // pa_fx_fast: Option<Vec<u8>>,
     enc_timestamp: Option<EncryptedData>,
     pa_fx_cookie: Option<Vec<u8>>,
 }
@@ -198,7 +197,7 @@ impl DerivedKey {
         }
     }
 
-    pub fn encrypt_pa_enc_timestamp(
+    pub(crate) fn encrypt_pa_enc_timestamp(
         &self,
         paenctsenc: &PaEncTsEnc,
     ) -> Result<EncryptedData, KrbError> {
@@ -217,7 +216,7 @@ impl DerivedKey {
         }
     }
 
-    pub fn encrypt_as_rep_part(
+    pub(crate) fn encrypt_as_rep_part(
         &self,
         enc_kdc_rep_part: EncKdcRepPart,
     ) -> Result<(EtypeInfo2, EncryptedData), KrbError> {
@@ -243,7 +242,10 @@ impl DerivedKey {
         }
     }
 
-    pub fn encrypt_tgs(&self, ticket_inner: EncTicketPart) -> Result<EncryptedData, KrbError> {
+    pub(crate) fn encrypt_tgs(
+        &self,
+        ticket_inner: EncTicketPart,
+    ) -> Result<EncryptedData, KrbError> {
         let data = TaggedEncTicketPart(ticket_inner)
             .to_der()
             .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
@@ -353,7 +355,7 @@ impl SessionKey {
         Authenticator::from_der(&data).map_err(KrbError::DerDecodeAuthenticator)
     }
 
-    pub fn encrypt_tgs_rep_part(
+    pub(crate) fn encrypt_tgs_rep_part(
         &self,
         enc_kdc_rep_part: EncKdcRepPart,
         is_sub_session_key: bool,
@@ -447,7 +449,10 @@ impl TryFrom<&[u8]> for KdcPrimaryKey {
 }
 
 impl KdcPrimaryKey {
-    pub fn encrypt_tgt(&self, ticket_inner: EncTicketPart) -> Result<EncryptedData, KrbError> {
+    pub(crate) fn encrypt_tgt(
+        &self,
+        ticket_inner: EncTicketPart,
+    ) -> Result<EncryptedData, KrbError> {
         let data = TaggedEncTicketPart(ticket_inner)
             .to_der()
             .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
@@ -463,8 +468,18 @@ impl KdcPrimaryKey {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Ticket {
+    pub(crate) client_name: Name,
+    pub(crate) auth_time: SystemTime,
+    pub(crate) start_time: SystemTime,
+    pub(crate) end_time: SystemTime,
+    pub(crate) renew_until: Option<SystemTime>,
+    pub(crate) session_key: SessionKey,
+}
+
+#[derive(Debug, Clone)]
+pub struct EncTicket {
     tkt_vno: i8,
     service: Name,
     pub enc_part: EncryptedData,
@@ -473,6 +488,8 @@ pub struct Ticket {
 // pub struct LastRequest
 
 #[derive(Debug)]
+#[allow(dead_code)]
+// TODO: Remove the above dead_code!
 pub struct KdcReplyPart {
     pub(crate) key: SessionKey,
     // Last req shows "last login" and probably isn't important for our needs.
@@ -498,19 +515,27 @@ pub enum EncryptedData {
 
 #[derive(Debug, Default)]
 pub struct PreauthData {
-    pub(crate) pa_fx_fast: bool,
+    // pub(crate) pa_fx_fast: bool,
     pub(crate) enc_timestamp: bool,
     pub(crate) pa_fx_cookie: Option<Vec<u8>>,
     pub(crate) etype_info2: Vec<EtypeInfo2>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Name {
     Principal {
         name: String,
         realm: String,
     },
+    // Thanks to MIT KRB, it incorrectly sometimes uses name type 1 and 3 for
+    // these two. So we have to store them as separate things, but they also need
+    // to compare the same :(
     SrvPrincipal {
+        service: String,
+        host: String,
+        realm: String,
+    },
+    SrvHst {
         service: String,
         host: String,
         realm: String,
@@ -518,11 +543,6 @@ pub enum Name {
     SrvInst {
         service: String,
         instance: Vec<String>,
-        realm: String,
-    },
-    SrvHst {
-        service: String,
-        host: String,
         realm: String,
     },
     /*
@@ -580,7 +600,7 @@ impl TryFrom<Vec<PaData>> for PreauthData {
     fn try_from(pavec: Vec<PaData>) -> Result<Self, Self::Error> {
         // Per https://www.rfc-editor.org/rfc/rfc4120#section-7.5.2
         // Build up the set of PaRep data
-        let mut pa_fx_fast = false;
+        // let mut pa_fx_fast = false;
         let mut enc_timestamp = false;
         let mut pa_fx_cookie = None;
         let mut etype_info2 = Vec::with_capacity(0);
@@ -625,7 +645,7 @@ impl TryFrom<Vec<PaData>> for PreauthData {
                         });
                     }
                 }
-                PaDataType::PaFxFast => pa_fx_fast = true,
+                // PaDataType::PaFxFast => pa_fx_fast = true,
                 PaDataType::PaFxCookie => pa_fx_cookie = Some(padata_value.as_bytes().to_vec()),
                 _ => {
                     // Ignore unsupported pa data types.
@@ -637,7 +657,7 @@ impl TryFrom<Vec<PaData>> for PreauthData {
         etype_info2.sort_unstable_by(sort_cryptographic_strength);
 
         Ok(PreauthData {
-            pa_fx_fast,
+            // pa_fx_fast,
             pa_fx_cookie,
             enc_timestamp,
             etype_info2,
@@ -678,15 +698,14 @@ impl TryFrom<Vec<PaData>> for Preauth {
                 PaDataType::PaFxCookie => {
                     preauth.pa_fx_cookie = Some(padata_value.as_bytes().to_vec())
                 }
+                /*
                 PaDataType::PaFxFast => {
-                    /*
                     let pa_fx_data = PaFxFastRequest::from_der(padata_value.as_bytes())
                         .map_err(|_| KrbError::DerDecodePaData)
                         .and_then(EncryptedData::try_from)?;
                     preauth.pa_fix_fast = Some(pa_fx_data);
-                    */
-                    preauth.pa_fx_fast = None;
                 }
+                */
                 _ => {
                     // Ignore unsupported pa data types.
                 }
@@ -707,7 +726,10 @@ impl EncryptedData {
         }
     }
 
-    pub fn decrypt_enc_tgt(&self, primary_key: &KdcPrimaryKey) -> Result<EncTicketPart, KrbError> {
+    pub(crate) fn decrypt_enc_tgt(
+        &self,
+        primary_key: &KdcPrimaryKey,
+    ) -> Result<EncTicketPart, KrbError> {
         let key_usage = 3;
 
         let data = match (self, primary_key) {
@@ -717,18 +739,26 @@ impl EncryptedData {
         };
 
         TaggedEncTicketPart::from_der(&data)
-            .map_err(|err| KrbError::DerDecodeEncKdcRepPart)
+            .map_err(|err| {
+                error!(?err, "DerDecodeEncKdcRepPart");
+                KrbError::DerDecodeEncKdcRepPart
+            })
             .map(|TaggedEncTicketPart(part)| part)
     }
 
-    pub fn decrypt_enc_kdc_rep(&self, base_key: &DerivedKey) -> Result<KdcReplyPart, KrbError> {
+    pub(crate) fn decrypt_enc_kdc_rep(
+        &self,
+        base_key: &DerivedKey,
+    ) -> Result<KdcReplyPart, KrbError> {
         // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
         // message, using the client's long-term key or another key selected
         // via pre-authentication mechanisms.
         let data = self.decrypt_data(base_key, 3)?;
 
-        let tagged_kdc_enc_part =
-            TaggedEncKdcRepPart::from_der(&data).map_err(|e| KrbError::DerDecodeEncKdcRepPart)?;
+        let tagged_kdc_enc_part = TaggedEncKdcRepPart::from_der(&data).map_err(|err| {
+            error!(?err, "DerDecodeEncKdcRepPart");
+            KrbError::DerDecodeEncKdcRepPart
+        })?;
 
         // RFC states we should relax the tag check on these.
         let kdc_enc_part = match tagged_kdc_enc_part {
@@ -796,7 +826,7 @@ impl TryInto<KdcEncryptedData> for EncryptedData {
     }
 }
 
-impl TryFrom<Asn1Ticket> for Ticket {
+impl TryFrom<Asn1Ticket> for EncTicket {
     type Error = KrbError;
 
     fn try_from(tkt: Asn1Ticket) -> Result<Self, Self::Error> {
@@ -806,7 +836,7 @@ impl TryFrom<Asn1Ticket> for Ticket {
         let enc_part = EncryptedData::try_from(tkt.enc_part)?;
         let tkt_vno = tkt.tkt_vno;
 
-        Ok(Ticket {
+        Ok(EncTicket {
             tkt_vno,
             service,
             enc_part,
@@ -814,7 +844,7 @@ impl TryFrom<Asn1Ticket> for Ticket {
     }
 }
 
-impl TryInto<Asn1Ticket> for Ticket {
+impl TryInto<Asn1Ticket> for EncTicket {
     type Error = KrbError;
 
     fn try_into(self) -> Result<Asn1Ticket, KrbError> {
@@ -825,6 +855,20 @@ impl TryInto<Asn1Ticket> for Ticket {
             enc_part: self.enc_part.try_into()?,
         };
         Ok(Asn1Ticket::new(t))
+    }
+}
+
+impl Ticket {
+    pub fn start_time(&self) -> &SystemTime {
+        &self.start_time
+    }
+
+    pub fn end_time(&self) -> &SystemTime {
+        &self.end_time
+    }
+
+    pub fn renew_until(&self) -> Option<&SystemTime> {
+        self.renew_until.as_ref()
     }
 }
 
@@ -869,11 +913,29 @@ impl Name {
         }
     }
 
-    pub fn service(name: &str, hostname: &str, realm: &str) -> Self {
+    pub fn service(srvname: &str, hostname: &str, realm: &str) -> Self {
         Self::SrvPrincipal {
-            service: name.to_string(),
+            service: srvname.to_string(),
             host: hostname.to_string(),
             realm: realm.to_string(),
+        }
+    }
+
+    /// MIT KRB often confuses SrvHst and SrvPrincipal (name types 1 and 3). This
+    /// normalises SrvHst to SrvPrincipal to assist with name matching. Types that
+    /// are not SrvHst are not altered by this function and pass through without change
+    pub fn service_hst_normalise(self) -> Self {
+        match self {
+            Self::SrvHst {
+                service,
+                host,
+                realm,
+            } => Self::SrvPrincipal {
+                service,
+                host,
+                realm,
+            },
+            ignore => ignore,
         }
     }
 
@@ -1188,7 +1250,7 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
         } = princ;
 
         let realm = realm.into();
-        let mut name_type: PrincipalNameType = name_type
+        let name_type: PrincipalNameType = name_type
             .try_into()
             .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
 
@@ -1252,7 +1314,7 @@ pub async fn get_tgt(
     principal: &str,
     realm: &str,
     password: &str,
-) -> Result<(Name, Ticket, KdcReplyPart), KrbError> {
+) -> Result<(Name, EncTicket, KdcReplyPart), KrbError> {
     let stream = TcpStream::connect("127.0.0.1:55000")
         .await
         .expect("Unable to connect to localhost:55000");
@@ -1281,7 +1343,7 @@ pub async fn get_tgt(
         .unwrap()
         .map_err(|e| KrbError::IoError(e))?;
 
-    let (name, ticket, kdc_reply): (Name, Ticket, KdcReplyPart) = match response {
+    let (name, ticket, kdc_reply): (Name, EncTicket, KdcReplyPart) = match response {
         KerberosReply::AS(AuthenticationReply {
             name,
             enc_part,

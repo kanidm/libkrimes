@@ -1,5 +1,4 @@
-// #![deny(warnings)]
-
+#![deny(warnings)]
 #![warn(unused_extern_crates)]
 // Enable some groups of clippy lints.
 #![deny(clippy::suspicious)]

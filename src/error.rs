@@ -34,6 +34,10 @@ pub enum KrbError {
 
     TgsAuthMissingChecksum,
     TgsAuthChecksumFailure,
+    TgsNotForRealm,
+    TgsTicketIsNotTgt,
+    TgsKdcReqMissingServiceName,
+    TgsKdcMissingStartTime,
 
     NameNotPrincipal,
     NameNotServiceHost,
