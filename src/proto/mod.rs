@@ -90,6 +90,18 @@ impl DerivedKey {
         )
     }
 
+    #[cfg(feature = "msextensions")]
+    pub fn from_client_key(k: Vec<u8>) -> Result<Self, KrbError> {
+        let k: [u8; AES_256_KEY_LEN] = k
+            .try_into()
+            .map_err(|_| KrbError::UnsupportedDerivedKeySize)?;
+        Ok(DerivedKey::Aes256CtsHmacSha196 {
+            k,
+            i: 0,
+            s: "".to_string(),
+        })
+    }
+
     // Used to derive a key for the user. We have to do this to get the correct
     // etype from the enc data as pa_data may have many etype_info2 and the spec
     // doesn't call it an error to have multiple ... yay for confusing poorly
