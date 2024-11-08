@@ -144,9 +144,12 @@ mod tests {
             assert_eq!(pa.padata_value.as_bytes(), tpa.padata_value);
         }
 
-        // Temporarily commented out as the flags were incorrect in wire format.
-        // let bits = asreq.req_body.kdc_options;
-        // assert_eq!(bits, tasreq.kdc_options);
+        let bits = asreq
+            .req_body
+            .decode_as::<KdcReqBody>()
+            .unwrap()
+            .kdc_options;
+        assert_eq!(bits, tasreq.kdc_options);
 
         // Needed because we have to hold the req body as Any (raw bytes) until
         // we perform checksums in the TGS path.

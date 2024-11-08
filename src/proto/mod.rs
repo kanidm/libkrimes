@@ -1369,8 +1369,6 @@ pub async fn get_tgt(
 
 #[cfg(test)]
 mod tests {
-    use crate::asn1::kdc_req_body::KdcReqBody;
-
     use super::SessionKey;
     use assert_hex::assert_eq_hex;
     use der::{asn1::Any, Decode};

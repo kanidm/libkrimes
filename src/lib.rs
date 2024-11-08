@@ -294,6 +294,7 @@ mod tests {
         let now = SystemTime::now();
         let tgs_req = KerberosRequest::build_tgs(
             Name::service("host", "pepper.example.com", "EXAMPLE.COM"),
+            now,
             now + Duration::from_secs(3600),
         )
         .renew_until(Some(now + Duration::from_secs(86400 * 7)))
