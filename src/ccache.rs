@@ -234,7 +234,7 @@ mod tests {
     use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
     use crate::asn1::tagged_ticket::TaggedTicket as Asn1TaggedTicket;
     use crate::asn1::tagged_ticket::Ticket as Asn1Ticket;
-    use crate::proto::{EncryptedData, KdcReplyPart, Ticket};
+    use crate::proto::{EncTicket, EncryptedData, KdcReplyPart};
     use binrw::io::{Seek, Write};
     use binrw::{BinReaderExt, BinWrite};
     use der::asn1::OctetString;
@@ -249,7 +249,7 @@ mod tests {
     impl FileCredentialCache {
         pub fn new(
             name: &Name,
-            ticket: &Ticket,
+            ticket: &EncTicket,
             enc_part: &KdcReplyPart,
             clock_skew: Option<Duration>,
         ) -> Result<Self, KrbError> {

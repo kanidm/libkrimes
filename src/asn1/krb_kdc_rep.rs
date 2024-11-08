@@ -172,7 +172,7 @@ mod tests {
             assert_eq!(name.0.as_str(), tname.0.as_str());
         }
 
-        //assert_eq!(asrep.ticket, tasrep.ticket);
+        assert_eq!(asrep.ticket, tasrep.ticket);
         assert_eq!(asrep.enc_part, tasrep.encpart);
     }
 
@@ -212,7 +212,7 @@ mod tests {
                 encpart: EncryptedData {
                     etype: 18,
                     kvno: None,
-                    cipher: OctetString::new(hex::decode("e5fca41337468155848766f655f34e00f7124a268bbfc79b68d4e949aa466c05a5cdaca4f21f62303e0175b5112b544c9b8dd950c85c58498aaf0e950ac4eecebd56616c192b640bca93298f4c2ed63bef8efe82ed585847ff4af54ae74bf6d2f9103fd99f90b724df57c0f8daea1d5e801c11d49af9671a1a8a4e8be6f86219e22af04b1b2a76c09489ea3b78eda7d0cf791a598f1e238586a0563b5fa690459cc3a8be3ea6c6a1dc539e37e1e055d2473f30d51e2e91bd5387f3be96d58add57057635ed29da77eeb9d111f18416e9eb3ef192e92c39151f171bd9fbeea181ced330bb6d53ef08001db94a0276914c24ecabf7629bea0309748e4b1630a0e36159f8db557d7e2a87eeaa499ea6d8d8a17efa582ca8b1e023d9a8").expect("Failed to hex decode")).expect("Failed to build OctetString"),
+                    cipher: OctetString::new(hex::decode("3082174a032112a13211a28216648216297d16c13bbd7fdd8dac58f284e9eea1c1cc89413195aee01d12ab5c5775f701849e25fd416427693cf8cf6567180cb5c9c1bf157521fdf38316cddba824b60c98056677ace3bcbccd2c82c203aaad8a0e6df44d07c76be2ddb70349a3c23b7b7bc2211c8bcc879a74872cf46d1d65b55f75e487eafdffbae8dc0e9083e9e0b59aa275a4591a7965d5ffb15f8d96d84a9da5840ef5d4715f2e99b3cf3cdc961ce416e4d9e49e7a1a617d919906d07eb886a7a49c1e8e966f99d6939c0d853636081a1edb9fdc4971f447cc5aa5392d91f352d451e349bf58a432aa116d9a3e9444214aee43f51a457c1ae7f3a6863a8df5569ed969edc97f298bf93be1ed85d64914b293e6dc6ebc8229a6aa4ce7c184cf7082ab3b3b3ff53bc4b47b3512e29479b4ffe8508cfcc1f3e5ec637139bff5b5c78facc9e0a6d818d4b6ea2be680547abbe8bd79e84814699f51fcdc531bb94613dc9923840").expect("Failed to hex decode")).expect("Failed to build OctetString"),
                 },
             }
         ];
