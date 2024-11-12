@@ -47,6 +47,7 @@ pub enum KrbError {
     UnsupportedKeytabType,
     IoError(std::io::Error),
     BinRWError(binrw::Error),
+    KeyutilsError(errno::Errno),
 
     InvalidMessageType,
     InvalidMessageDirection,

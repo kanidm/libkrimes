@@ -7,6 +7,9 @@ ln -s /usr/lib64/krb5/plugins/kdb/db2.so /usr/lib64/krb5/plugins/kdb/db2
 yes master_password | kdb5_util create -s
 yes admin_password | kadmin.local -q "addprinc root/admin"
 yes password | kadmin.local -q "addprinc testuser"
+yes password | kadmin.local -q "addprinc testuser1"
+yes password | kadmin.local -q "addprinc testuser2"
+yes password | kadmin.local -q "addprinc testuser3"
 yes password | kadmin.local -q "addprinc +requires_preauth testuser_preauth"
 
 kadmin.local -q "addprinc -randkey -policy hosts host/pepper.example.com"
