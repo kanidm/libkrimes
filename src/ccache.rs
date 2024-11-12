@@ -1,9 +1,23 @@
+use std::env;
+use std::path::PathBuf;
+use std::time::Duration;
+use users::get_current_uid;
+
+use crate::asn1::constants::encryption_types::EncryptionType as Asn1EncryptionType;
 use crate::asn1::constants::PrincipalNameType;
+use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
+use crate::asn1::tagged_ticket::TaggedTicket as Asn1TaggedTicket;
+use crate::asn1::tagged_ticket::Ticket as Asn1Ticket;
 use crate::error::KrbError;
-use crate::proto::{Name, SessionKey};
+use crate::proto::{EncTicket, EncryptedData, KdcReplyPart, Name, SessionKey};
 use binrw::helpers::until_eof;
 use binrw::io::TakeSeekExt;
+use binrw::BinWrite;
 use binrw::{binread, binwrite};
+use der::asn1::OctetString;
+use der::Encode;
+use std::fs::File;
+use std::time::SystemTime;
 
 /* TODO:
  *   - Handle cache conf entries. CredentialCache::new() could take a KV pair collection
@@ -133,6 +147,69 @@ struct CredentialV4 {
     second_ticket: DataComponent,
 }
 
+impl CredentialV4 {
+    pub fn new(name: &Name, ticket: &EncTicket, enc_part: &KdcReplyPart) -> Result<Self, KrbError> {
+        let cred: Self = CredentialV4 {
+            client: name.try_into()?,
+            server: (&enc_part.server).try_into()?,
+            keyblock: KeyBlock::V4((&enc_part.key).try_into()?),
+            authtime: enc_part
+                .auth_time
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_err(|_| KrbError::InsufficientData)?
+                .as_secs() as u32,
+            starttime: if let Some(start_time) = enc_part.start_time {
+                start_time
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map_err(|_| KrbError::InsufficientData)?
+                    .as_secs() as u32
+            } else {
+                0u32
+            },
+            endtime: enc_part
+                .end_time
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_err(|_| KrbError::InsufficientData)?
+                .as_secs() as u32,
+            renew_till: if let Some(till) = enc_part.renew_until {
+                till.duration_since(SystemTime::UNIX_EPOCH)
+                    .map_err(|_| KrbError::InsufficientData)?
+                    .as_secs() as u32
+            } else {
+                0u32
+            },
+            is_skey: 0u8,
+            ticket_flags: enc_part.flags.bits().reverse_bits(),
+            addresses: Addresses { addresses: vec![] },
+            authdata: AuthData { auth_data: vec![] },
+            ticket: DataComponent {
+                value: match &ticket.enc_part {
+                    EncryptedData::Aes256CtsHmacSha196 { kvno: _, data } => {
+                        let t = Asn1Ticket {
+                            tkt_vno: 5,
+                            realm: (&enc_part.server).try_into()?,
+                            sname: (&enc_part.server).try_into()?,
+                            enc_part: Asn1EncryptedData {
+                                etype: Asn1EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
+                                kvno: Some(1), // TODO Why?
+                                cipher: OctetString::new(data.clone())
+                                    .expect("Failed to build OctetString"),
+                            },
+                        };
+                        let tt = Asn1TaggedTicket::new(t);
+                        tt.to_der().map_err(|e| {
+                            println!("{:#?}", e);
+                            KrbError::DerEncodeEncTicketPart
+                        })?
+                    }
+                },
+            },
+            second_ticket: DataComponent { value: vec![] },
+        };
+        Ok(cred)
+    }
+}
+
 #[binwrite]
 #[bw(big)]
 #[binread]
@@ -159,11 +236,87 @@ pub(crate) enum FileCredentialCache {
     V4(FileCredentialCacheV4),
 }
 
-#[binwrite]
-#[bw(big)]
-#[binread]
-pub(crate) enum CredentialCache {
-    File(FileCredentialCache),
+impl FileCredentialCache {
+    pub fn new(
+        name: &Name,
+        ticket: &EncTicket,
+        enc_part: &KdcReplyPart,
+        clock_skew: Option<Duration>,
+    ) -> Result<Self, KrbError> {
+        let mut header = FileCredentialCacheHeader { fields: vec![] };
+
+        if let Some(skew) = clock_skew {
+            /*
+             * At this time there is only one defined header field. Its tag value is 1,
+             * its length is always 8, and its contents are two 32-bit integers giving
+             * the seconds and microseconds of the time offset of the KDC relative to
+             * the client. Adding this offset to the current time on the client should
+             * give the current time on the KDC, if that offset has not changed since
+             * the initial authentication.
+             */
+            let secs = skew.as_secs() as u32;
+            let secs: [u8; 4] = secs.to_be_bytes();
+            let msecs = skew.subsec_micros() as u32;
+            let msecs: [u8; 4] = msecs.to_be_bytes();
+            let mut field = HeaderField {
+                tag: 1u16,
+                value: vec![],
+            };
+            field.value.extend_from_slice(&secs);
+            field.value.extend_from_slice(&msecs);
+            header.fields.push(field);
+        }
+
+        let principal = FileCredentialCachePrincipal::V4(name.try_into()?);
+
+        let credentials = vec![
+            //Credential::V4(CredentialV4 {
+            //    client: name.try_into()?,
+            //    server: PrincipalV4 {
+            //        name_type: 1,
+            //        realm: DataComponent {
+            //            value: "X-CACHECONF:".as_bytes().into(),
+            //        },
+            //        components: vec![
+            //            DataComponent {
+            //                value: "krb5_ccache_conf_data".as_bytes().into(),
+            //            },
+            //            DataComponent {
+            //                value: "fast_avail".as_bytes().into(),
+            //            },
+            //            DataComponent {
+            //                value: "krbtgt/EXAMPLE.COM@EXAMPLE.COM".as_bytes().into(),
+            //            },
+            //        ],
+            //    },
+            //    keyblock: KeyBlock::V4(KeyBlockV4 {
+            //        enc_type: 0,
+            //        data: DataComponent { value: vec![] },
+            //    }),
+            //    authtime: 0u32,
+            //    starttime: 0u32,
+            //    endtime: 0u32,
+            //    renew_till: 0u32,
+            //    is_skey: 0u8,
+            //    ticket_flags: 0u32,
+            //    addresses: Addresses { addresses: vec![] },
+            //    authdata: AuthData { auth_data: vec![] },
+            //    ticket: DataComponent {
+            //        value: "yes".as_bytes().into(),
+            //    },
+            //    second_ticket: DataComponent { value: vec![] },
+            //}),
+            Credential::V4(CredentialV4::new(name, ticket, enc_part)?),
+        ];
+
+        let ccache: FileCredentialCacheV4 = FileCredentialCacheV4 {
+            header,
+            principal,
+            credentials,
+        };
+
+        Ok(FileCredentialCache::V4(ccache))
+    }
 }
 
 impl TryFrom<&Name> for PrincipalV4 {
@@ -227,189 +380,66 @@ impl TryFrom<&SessionKey> for KeyBlockV4 {
     }
 }
 
+pub enum CredentialCacheType {
+    File(Option<PathBuf>),
+}
+
+pub fn store(
+    name: &Name,
+    ticket: &EncTicket,
+    kdc_reply_part: &KdcReplyPart,
+    clock_skew: Option<Duration>,
+    ccache: Option<&str>,
+) -> Result<(), KrbError> {
+    let ccache_type: String = match ccache {
+        Some(c) => c.to_string(),
+        None => match env::var("KRB5CCNAME") {
+            Ok(val) => val,
+            _ => "/tmp/krb5cc_%{uid}".to_string(),
+        },
+    };
+
+    let uid = get_current_uid();
+    let ccache_type = ccache_type.replace("%{uid}", uid.to_string().as_str());
+
+    if ccache_type.starts_with("FILE:") {
+        let fccache = FileCredentialCache::new(name, ticket, kdc_reply_part, clock_skew)?;
+        let p = ccache_type
+            .strip_prefix("FILE:")
+            .expect("Failed to strip prefix");
+        let p = PathBuf::from(p);
+        let mut f = File::create(p).map_err(|e| KrbError::IoError(e))?;
+        fccache.write(&mut f).map_err(|e| KrbError::BinRWError(e))?;
+        return Ok(());
+    }
+    Err(KrbError::UnsupportedCredentialCacheType)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asn1::constants::encryption_types::EncryptionType as Asn1EncryptionType;
-    use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
-    use crate::asn1::tagged_ticket::TaggedTicket as Asn1TaggedTicket;
-    use crate::asn1::tagged_ticket::Ticket as Asn1Ticket;
-    use crate::proto::{EncTicket, EncryptedData, KdcReplyPart};
-    use binrw::io::{Seek, Write};
-    use binrw::{BinReaderExt, BinWrite};
-    use der::asn1::OctetString;
-    use der::Encode;
-    use std::env;
+    use binrw::BinReaderExt;
+    use binrw::BinWrite;
     use std::fs;
-    use std::fs::File;
-    use std::path::PathBuf;
     use std::process::{Command, Stdio};
-    use std::time::{Duration, SystemTime};
+    use std::time::Duration;
+
+    //impl KeyPayload for CredentialV4 {
+    //    fn payload(&self) -> Cow<'_, [u8]> {
+    //        let mut c = std::io::Cursor::new(Vec::new());
+    //        self.write(&mut c).expect("Failed to write");
+    //        Cow::Owned(c.into_inner())
+    //    }
+    //}
+
+    //impl KeyDescription for CredentialV4 {
+    //    fn description(&self) -> Cow<'_, str> {
+    //        let name: String = "FOOOO".to_string();
+    //        Cow::Owned(name)
+    //    }
+    //}
 
     impl FileCredentialCache {
-        pub fn new(
-            name: &Name,
-            ticket: &EncTicket,
-            enc_part: &KdcReplyPart,
-            clock_skew: Option<Duration>,
-        ) -> Result<Self, KrbError> {
-            let mut header = FileCredentialCacheHeader { fields: vec![] };
-
-            if let Some(skew) = clock_skew {
-                /*
-                 * At this time there is only one defined header field. Its tag value is 1,
-                 * its length is always 8, and its contents are two 32-bit integers giving
-                 * the seconds and microseconds of the time offset of the KDC relative to
-                 * the client. Adding this offset to the current time on the client should
-                 * give the current time on the KDC, if that offset has not changed since
-                 * the initial authentication.
-                 */
-                let secs = skew.as_secs() as u32;
-                let secs: [u8; 4] = secs.to_be_bytes();
-                let msecs = skew.subsec_micros() as u32;
-                let msecs: [u8; 4] = msecs.to_be_bytes();
-                let mut field = HeaderField {
-                    tag: 1u16,
-                    value: vec![],
-                };
-                field.value.extend_from_slice(&secs);
-                field.value.extend_from_slice(&msecs);
-                header.fields.push(field);
-            }
-
-            let principal = FileCredentialCachePrincipal::V4(name.try_into()?);
-
-            let credentials = vec![
-                //Credential::V4(CredentialV4 {
-                //    client: name.try_into()?,
-                //    server: PrincipalV4 {
-                //        name_type: 1,
-                //        realm: DataComponent {
-                //            value: "X-CACHECONF:".as_bytes().into(),
-                //        },
-                //        components: vec![
-                //            DataComponent {
-                //                value: "krb5_ccache_conf_data".as_bytes().into(),
-                //            },
-                //            DataComponent {
-                //                value: "fast_avail".as_bytes().into(),
-                //            },
-                //            DataComponent {
-                //                value: "krbtgt/EXAMPLE.COM@EXAMPLE.COM".as_bytes().into(),
-                //            },
-                //        ],
-                //    },
-                //    keyblock: KeyBlock::V4(KeyBlockV4 {
-                //        enc_type: 0,
-                //        data: DataComponent { value: vec![] },
-                //    }),
-                //    authtime: 0u32,
-                //    starttime: 0u32,
-                //    endtime: 0u32,
-                //    renew_till: 0u32,
-                //    is_skey: 0u8,
-                //    ticket_flags: 0u32,
-                //    addresses: Addresses { addresses: vec![] },
-                //    authdata: AuthData { auth_data: vec![] },
-                //    ticket: DataComponent {
-                //        value: "yes".as_bytes().into(),
-                //    },
-                //    second_ticket: DataComponent { value: vec![] },
-                //}),
-                Credential::V4(CredentialV4 {
-                    client: name.try_into()?,
-                    server: (&enc_part.server).try_into()?,
-                    keyblock: KeyBlock::V4((&enc_part.key).try_into()?),
-                    authtime: enc_part
-                        .auth_time
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .map_err(|_| KrbError::InsufficientData)?
-                        .as_secs() as u32,
-                    starttime: if let Some(start_time) = enc_part.start_time {
-                        start_time
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .map_err(|_| KrbError::InsufficientData)?
-                            .as_secs() as u32
-                    } else {
-                        0u32
-                    },
-                    endtime: enc_part
-                        .end_time
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .map_err(|_| KrbError::InsufficientData)?
-                        .as_secs() as u32,
-                    renew_till: if let Some(till) = enc_part.renew_until {
-                        till.duration_since(SystemTime::UNIX_EPOCH)
-                            .map_err(|_| KrbError::InsufficientData)?
-                            .as_secs() as u32
-                    } else {
-                        0u32
-                    },
-                    is_skey: 0u8,
-                    ticket_flags: enc_part.flags.bits().reverse_bits(),
-                    addresses: Addresses { addresses: vec![] },
-                    authdata: AuthData { auth_data: vec![] },
-                    ticket: DataComponent {
-                        value: match &ticket.enc_part {
-                            EncryptedData::Aes256CtsHmacSha196 { kvno: _, data } => {
-                                let t = Asn1Ticket {
-                                    tkt_vno: 5,
-                                    realm: (&enc_part.server).try_into()?,
-                                    sname: (&enc_part.server).try_into()?,
-                                    enc_part: Asn1EncryptedData {
-                                        etype: Asn1EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
-                                        kvno: Some(1), // TODO Why?
-                                        cipher: OctetString::new(data.clone())
-                                            .expect("Failed to build OctetString"),
-                                    },
-                                };
-                                let tt = Asn1TaggedTicket::new(t);
-                                tt.to_der().map_err(|e| {
-                                    println!("{:#?}", e);
-                                    KrbError::DerEncodeEncTicketPart
-                                })?
-                            }
-                        },
-                    },
-                    second_ticket: DataComponent { value: vec![] },
-                }),
-            ];
-
-            let ccache: FileCredentialCacheV4 = FileCredentialCacheV4 {
-                header,
-                principal,
-                credentials,
-            };
-
-            Ok(FileCredentialCache::V4(ccache))
-        }
-
-        pub fn store(self: Self, path: Option<PathBuf>) -> Result<(), KrbError> {
-            let mut f: File = match path {
-                Some(p) => File::create(p).map_err(|e| KrbError::IoError(e)),
-                None => match env::var("KRB5CCNAME") {
-                    Ok(val) => {
-                        if !val.starts_with("FILE:") {
-                            return Err(KrbError::UnsupportedCredentialCacheType);
-                        }
-                        let p = val.strip_prefix("FILE:").expect("Failed to strip prefix");
-                        let p = PathBuf::from(p);
-                        File::create(p).map_err(|e| KrbError::IoError(e))
-                    }
-                    _ => {
-                        // default_ccache_name from config file
-                        todo!()
-                    }
-                },
-            }?;
-            self.write(&mut f)
-        }
-
-        pub fn write<W: Write + Seek>(self: Self, writer: &mut W) -> Result<(), KrbError> {
-            let ccache = CredentialCache::File(self);
-            ccache.write(writer).map_err(|e| KrbError::BinRWError(e))
-        }
-
         pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
             let mut reader = binrw::io::Cursor::new(inner);
             let ccache: FileCredentialCache = reader
@@ -470,13 +500,16 @@ mod tests {
                 .await
                 .expect("Failed to get ticket");
 
-        let krime_ccache =
-            FileCredentialCache::new(&name, &ticket, &kdc_reply, Some(Duration::new(0, 0)))
-                .expect("Failed to create file credential cache");
+        //let krime_ccache =
+        //    FileCredentialCache::new(&name, &ticket, &kdc_reply, Some(Duration::new(0, 0)))
+        //        .expect("Failed to create file credential cache");
         let path = "/tmp/krb5cc_krime";
-        krime_ccache
-            .store(Some(PathBuf::from(path)))
-            .expect("Failed to write");
+        let ccache_type = format!("FILE:{path}");
+        //krime_ccache
+        //    .store(Some(PathBuf::from(path)))
+        //    .expect("Failed to write");
+        super::store(&name, &ticket, &kdc_reply, None, Some(ccache_type.as_str()))
+            .expect("Failed to store credential cache");
 
         let status = Command::new("klist")
             .stdout(Stdio::null())
@@ -489,5 +522,150 @@ mod tests {
         fs::remove_file(path).expect("Failed to rm ccache file");
 
         assert!(status.success());
+    }
+
+    use keyutils::keytypes::user::User;
+    use keyutils::Key;
+    use keyutils::Keyring;
+    use keyutils::SpecialKeyring;
+
+    #[binwrite]
+    #[bw(big, magic = 1u8)]
+    #[binread]
+    #[br(magic = 1u8)]
+    pub(crate) struct PrimaryName {
+        #[bw(calc=strval.len() as u32)]
+        #[br(temp)]
+        strlen: u32,
+        #[br(count=strlen)]
+        strval: Vec<u8>,
+    }
+    /*
+     * KEYRING:persistent:123
+     *   anchor = persistent
+     *   collection = 123
+     *   subsidiary = NULL
+     *
+     * _persistent.123
+     * \_ _krb
+     *     \_ krb_ccache_12WEF43f2
+     *         \_ __krb5_princ__
+     *         \_ krbtgt/TEST.KERBEROS.ORG@TEST.KERBEROS.ORG
+     *         \_ krb5_ccache_conf_data/fast_avail/...
+     *         \_ __krb5_time_offsets__
+     *     \_ krb_ccache_fdgsER324
+     *     \_ ...
+     *     \_ krb_ccache:primary (krb_ccache_12WEF43f2)
+     *
+     *
+     * KEYRING:process:1000
+     * \_ _krb_1000
+     *      \_ 1000
+     *          \_ __krb5_princ__
+     *          \_ __krb5_time_offsets__
+     *          \_ krb5_ccache_conf_data/fast_avail/...
+     *          \_ krbtgt/TEST.KERBEROS.ORG@TEST.KERBEROS.ORG
+     *      \_ krb_ccache_5De38WQ
+     *          \_ __krb5_princ__
+     *          \_ __krb5_time_offsets__
+     *          \_ krb5_ccache_conf_data/fast_avail/...
+     *          \_ krbtgt/TEST.KERBEROS.ORG@TEST.KERBEROS.ORG
+     *      \_ krb_ccache:primary (1000)
+     */
+
+    #[tokio::test]
+    async fn test_ccache_keyring_store() {
+        let (name, ticket, kdc_reply) =
+            crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password")
+                .await
+                .expect("Failed to get ticket");
+
+        // Fetch or create the keyring
+        let mut ring = Keyring::attach_or_create(SpecialKeyring::Session)
+            .expect("Failed to attach to keyring");
+        let mut collection: Keyring = match ring.search_for_keyring("_krb_1000", None) {
+            Ok(k) => k,
+            Err(errno::Errno(libc::ENOKEY)) => ring
+                .add_keyring("_krb_1000")
+                .expect("Failed to create keyring"),
+            Err(e) => {
+                panic!("Failed to search for keyring: {:#?}", e);
+            }
+        };
+
+        // Get or initialize the primary name within collection.
+        let pns: &str = "krbccache:primary";
+        let _primary: Key =
+            match collection.search_for_key::<User, &str, Option<&mut Keyring>>(pns, None) {
+                Ok(k) => k,
+                Err(errno::Errno(libc::ENOKEY)) => {
+                    // Initialize to collection name
+                    let pn: PrimaryName = PrimaryName {
+                        strval: "1000".as_bytes().to_vec(),
+                    };
+                    let mut c = std::io::Cursor::new(Vec::new());
+                    pn.write(&mut c).expect("Failed to write");
+                    let vec = c.into_inner();
+                    collection
+                        .add_key::<User, &str, &[u8]>(pns, vec.as_slice())
+                        .expect("Failed to add Key")
+                }
+                Err(e) => {
+                    panic!("Failed to search for key: {:#?}", e);
+                }
+            };
+
+        let mut ccache: Keyring = match collection.search_for_keyring("1000", None) {
+            Ok(k) => k,
+            Err(errno::Errno(libc::ENOKEY)) => collection
+                .add_keyring("1000")
+                .expect("Failed to create keyring"),
+            Err(e) => {
+                panic!("Failed to search for keyring {:#?}", e);
+            }
+        };
+
+        // Get the SPN and use it as the key name (creds->server)
+        let key_name: String = (&kdc_reply.server).into();
+        let creds: CredentialV4 =
+            CredentialV4::new(&name, &ticket, &kdc_reply).expect("Failed to create credentials");
+        let mut c = std::io::Cursor::new(Vec::new());
+        creds.write(&mut c).expect("Failed to write");
+        let vec = c.into_inner();
+        ccache
+            .add_key::<User, &str, &[u8]>(key_name.as_str(), vec.as_slice())
+            .expect("Failed to add Key");
+
+        let princ: PrincipalV4 = (&name).try_into().expect("Failed to build PrincipalV4");
+        let mut c = std::io::Cursor::new(Vec::new());
+        princ.write(&mut c).expect("Failed to write");
+        let vec = c.into_inner();
+        ccache
+            .add_key::<User, &str, &[u8]>("__krb5_princ__", vec.as_slice())
+            .expect("Failed to add Key");
+
+        let output = Command::new("klist")
+            .arg("-A")
+            .env("KRB5CCNAME", "KEYRING:session:1000")
+            .output()
+            .expect("Failed to klist");
+        print!("{:#?}", output);
+
+        //let output = Command::new("cat")
+        //    .arg("/proc/keys")
+        //    .output()
+        //    .expect("Failed to read keys");
+        //print!("{:#?}", String::from_utf8_lossy(&output.stdout));
+        todo!();
+
+        // Retrieve or create a keyring for <collection_name> within the anchor.
+
+        //let payload: &[u8] = &b"payload"[..];
+        //let _key = ring.add_key::<User, _, _>(key_name, payload).expect("Failed to add key");
+
+        // Add key to keyring. Use big-key type, assume the kernel supports it
+
+        // Set timeouts
+        // Update keyring expiration
     }
 }
