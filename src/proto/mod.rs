@@ -1042,6 +1042,37 @@ impl Name {
     }
 }
 
+impl Into<String> for &Name {
+    fn into(self) -> String {
+        match self {
+            Name::Principal { name, realm } => {
+                format!("{}@{}", name, realm)
+            }
+            Name::SrvPrincipal {
+                service,
+                host,
+                realm,
+            } => {
+                format!("{}/{}@{}", service, host, realm)
+            }
+            Name::SrvInst {
+                service,
+                instance,
+                realm,
+            } => {
+                format!("{}/{}@{}", service, instance.join("/"), realm)
+            }
+            Name::SrvHst {
+                service,
+                host,
+                realm,
+            } => {
+                format!("{}/{}@{}", service, host, realm)
+            }
+        }
+    }
+}
+
 impl TryInto<Realm> for &Name {
     type Error = KrbError;
 
