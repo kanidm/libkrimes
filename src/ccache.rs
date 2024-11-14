@@ -8,6 +8,7 @@ use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
 use crate::asn1::tagged_ticket::TaggedTicket as Asn1TaggedTicket;
 use crate::asn1::tagged_ticket::Ticket as Asn1Ticket;
+use crate::cc_keyring;
 use crate::error::KrbError;
 use crate::proto::{EncTicket, EncryptedData, KdcReplyPart, Name, SessionKey};
 use binrw::helpers::until_eof;
@@ -18,13 +19,6 @@ use der::asn1::OctetString;
 use der::Encode;
 use std::fs::File;
 use std::time::SystemTime;
-
-use errno::Errno;
-use keyutils::keytypes::user::User;
-use keyutils::Key;
-use keyutils::Keyring;
-use keyutils::SpecialKeyring;
-use libc;
 
 /* TODO:
  *   - Handle cache conf entries. CredentialCache::new() could take a KV pair collection
@@ -68,7 +62,7 @@ struct DataComponent {
 #[binwrite]
 #[bw(big)]
 #[binread]
-struct PrincipalV4 {
+pub(crate) struct PrincipalV4 {
     name_type: u32,
     #[bw(try_calc(u32::try_from(components.len())))]
     components_count: u32,
@@ -138,7 +132,7 @@ struct AuthData {
 #[binwrite]
 #[bw(big)]
 #[binread]
-struct CredentialV4 {
+pub(crate) struct CredentialV4 {
     client: PrincipalV4,
     server: PrincipalV4,
     keyblock: KeyBlock,
@@ -374,6 +368,50 @@ impl TryFrom<&Name> for PrincipalV4 {
     }
 }
 
+impl TryInto<Name> for PrincipalV4 {
+    type Error = KrbError;
+
+    fn try_into(self) -> Result<Name, Self::Error> {
+        let name_type: i32 = self.name_type as i32;
+        let name_type: PrincipalNameType = name_type
+            .try_into()
+            .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
+        match name_type {
+            PrincipalNameType::NtPrincipal => {
+                let n: Name = Name::Principal {
+                    name: self
+                        .components
+                        .iter()
+                        .map(|x| String::from_utf8_lossy(x.value.as_slice()).to_string())
+                        .collect::<Vec<String>>()
+                        .join(""),
+                    realm: String::from_utf8_lossy(self.realm.value.as_slice()).to_string(),
+                };
+                Ok(n)
+            }
+            PrincipalNameType::NtSrvInst => {
+                let n: Name = Name::SrvInst {
+                    service: self
+                        .components
+                        .get(0)
+                        .ok_or(KrbError::NameNotPrincipal)
+                        .map(|x| String::from_utf8_lossy(x.value.as_slice()).to_string())?,
+                    instance: self
+                        .components
+                        .get(1..)
+                        .ok_or(KrbError::NameNotPrincipal)?
+                        .iter()
+                        .map(|x| String::from_utf8_lossy(x.value.as_slice()).to_string())
+                        .collect::<Vec<String>>(),
+                    realm: String::from_utf8_lossy(self.realm.value.as_slice()).to_string(),
+                };
+                Ok(n)
+            }
+            _ => todo!(),
+        }
+    }
+}
+
 impl TryFrom<&SessionKey> for KeyBlockV4 {
     type Error = KrbError;
 
@@ -385,152 +423,6 @@ impl TryFrom<&SessionKey> for KeyBlockV4 {
             }),
         }
     }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct Residual {
-    #[allow(dead_code)]
-    anchor: String,
-    #[allow(dead_code)]
-    collection: String,
-    #[allow(dead_code)]
-    subsidiary: Option<String>,
-}
-
-impl Residual {
-    fn parse(residual: &str) -> Result<Self, KrbError> {
-        if !residual.starts_with("KEYRING:") {
-            return Err(KrbError::UnsupportedCredentialCacheType);
-        }
-        let residual = residual
-            .strip_prefix("KEYRING:")
-            .ok_or(KrbError::UnsupportedCredentialCacheType)?;
-
-        let (anchor, suffix) = residual
-            .split_once(":")
-            .ok_or(KrbError::UnsupportedCredentialCacheType)?;
-        if anchor.is_empty() {
-            return Err(KrbError::UnsupportedCredentialCacheType);
-        }
-
-        let (collection, suffix) = suffix.split_once(":").unwrap_or((suffix, ""));
-        if collection.is_empty() {
-            return Err(KrbError::UnsupportedCredentialCacheType);
-        }
-
-        let subsidiary: Option<String> = match suffix.split_once(":") {
-            Some((subsidiary, _)) => Some(subsidiary.to_string()),
-            None => {
-                if !suffix.is_empty() {
-                    Some(suffix.to_string())
-                } else {
-                    None
-                }
-            }
-        };
-
-        Ok(Residual {
-            anchor: anchor.to_string(),
-            collection: collection.to_string(),
-            subsidiary,
-        })
-    }
-}
-
-#[binwrite]
-#[bw(big, magic = 1u8)]
-#[binread]
-#[br(magic = 1u8)]
-pub(crate) struct PrimaryName {
-    #[bw(calc=strval.len() as u32)]
-    #[br(temp)]
-    strlen: u32,
-    #[br(count=strlen)]
-    strval: Vec<u8>,
-}
-
-fn store_keyring(
-    name: &Name,
-    ticket: &EncTicket,
-    kdc_reply_part: &KdcReplyPart,
-    _clock_skew: Option<Duration>,
-    residual: &Residual,
-) -> Result<(), KrbError> {
-    // Fetch or create the keyring
-    let mut keyring: Keyring = match residual.anchor.as_str() {
-        "process" => Keyring::attach_or_create(SpecialKeyring::Process),
-        "session" => Keyring::attach_or_create(SpecialKeyring::Session),
-        "user" => Keyring::attach_or_create(SpecialKeyring::User),
-        "persistent" => {
-            todo!();
-        }
-        _ => Err(Errno(libc::ENOTSUP)),
-    }
-    .map_err(|e| KrbError::KeyutilsError(e))?;
-
-    let collection_name = format!("_krb_{}", residual.collection);
-    let mut collection: Keyring = match keyring.search_for_keyring(collection_name.clone(), None) {
-        Ok(k) => Ok(k),
-        Err(errno::Errno(libc::ENOKEY)) => keyring
-            .add_keyring(collection_name.clone())
-            .map_err(|e| KrbError::KeyutilsError(e)),
-        Err(e) => Err(KrbError::KeyutilsError(e)),
-    }?;
-
-    // Set the primary name within collection.
-    let primary_name: &str = "krbccache:primary";
-    let _primary: Key =
-        match collection.search_for_key::<User, &str, Option<&mut Keyring>>(primary_name, None) {
-            Ok(k) => Ok(k),
-            Err(errno::Errno(libc::ENOKEY)) => {
-                // Initialize to collection name
-                let pn: PrimaryName = PrimaryName {
-                    strval: collection_name.as_bytes().to_vec(),
-                };
-                let mut c = std::io::Cursor::new(Vec::new());
-                pn.write(&mut c).expect("Failed to write");
-                let vec = c.into_inner();
-                collection
-                    .add_key::<User, &str, &[u8]>(primary_name, vec.as_slice())
-                    .map_err(|e| KrbError::KeyutilsError(e))
-            }
-            Err(e) => Err(KrbError::KeyutilsError(e)),
-        }?;
-
-    let mut ccache_keyring: Keyring =
-        match collection.search_for_keyring(collection_name.clone(), None) {
-            Ok(c) => {
-                // TODO What to do???
-                // Generate random name
-                Ok(c)
-            }
-            Err(errno::Errno(libc::ENOKEY)) => collection
-                .add_keyring(collection_name.clone())
-                .map_err(|e| KrbError::KeyutilsError(e)),
-            Err(e) => Err(KrbError::KeyutilsError(e)),
-        }?;
-
-    // Get the SPN and use it as the key name (creds->server)
-    let key_name: String = (&kdc_reply_part.server).into();
-    let creds: CredentialV4 = CredentialV4::new(name, ticket, kdc_reply_part)?;
-    let mut c = std::io::Cursor::new(Vec::new());
-    creds.write(&mut c).expect("Failed to write");
-    let vec = c.into_inner();
-    ccache_keyring
-        .add_key::<User, &str, &[u8]>(key_name.as_str(), vec.as_slice())
-        .map_err(|e| KrbError::KeyutilsError(e))?;
-
-    let princ: PrincipalV4 = name.try_into()?;
-    let mut c = std::io::Cursor::new(Vec::new());
-    princ.write(&mut c).expect("Failed to write");
-    let vec = c.into_inner();
-    ccache_keyring
-        .add_key::<User, &str, &[u8]>("__krb5_princ__", vec.as_slice())
-        .map_err(|e| KrbError::KeyutilsError(e))?;
-
-    // TODO Store clockskew in __krb5_clock_skew__
-
-    Ok(())
 }
 
 pub fn store(
@@ -563,8 +455,13 @@ pub fn store(
     }
 
     if ccache_type.starts_with("KEYRING:") {
-        let residual = Residual::parse(ccache_type.as_str())?;
-        return store_keyring(name, ticket, kdc_reply_part, clock_skew, &residual);
+        return cc_keyring::store(
+            name,
+            ticket,
+            kdc_reply_part,
+            clock_skew,
+            ccache_type.as_str(),
+        );
     }
 
     Err(KrbError::UnsupportedCredentialCacheType)
@@ -578,21 +475,6 @@ mod tests {
     use std::fs;
     use std::process::{Command, Stdio};
     use std::time::Duration;
-
-    //impl KeyPayload for CredentialV4 {
-    //    fn payload(&self) -> Cow<'_, [u8]> {
-    //        let mut c = std::io::Cursor::new(Vec::new());
-    //        self.write(&mut c).expect("Failed to write");
-    //        Cow::Owned(c.into_inner())
-    //    }
-    //}
-
-    //impl KeyDescription for CredentialV4 {
-    //    fn description(&self) -> Cow<'_, str> {
-    //        let name: String = "FOOOO".to_string();
-    //        Cow::Owned(name)
-    //    }
-    //}
 
     impl FileCredentialCache {
         pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
@@ -677,127 +559,5 @@ mod tests {
         fs::remove_file(path).expect("Failed to rm ccache file");
 
         assert!(status.success());
-    }
-
-    #[tokio::test]
-    async fn test_ccache_keyring_residual_parse() {
-        let residual = Residual::parse("KEYRING:session");
-        assert!(residual.is_err());
-        let residual = Residual::parse("KEYRING:session:");
-        assert!(residual.is_err());
-        let residual = Residual::parse("KEYRING:session:1000").expect("Failed to parse");
-        assert_eq!(
-            residual,
-            Residual {
-                anchor: "session".to_string(),
-                collection: "1000".to_string(),
-                subsidiary: None
-            }
-        );
-        let residual = Residual::parse("KEYRING:session:1000:").expect("Failed to parse");
-        assert_eq!(
-            residual,
-            Residual {
-                anchor: "session".to_string(),
-                collection: "1000".to_string(),
-                subsidiary: None
-            }
-        );
-        let residual = Residual::parse("KEYRING:session:1000:foo").expect("Failed to parse");
-        assert_eq!(
-            residual,
-            Residual {
-                anchor: "session".to_string(),
-                collection: "1000".to_string(),
-                subsidiary: Some("foo".to_string())
-            }
-        );
-    }
-    /*
-     * KEYRING:persistent:123
-     *   anchor = persistent
-     *   collection = 123
-     *   subsidiary = NULL
-     *
-     * _persistent.123
-     * \_ _krb
-     *     \_ krb_ccache_12WEF43f2
-     *         \_ __krb5_princ__
-     *         \_ krbtgt/TEST.KERBEROS.ORG@TEST.KERBEROS.ORG
-     *         \_ krb5_ccache_conf_data/fast_avail/...
-     *         \_ __krb5_time_offsets__
-     *     \_ krb_ccache_fdgsER324
-     *     \_ ...
-     *     \_ krb_ccache:primary (krb_ccache_12WEF43f2)
-     *
-     *
-     * KEYRING:process:1000
-     * \_ _krb_1000
-     *      \_ 1000
-     *          \_ __krb5_princ__
-     *          \_ __krb5_time_offsets__
-     *          \_ krb5_ccache_conf_data/fast_avail/...
-     *          \_ krbtgt/TEST.KERBEROS.ORG@TEST.KERBEROS.ORG
-     *      \_ krb_ccache_5De38WQ
-     *          \_ __krb5_princ__
-     *          \_ __krb5_time_offsets__
-     *          \_ krb5_ccache_conf_data/fast_avail/...
-     *          \_ krbtgt/TEST.KERBEROS.ORG@TEST.KERBEROS.ORG
-     *      \_ krb_ccache:primary (1000)
-     */
-
-    #[tokio::test]
-    async fn test_ccache_keyring_store() {
-        let (name, ticket, kdc_reply) =
-            crate::proto::get_tgt("testuser1", "EXAMPLE.COM", "password")
-                .await
-                .expect("Failed to get ticket");
-
-        super::store(
-            &name,
-            &ticket,
-            &kdc_reply,
-            None,
-            Some("KEYRING:session:%{uid}"),
-        )
-        .expect("Failed to store");
-
-        let (name, ticket, kdc_reply) =
-            crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password")
-                .await
-                .expect("Failed to get ticket");
-
-        super::store(
-            &name,
-            &ticket,
-            &kdc_reply,
-            None,
-            Some("KEYRING:session:%{uid}"),
-        )
-        .expect("Failed to store");
-
-        let output = Command::new("klist")
-            .arg("-A")
-            .env("KRB5CCNAME", "KEYRING:session:1000")
-            .output()
-            .expect("Failed to klist");
-        print!("{:#?}", output);
-
-        //let output = Command::new("cat")
-        //    .arg("/proc/keys")
-        //    .output()
-        //    .expect("Failed to read keys");
-        //print!("{:#?}", String::from_utf8_lossy(&output.stdout));
-        todo!();
-
-        // Retrieve or create a keyring for <collection_name> within the anchor.
-
-        //let payload: &[u8] = &b"payload"[..];
-        //let _key = ring.add_key::<User, _, _>(key_name, payload).expect("Failed to add key");
-
-        // Add key to keyring. Use big-key type, assume the kernel supports it
-
-        // Set timeouts
-        // Update keyring expiration
     }
 }
