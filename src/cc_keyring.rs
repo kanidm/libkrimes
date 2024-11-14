@@ -9,6 +9,7 @@ use keyutils::keytypes::user::User;
 use keyutils::SpecialKeyring;
 use keyutils::{Key, Keyring};
 use libc;
+use rand::{distributions::Alphanumeric, Rng};
 use std::time::Duration;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -80,6 +81,87 @@ struct PrimaryName {
 struct TimeOffsets {
     secs: i32,
     usecs: i32,
+}
+
+fn get_subsidiary_principal(keyring: &Keyring) -> Result<Option<Name>, KrbError> {
+    let key_name = "__krb5_princ__";
+    match keyring.search_for_key::<User, &str, Option<&mut Keyring>>(key_name, None) {
+        Ok(k) => {
+            let payload = k.read().map_err(|e| KrbError::KeyutilsError(e))?;
+            let mut reader = binrw::io::Cursor::new(payload);
+            let stored: PrincipalV4 = reader
+                .read_type(binrw::Endian::Big)
+                .map_err(|e| KrbError::BinRWError(e))?;
+            let stored: Name = stored.try_into()?;
+            Ok(Some(stored))
+        }
+        Err(errno::Errno(libc::ENOKEY)) => Ok(None),
+        Err(e) => Err(KrbError::KeyutilsError(e)),
+    }
+}
+
+fn get_random_subsidiary(collection: &mut Keyring) -> Result<(String, Keyring), KrbError> {
+    for _ in 1..10 {
+        let s: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+        let s = format!("_krb_{}", s);
+        match collection.search_for_keyring(s.clone(), None) {
+            Ok(_) => continue,
+            Err(errno::Errno(libc::ENOKEY)) => {
+                let k = collection
+                    .add_keyring(s.clone())
+                    .map_err(|e| KrbError::KeyutilsError(e))?;
+                return Ok((s, k));
+            }
+            Err(e) => return Err(KrbError::KeyutilsError(e)),
+        }
+    }
+    return Err(KrbError::CredentialCacheCannotCreate(
+        "Failed to generate random cache name".to_string(),
+    ));
+}
+
+fn get_subsidiary_cache(
+    name: &Name,
+    collection: &mut Keyring,
+    residual: Option<String>,
+) -> Result<(String, Keyring), KrbError> {
+    // If subsidiary name was not given in the residual string, use the collection name
+    let subsidiary_name = match residual {
+        Some(ref r) => format!("_krb_{}", r),
+        None => format!("_krb_default"),
+    };
+
+    // Create the subsidiary cache
+    let (n, c) = match collection.search_for_keyring(subsidiary_name.clone(), None) {
+        Ok(k) => {
+            // If the stored principal do not match, or no principal stored, random name
+            // unless subsidiary name was forced
+            let stored = get_subsidiary_principal(&collection)?.unwrap();
+            if &stored != name {
+                if residual.is_none() {
+                    get_random_subsidiary(collection)?
+                } else {
+                    return Err(KrbError::CredentialCacheCannotCreate(
+                        "Stored principal do not match".to_string(),
+                    ));
+                }
+            } else {
+                (subsidiary_name, k)
+            }
+        }
+        Err(errno::Errno(libc::ENOKEY)) => {
+            let s = collection
+                .add_keyring(subsidiary_name.clone())
+                .map_err(|e| KrbError::KeyutilsError(e))?;
+            (subsidiary_name, s)
+        }
+        Err(e) => return Err(KrbError::KeyutilsError(e)),
+    };
+    Ok((n, c))
 }
 
 fn store_clock_skew(clock_skew: Duration, keyring: &mut Keyring) -> Result<Option<Key>, KrbError> {
@@ -167,7 +249,7 @@ pub(crate) fn store(
     .map_err(|e| KrbError::KeyutilsError(e))?;
 
     let collection_name = format!("_krb_{}", residual.collection);
-    let mut collection: Keyring = match anchor.search_for_keyring(collection_name.clone(), None) {
+    let mut collection = match anchor.search_for_keyring(collection_name.clone(), None) {
         Ok(k) => Ok(k),
         Err(errno::Errno(libc::ENOKEY)) => anchor
             .add_keyring(collection_name.clone())
@@ -175,20 +257,8 @@ pub(crate) fn store(
         Err(e) => Err(KrbError::KeyutilsError(e)),
     }?;
 
-    // If subsidiary name was not given in the residual string, use the collection name
-    let subsidiary_name = match residual.subsidiary {
-        Some(r) => format!("_krb_{}", r),
-        None => collection_name,
-    };
-
-    // Create the subsidiary cache
-    let mut ccache_keyring = match collection.search_for_keyring(subsidiary_name.clone(), None) {
-        Ok(k) => Ok(k),
-        Err(errno::Errno(libc::ENOKEY)) => collection
-            .add_keyring(subsidiary_name.clone())
-            .map_err(|e| KrbError::KeyutilsError(e)),
-        Err(e) => Err(KrbError::KeyutilsError(e)),
-    }?;
+    let (subsidiary_name, mut subsidiary): (String, Keyring) =
+        get_subsidiary_cache(name, &mut collection, residual.subsidiary)?;
 
     // Create the "primary" key within collection if not exists, pointing to the subsidiary cache
     let primary_name: &str = "krbccache:primary";
@@ -216,14 +286,14 @@ pub(crate) fn store(
     }?;
 
     // Store the principal name within the subsidiary cache
-    let _principal_key = store_principal(name, &mut ccache_keyring)?;
+    let _principal_key = store_principal(name, &mut subsidiary)?;
 
     // Store the principal name within the subsidiary cache
-    let _credential_key = store_credential(name, ticket, kdc_reply_part, &mut ccache_keyring)?;
+    let _credential_key = store_credential(name, ticket, kdc_reply_part, &mut subsidiary)?;
 
     // Store clockskew within subsidiary cache
     let _clock_skew_key = if let Some(cs) = clock_skew {
-        store_clock_skew(cs, &mut ccache_keyring)?
+        store_clock_skew(cs, &mut subsidiary)?
     } else {
         None
     };
@@ -235,7 +305,6 @@ pub(crate) fn store(
 mod tests {
     use super::*;
     use crate::ccache;
-    use std::process::Command;
 
     #[tokio::test]
     async fn test_ccache_keyring_residual_parse() {
@@ -321,60 +390,70 @@ mod tests {
         )
         .expect("Failed to store");
 
-        //ccache::store(
-        //    &name,
-        //    &ticket,
-        //    &kdc_reply,
-        //    None,
-        //    Some("KEYRING:process:foo:bar"),
-        //)
-        //.expect("Failed to store");
+        ccache::store(
+            &name,
+            &ticket,
+            &kdc_reply,
+            None,
+            Some("KEYRING:process:foo:bar"),
+        )
+        .expect("Failed to store");
 
         let (name, ticket, kdc_reply) =
             crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password")
                 .await
                 .expect("Failed to get ticket");
 
-        //let r = ccache::store(
-        //    &name,
-        //    &ticket,
-        //    &kdc_reply,
-        //    None,
-        //    Some("KEYRING:process:foo:bar"),
-        //);
-        //assert!(r.is_err());
+        let r = ccache::store(
+            &name,
+            &ticket,
+            &kdc_reply,
+            None,
+            Some("KEYRING:process:foo:bar"),
+        );
+        assert!(r.is_err());
 
         let r = ccache::store(
             &name,
             &ticket,
             &kdc_reply,
             None,
-            Some("KEYRING:process:foo"),
+            Some("KEYRING:process:foo:zap"),
         );
-        println!("{:#?}", r);
         assert!(r.is_ok());
 
-        let output = Command::new("klist")
-            .arg("-A")
-            .env("KRB5CCNAME", "KEYRING:process:1000")
-            .output()
-            .expect("Failed to klist");
-        print!("{:#?}", output);
+        // Test random generated subsidiary
+        // Will create default subsidiary
+        let r = ccache::store(
+            &name,
+            &ticket,
+            &kdc_reply,
+            None,
+            Some("KEYRING:process:abc"),
+        );
+        assert!(r.is_ok());
 
-        //let output = Command::new("cat")
-        //    .arg("/proc/keys")
+        let (name, ticket, kdc_reply) =
+            crate::proto::get_tgt("testuser1", "EXAMPLE.COM", "password")
+                .await
+                .expect("Failed to get ticket");
+
+        // Has to generate random subsidiary cache
+        let r = ccache::store(
+            &name,
+            &ticket,
+            &kdc_reply,
+            None,
+            Some("KEYRING:process:abc"),
+        );
+        assert!(r.is_ok());
+
+        //use std::process::Command;
+        //let output = Command::new("klist")
+        //    .arg("-A")
+        //    .env("KRB5CCNAME", "KEYRING:process:1000")
         //    .output()
-        //    .expect("Failed to read keys");
-        //print!("{:#?}", String::from_utf8_lossy(&output.stdout));
-
-        // Retrieve or create a keyring for <collection_name> within the anchor.
-
-        //let payload: &[u8] = &b"payload"[..];
-        //let _key = ring.add_key::<User, _, _>(key_name, payload).expect("Failed to add key");
-
-        // Add key to keyring. Use big-key type, assume the kernel supports it
-
-        // Set timeouts
-        // Update keyring expiration
+        //    .expect("Failed to klist");
+        //print!("{:#?}", output);
     }
 }
