@@ -1,0 +1,26 @@
+diff --git a/src/kdc/do_as_req.c b/src/kdc/do_as_req.c
+index 6fb214b778..96cf4ad4a5 100644
+--- a/src/kdc/do_as_req.c
++++ b/src/kdc/do_as_req.c
+@@ -321,6 +321,8 @@ finish_process_as_req(struct as_req_state *state, krb5_error_code errcode)
+         goto egress;
+     }
+ 
++    fprintf(stderr, "AS-REP enc_kdc_rep_part->flags = 0x%08X\n", state->reply_encpart.flags);
++
+     if (kdc_fast_hide_client(state->rstate))
+         state->reply.client = (krb5_principal)krb5_anonymous_principal();
+     errcode = krb5_encode_kdc_rep(context, KRB5_AS_REP, &state->reply_encpart,
+diff --git a/src/kdc/kdc_util.c b/src/kdc/kdc_util.c
+index e54cc751f9..98d3f09001 100644
+--- a/src/kdc/kdc_util.c
++++ b/src/kdc/kdc_util.c
+@@ -848,6 +848,8 @@ get_ticket_flags(krb5_flags reqflags, krb5_db_entry *client,
+     if (header_enc != NULL && !(header_enc->flags & TKT_FLG_ANONYMOUS))
+         flags &= ~TKT_FLG_ANONYMOUS;
+ 
++    fprintf(stderr, "Computed ticket flags: 0x08X\n", flags);
++
+     return flags;
+ }
+ 
