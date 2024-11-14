@@ -1,0 +1,382 @@
+From 14f616f064872f606008f758d634d57629678dd7 Mon Sep 17 00:00:00 2001
+From: Samuel Cabrero <scabrero@suse.de>
+Date: Wed, 13 Nov 2024 10:49:26 +0100
+Subject: [PATCH] Debug keyring ccache
+
+---
+ src/lib/krb5/ccache/cc_keyring.c | 86 +++++++++++++++++++++++++++++---
+ 1 file changed, 80 insertions(+), 6 deletions(-)
+
+diff --git a/src/lib/krb5/ccache/cc_keyring.c b/src/lib/krb5/ccache/cc_keyring.c
+index ab3cda6fef..abe55fbdbf 100644
+--- a/src/lib/krb5/ccache/cc_keyring.c
++++ b/src/lib/krb5/ccache/cc_keyring.c
+@@ -96,14 +96,13 @@
+ 
+ #include "cc-int.h"
+ 
++#define USE_KEYRING_CCACHE
+ #ifdef USE_KEYRING_CCACHE
+ 
+ #include <errno.h>
+ #include <keyutils.h>
+ 
+-#ifdef DEBUG
+ #define KRCC_DEBUG          1
+-#endif
+ 
+ #if KRCC_DEBUG
+ void debug_print(char *fmt, ...);       /* prototype to silence warning */
+@@ -296,6 +295,7 @@ get_persistent_real(uid_t uid)
+     key_serial_t key;
+ 
+     key = keyctl_get_persistent(uid, KEY_SPEC_PROCESS_KEYRING);
++    fprintf(stderr, "%s: keyctl_get_persistent(%u, %s) -> %u\n", __func__, uid, KEY_SPEC_PROCESS_KEYRING, key);
+     return (key == -1 && errno == ENOTSUP) ? get_persistent_fallback(uid) :
+         key;
+ }
+@@ -316,11 +316,15 @@ get_persistent_real(uid_t uid)
+ static key_serial_t
+ session_write_anchor(void)
+ {
+-    key_serial_t s, u;
++    key_serial_t s, u, r;
+ 
+     s = keyctl_get_keyring_ID(KEY_SPEC_SESSION_KEYRING, 0);
++    fprintf(stderr, "%s: keyctl_get_keyring_ID(%d, %u) -> %u\n", __func__, KEY_SPEC_SESSION_KEYRING, 0, s);
+     u = keyctl_get_keyring_ID(KEY_SPEC_USER_SESSION_KEYRING, 0);
+-    return (s == u) ? KEY_SPEC_USER_SESSION_KEYRING : KEY_SPEC_SESSION_KEYRING;
++    fprintf(stderr, "%s: keyctl_get_keyring_ID(%d, %u) -> %u\n", __func__, KEY_SPEC_USER_SESSION_KEYRING, 0, u);
++    r = (s == u) ? KEY_SPEC_USER_SESSION_KEYRING : KEY_SPEC_SESSION_KEYRING;
++    fprintf(stderr, "%s: return anchor_id = %s (%u)\n", __func__, r == KEY_SPEC_SESSION_KEYRING ? "user session keyring" : "session keyring", r);
++    return (r);
+ }
+ 
+ /*
+@@ -335,21 +339,32 @@ find_or_create_keyring(key_serial_t parent, key_serial_t possess,
+ {
+     key_serial_t key;
+ 
++    fprintf(stderr, "%s: parent = %u, posses = %u, name = %s\n",
++            __func__, parent, possess, name);
+     *key_out = -1;
+     key = keyctl_search(parent, KRCC_KEY_TYPE_KEYRING, name, possess);
++    fprintf(stderr, "%s: keyctl_search(%u, %s, %s, %u) -> %d\n", __func__, parent, KRCC_KEY_TYPE_KEYRING, name, possess, key);
+     if (key == -1) {
+         if (possess != 0) {
++            long a;
+             key = add_key(KRCC_KEY_TYPE_KEYRING, name, NULL, 0, possess);
++            fprintf(stderr, "%s: add_key(%s, %s, %p, %d, %u) -> %u\n", __func__,
++                    KRCC_KEY_TYPE_KEYRING, name, NULL, 0, possess, key);
+             if (key == -1)
+                 return errno;
+-            if (keyctl_link(key, parent) == -1)
++            a = keyctl_link(key, parent);
++            fprintf(stderr, "%s: keyctl_link(%u, %u) -> %ld\n", __func__, key, parent, a);
++            if (a == -1)
+                 return errno;
+         } else {
+             key = add_key(KRCC_KEY_TYPE_KEYRING, name, NULL, 0, parent);
++            fprintf(stderr, "%s: add_key(%s, %s, %p, %d, %u) -> %u\n", __func__,
++                    KRCC_KEY_TYPE_KEYRING, name, NULL, 0, parent, key);
+             if (key == -1)
+                 return errno;
+         }
+     }
++    fprintf(stderr, "%s: key_out = %u\n", __func__, key);
+     *key_out = key;
+     return 0;
+ }
+@@ -479,6 +494,8 @@ get_collection(const char *anchor_name, const char *collection_name,
+     char *ckname, *cnend;
+     long uidnum;
+ 
++    fprintf(stderr, "%s: anchor_name = %s, collection_name = %s\n", __func__, anchor_name, collection_name);
++
+     *collection_id_out = 0;
+ 
+     if (strcmp(anchor_name, KRCC_PERSISTENT_ANCHOR) == 0) {
+@@ -499,9 +516,11 @@ get_collection(const char *anchor_name, const char *collection_name,
+         persistent_id = GET_PERSISTENT(uidnum);
+         if (persistent_id == -1)
+             return KRB5_KCC_INVALID_UID;
+-        return find_or_create_keyring(persistent_id, KEY_SPEC_PROCESS_KEYRING,
++        ret = find_or_create_keyring(persistent_id, KEY_SPEC_PROCESS_KEYRING,
+                                       KRCC_PERSISTENT_KEYRING_NAME,
+                                       collection_id_out);
++        fprintf(stderr, "%s: collection_id_out = %u\n", __func__, collection_id_out);
++        return ret;
+     }
+ 
+     if (strcmp(anchor_name, KRCC_PROCESS_ANCHOR) == 0) {
+@@ -527,6 +546,8 @@ get_collection(const char *anchor_name, const char *collection_name,
+     ret = find_or_create_keyring(anchor_id, possess_id, ckname,
+                                  collection_id_out);
+     free(ckname);
++
++    fprintf(stderr, "%s: collection_id_out = %d\n", __func__, collection_id_out);
+     return ret;
+ }
+ 
+@@ -539,6 +560,8 @@ set_primary_name(krb5_context context, key_serial_t collection_id,
+     uint32_t len = strlen(subsidiary_name), plen = 8 + len;
+     unsigned char *payload;
+ 
++    fprintf(stderr, "%s: collection_id = %d, subsidiary_name = %s\n", __func__, collection_id, subsidiary_name);
++
+     payload = malloc(plen);
+     if (payload == NULL)
+         return ENOMEM;
+@@ -547,6 +570,9 @@ set_primary_name(krb5_context context, key_serial_t collection_id,
+     memcpy(payload + 8, subsidiary_name, len);
+     key = add_key(KRCC_KEY_TYPE_USER, KRCC_COLLECTION_PRIMARY,
+                   payload, plen, collection_id);
++    fprintf(stderr, "%s: add_key(%s, %s, %p, %u, %u) -> %d\n",
++            __func__, KRCC_KEY_TYPE_USER, KRCC_COLLECTION_PRIMARY,
++                  payload, plen, collection_id, key);
+     free(payload);
+     return (key == -1) ? errno : 0;
+ }
+@@ -590,6 +616,8 @@ get_primary_name(krb5_context context, const char *anchor_name,
+ 
+     primary_id = keyctl_search(collection_id, KRCC_KEY_TYPE_USER,
+                                KRCC_COLLECTION_PRIMARY, 0);
++    fprintf(stderr, "%s: keyctl_search(%u, %s, %s, %u) -> %d\n",
++            __func__, collection_id, KRCC_KEY_TYPE_USER, KRCC_COLLECTION_PRIMARY, 0, primary_id);
+     if (primary_id == -1) {
+         /* Initialize the primary key using the collection name.  We can't name
+          * a key with the empty string, so map that to an arbitrary string. */
+@@ -608,6 +636,9 @@ get_primary_name(krb5_context context, const char *anchor_name,
+              * the collection. */
+             legacy = keyctl_search(KEY_SPEC_SESSION_KEYRING,
+                                    KRCC_KEY_TYPE_KEYRING, subsidiary_name, 0);
++            fprintf(stderr, "%s: keyctl_search(%u, %s, %s, %u) -> %d\n", __func__,
++                    KEY_SPEC_SESSION_KEYRING, KRCC_KEY_TYPE_KEYRING, subsidiary_name, 0, legacy);
++            fprintf(stderr, "%s: keyctl_link(%u, %u)\n", __func__, legacy, collection_id);
+             if (legacy != -1 && keyctl_link(legacy, collection_id) == -1) {
+                 ret = errno;
+                 goto cleanup;
+@@ -615,6 +646,8 @@ get_primary_name(krb5_context context, const char *anchor_name,
+         }
+     } else {
+         /* Read, parse, and free the primary key's payload. */
++        fprintf(stderr, "%s: Read, parse and free primary key's payload\n", __func__);
++        fprintf(stderr, "%s: keyctl_read_alloc(%u)\n", __func__, primary_id);
+         payloadlen = keyctl_read_alloc(primary_id, &payload);
+         if (payloadlen == -1) {
+             ret = errno;
+@@ -631,6 +664,8 @@ get_primary_name(krb5_context context, const char *anchor_name,
+         }
+     }
+ 
++    fprintf(stderr, "%s: subsidiary_out = %s\n", __func__, subsidiary_name);
++
+     *subsidiary_out = subsidiary_name;
+     subsidiary_name = NULL;
+ 
+@@ -660,6 +695,7 @@ unique_keyring(krb5_context context, key_serial_t collection_id,
+     memcpy(uniquename, KRCC_NAME_PREFIX, sizeof(KRCC_NAME_PREFIX));
+     k5_cc_mutex_lock(context, &krb5int_krcc_mutex);
+ 
++    fprintf(stderr, "%s: Loop until create a new ccache keyring with a unique name\n", __func__);
+     /* Loop until we successfully create a new ccache keyring with
+      * a unique name, or we get an error. Limit to 100 tries. */
+     tries = 100;
+@@ -694,6 +730,8 @@ unique_keyring(krb5_context context, key_serial_t collection_id,
+         goto cleanup;
+     }
+     *cache_id_out = key;
++
++    fprintf(stderr, "%s: subsidiary_out = %s, id = %u\n", __func__, uniquename, key);
+     ret = 0;
+ cleanup:
+     k5_cc_mutex_unlock(context, &krb5int_krcc_mutex);
+@@ -707,6 +745,7 @@ add_cred_key(const char *name, const void *payload, size_t plen,
+ {
+     key_serial_t key;
+ 
++    fprintf(stderr, "%s: name = %s, cache_id = %u, legacy = %s\n", __func__, name, cache_id, legacy_type ? "y":"n");
+     *key_out = -1;
+     if (!legacy_type) {
+         /* Try the preferred cred key type; fall back if no kernel support. */
+@@ -723,6 +762,7 @@ add_cred_key(const char *name, const void *payload, size_t plen,
+     if (key == -1)
+         return errno;
+     *key_out = key;
++    fprintf(stderr, "%s: key = %u\n", __func__, key);
+     return 0;
+ }
+ 
+@@ -735,6 +775,8 @@ update_keyring_expiration(krb5_context context, krb5_ccache id)
+     krb5_timestamp now, endtime = 0;
+     unsigned int timeout;
+ 
++    fprintf(stderr, "%s: cache_id = %u\n", __func__, data->cache_id);
++
+     /*
+      * We have no way to know what is the actual timeout set on the keyring.
+      * We also cannot keep track of it in a local variable as another process
+@@ -775,6 +817,8 @@ krcc_initialize(krb5_context context, krb5_ccache id, krb5_principal princ)
+     krb5_error_code ret;
+     const char *cache_name, *p;
+ 
++    fprintf(stderr, "%s\n", __func__);
++
+     k5_cc_mutex_lock(context, &data->lock);
+ 
+     ret = clear_cache_keyring(context, id);
+@@ -836,6 +880,7 @@ clear_cache_keyring(krb5_context context, krb5_ccache id)
+     krcc_data *data = id->data;
+     int res;
+ 
++    fprintf(stderr, "%s: cache_id = %u, princ_id = %u\n", __func__, data->cache_id, data->princ_id);
+     k5_cc_mutex_assert_locked(context, &data->lock);
+ 
+     DEBUG_PRINT(("clear_cache_keyring: cache_id %d, princ_id %d\n",
+@@ -859,11 +904,13 @@ krcc_destroy(krb5_context context, krb5_ccache id)
+     krcc_data *data = id->data;
+     int res;
+ 
++    fprintf(stderr, "%s: cache_id = %u\n", __func__, data->cache_id);
+     k5_cc_mutex_lock(context, &data->lock);
+ 
+     clear_cache_keyring(context, id);
+     if (data->cache_id) {
+         res = keyctl_unlink(data->cache_id, data->collection_id);
++        fprintf(stderr, "%s: keyctl_unlink(%u, %u) -> %d\n", __func__, data->cache_id, data->collection_id, res);
+         if (res < 0) {
+             ret = errno;
+             DEBUG_PRINT(("unlinking key %d from ring %d: %s", data->cache_id,
+@@ -896,9 +943,14 @@ make_cache(krb5_context context, key_serial_t collection_id,
+     krcc_data *data;
+     key_serial_t pkey = 0;
+ 
++    fprintf(stderr, "%s: collection_id = %u, cache_id = %u, anchor_name = %s, collection_name = %s, subsidiary_name = %s\n",
++            __func__, collection_id, cache_id, anchor_name, collection_name, subsidiary_name);
++
+     /* Determine the key containing principal information, if present. */
+     pkey = keyctl_search(cache_id, KRCC_KEY_TYPE_USER, KRCC_SPEC_PRINC_KEYNAME,
+                          0);
++    fprintf(stderr, "%s: keyctl_search(%u, %s, %s, %u) -> %d\n", __func__,
++            cache_id, KRCC_KEY_TYPE_USER, KRCC_SPEC_PRINC_KEYNAME, 0, pkey);
+     if (pkey < 0)
+         pkey = 0;
+ 
+@@ -940,8 +992,12 @@ krcc_resolve(krb5_context context, krb5_ccache *id, const char *residual)
+     key_serial_t collection_id, cache_id;
+     char *anchor_name = NULL, *collection_name = NULL, *subsidiary_name = NULL;
+ 
++    fprintf(stderr, "%s: residual = '%s'\n", __func__, residual);
++
+     ret = parse_residual(residual, &anchor_name, &collection_name,
+                          &subsidiary_name);
++    fprintf(stderr, "%s: anchor_name = '%s', collection_name = '%s', subsidiary_name = '%s'\n",
++            __func__, anchor_name, collection_name, subsidiary_name);
+     if (ret)
+         goto cleanup;
+     ret = get_collection(anchor_name, collection_name, &collection_id);
+@@ -959,6 +1015,9 @@ krcc_resolve(krb5_context context, krb5_ccache *id, const char *residual)
+     /* Look up the cache keyring ID, if the cache is already initialized. */
+     cache_id = keyctl_search(collection_id, KRCC_KEY_TYPE_KEYRING,
+                              subsidiary_name, 0);
++    fprintf(stderr, "%s: keyctl_search(%u, %s, %s, %u) -> %d\n",
++            __func__, collection_id, KRCC_KEY_TYPE_KEYRING,
++                             subsidiary_name, 0, cache_id);
+     if (cache_id < 0)
+         cache_id = 0;
+ 
+@@ -1091,6 +1150,9 @@ make_krcc_data(const char *anchor_name, const char *collection_name,
+     krb5_error_code ret;
+     krcc_data *data;
+ 
++    fprintf(stderr, "%s: anchor_name = %s, collection_name = %s, subsidiary_name = %s, cache_id = %u, collection_id = %u\n",
++            __func__, anchor_name, collection_name, subsidiary_name, cache_id, collection_id);
++
+     *data_out = NULL;
+ 
+     data = malloc(sizeof(krcc_data));
+@@ -1131,6 +1193,7 @@ krcc_generate_new(krb5_context context, krb5_ccache *id_out)
+     key_serial_t collection_id;
+     key_serial_t cache_id = 0;
+ 
++    fprintf(stderr, "%s\n", __func__);
+     *id_out = NULL;
+ 
+     /* Determine the collection in which we will create the cache.*/
+@@ -1178,6 +1241,7 @@ krcc_generate_new(krb5_context context, krb5_ccache *id_out)
+     id->data = data;
+     krb5_change_cache();
+ 
++    fprintf(stderr, "%s return %d\n", __func__, cache_id);
+ cleanup:
+     free(anchor_name);
+     free(collection_name);
+@@ -1309,6 +1373,8 @@ krcc_store(krb5_context context, krb5_ccache id, krb5_creds *creds)
+     key_serial_t cred_key;
+     krb5_timestamp now;
+ 
++    fprintf(stderr, "%s: cache_id = %u\n", __func__, id);
++
+     k5_cc_mutex_lock(context, &data->lock);
+ 
+     if (!data->cache_id) {
+@@ -1331,6 +1397,7 @@ krcc_store(krb5_context context, krb5_ccache id, krb5_creds *creds)
+     /* Add new key (credentials) into keyring */
+     DEBUG_PRINT(("krcc_store: adding new key '%s' to keyring %d\n",
+                  keyname, data->cache_id));
++    fprintf(stderr, "%s: adding new key %s to keyring %u\n", __func__, keyname, data->cache_id);
+     ret = add_cred_key(keyname, buf.data, buf.len, data->cache_id,
+                        data->is_legacy_type, &cred_key);
+     if (ret)
+@@ -1342,6 +1409,7 @@ krcc_store(krb5_context context, krb5_ccache id, krb5_creds *creds)
+         goto errout;
+ 
+     if (ts_after(creds->times.endtime, now)) {
++        fprintf(stderr, "%s: keyctl_set_timeout(%u)\n", __func__, cred_key);
+         (void)keyctl_set_timeout(cred_key,
+                                  ts_interval(now, creds->times.endtime));
+     }
+@@ -1384,6 +1452,8 @@ save_principal(krb5_context context, krb5_ccache id, krb5_principal princ)
+     struct k5buf buf;
+     key_serial_t newkey;
+ 
++    fprintf(stderr, "%s\n", __func__);
++
+     k5_cc_mutex_assert_locked(context, &data->lock);
+ 
+     /* Serialize princ using the file ccache version 4 format. */
+@@ -1408,6 +1478,7 @@ save_principal(krb5_context context, krb5_ccache id, krb5_principal princ)
+ #endif
+     newkey = add_key(KRCC_KEY_TYPE_USER, KRCC_SPEC_PRINC_KEYNAME, buf.data,
+                      buf.len, data->cache_id);
++    fprintf(stderr, "%s: add_key(type_user, %s) -> %d\n", __func__, KRCC_SPEC_PRINC_KEYNAME, newkey);
+     if (newkey < 0) {
+         ret = errno;
+         DEBUG_PRINT(("Error adding principal key: %s\n", strerror(ret)));
+@@ -1438,6 +1509,7 @@ save_time_offsets(krb5_context context, krb5_ccache id, int32_t time_offset,
+     /* Add new key into keyring. */
+     newkey = add_key(KRCC_KEY_TYPE_USER, KRCC_TIME_OFFSETS, payload, 8,
+                      data->cache_id);
++    fprintf(stderr, "%s: add_key(%s, %s, %u) -> %u\n", __func__, KRCC_KEY_TYPE_USER, KRCC_TIME_OFFSETS, data->cache_id, newkey);
+     if (newkey == -1)
+         return errno;
+     return 0;
+@@ -1510,6 +1582,7 @@ krcc_ptcursor_new(krb5_context context, krb5_cc_ptcursor *cursor_out)
+     void *keys;
+     long size;
+ 
++    fprintf(stderr, "%s\n", __func__);
+     *cursor_out = NULL;
+ 
+     cursor = k5alloc(sizeof(*cursor), &ret);
+@@ -1664,6 +1737,7 @@ krcc_switch_to(krb5_context context, krb5_ccache cache)
+     char *anchor_name = NULL, *collection_name = NULL, *subsidiary_name = NULL;
+     key_serial_t collection_id;
+ 
++    fprintf(stderr, "%s\n");
+     ret = parse_residual(data->name, &anchor_name, &collection_name,
+                          &subsidiary_name);
+     if (ret)
+-- 
+2.47.0
+
