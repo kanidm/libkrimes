@@ -18,6 +18,7 @@
 
 pub mod asn1;
 pub mod ccache;
+pub mod cc_keyring;
 pub(crate) mod constants;
 pub(crate) mod crypto;
 pub mod error;

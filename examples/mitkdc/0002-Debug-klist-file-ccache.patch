@@ -1,0 +1,86 @@
+diff --git a/src/lib/krb5/ccache/cc_file.c b/src/lib/krb5/ccache/cc_file.c
+index 198152a9ec..f073845480 100644
+--- a/src/lib/krb5/ccache/cc_file.c
++++ b/src/lib/krb5/ccache/cc_file.c
+@@ -222,6 +222,8 @@ load_principal(krb5_context context, FILE *fp, int version, size_t maxsize,
+     krb5_error_code ret;
+     uint32_t count;
+ 
++    fprintf(stderr, "Reading principal at 0x%08X (%ld)\n", ftell(fp));
++
+     if (version > 1) {
+         ret = load_bytes(context, fp, 4, buf);
+         if (ret)
+@@ -250,15 +252,21 @@ load_cred(krb5_context context, FILE *fp, int version, size_t maxsize,
+     krb5_error_code ret;
+     uint32_t count, i;
+ 
++    fprintf(stderr, "Reading credential at 0x%08X (%ld)\n", ftell(fp));
++
+     /* client and server */
++    fprintf(stderr, "Reading client at 0x%08X (%ld)\n", ftell(fp));
+     ret = load_principal(context, fp, version, maxsize, buf);
+     if (ret)
+         return ret;
++
++    fprintf(stderr, "Reading server at 0x%08X (%ld)\n", ftell(fp));
+     ret = load_principal(context, fp, version, maxsize, buf);
+     if (ret)
+         return ret;
+ 
+     /* keyblock (enctype, enctype again for version 3, length, value) */
++    fprintf(stderr, "Reading keyblock at 0x%08X (%ld)\n", ftell(fp));
+     ret = load_bytes(context, fp, (version == 3) ? 4 : 2, buf);
+     if (ret)
+         return ret;
+@@ -267,11 +275,13 @@ load_cred(krb5_context context, FILE *fp, int version, size_t maxsize,
+         return ret;
+ 
+     /* times (4*4 bytes), is_skey (1 byte), ticket flags (4 bytes) */
++    fprintf(stderr, "Reading times, is_skey and ticket flags at 0x%08X (%ld)\n", ftell(fp));
+     ret = load_bytes(context, fp, 4 * 4 + 1 + 4, buf);
+     if (ret)
+         return ret;
+ 
+     /* addresses and authdata, both lists of {type, length, data} */
++    fprintf(stderr, "Reading addresses and authdata at 0x%08X (%ld)\n", ftell(fp));
+     for (i = 0; i < 2; i++) {
+         ret = read32(context, fp, version, buf, &count);
+         if (ret)
+@@ -287,9 +297,11 @@ load_cred(krb5_context context, FILE *fp, int version, size_t maxsize,
+     }
+ 
+     /* ticket and second_ticket */
++    fprintf(stderr, "Reading ticket at 0x%08X (%ld)\n", ftell(fp));
+     ret = load_data(context, fp, version, maxsize, buf);
+     if (ret)
+         return ret;
++    fprintf(stderr, "Reading second_ticket at 0x%08X (%ld)\n", ftell(fp));
+     return load_data(context, fp, version, maxsize, buf);
+ }
+ 
+@@ -304,6 +316,8 @@ read_principal(krb5_context context, FILE *fp, int version,
+     *princ = NULL;
+     k5_buf_init_dynamic(&buf);
+ 
++    fprintf(stderr, "Reading principal at 0x%08X (%ld)\n", ftell(fp));
++
+     /* Read the principal representation into memory. */
+     ret = get_size(context, fp, &maxsize);
+     if (ret)
+@@ -393,6 +407,7 @@ read_header(krb5_context context, FILE *fp, int *version_out)
+     *version_out = 0;
+ 
+     /* Get the file format version. */
++    fprintf(stderr, "Reading file format version at 0x%08X (%ld)\n", ftell(fp));
+     ret = read_bytes(context, fp, i16buf, 2);
+     if (ret)
+         return KRB5_CC_FORMAT;
+@@ -405,6 +420,7 @@ read_header(krb5_context context, FILE *fp, int *version_out)
+     if (version < 4)
+         return 0;
+ 
++    fprintf(stderr, "Reading tags at 0x%08X (%ld)\n", ftell(fp));
+     if (read16(context, fp, version, &fields_len))
+         return KRB5_CC_FORMAT;
+     while (fields_len) {

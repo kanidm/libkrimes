@@ -2,6 +2,8 @@
 
 set -xuo pipefail
 
+export KRB5CCNAME="FILE:/tmp/krb5cc_%{uid}"
+
 ln -s /usr/lib64/krb5/plugins/kdb/db2.so /usr/lib64/krb5/plugins/kdb/db2
 
 yes master_password | kdb5_util create -s

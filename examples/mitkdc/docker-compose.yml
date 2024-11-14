@@ -1,0 +1,31 @@
+services:
+  mitkdc:
+    restart: no
+    build:
+      context: ../../
+      dockerfile: ./examples/mitkdc/Dockerfile
+    image: libkrimes:mitkdc
+    container_name: libkrimes_mitkdc
+    command: mitkdc
+    privileged: true
+    hostname: mitkdc
+    domainname: example.com
+    dns_search: example.com
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "88"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    networks:
+      static-network:
+        ipv4_address: 192.168.239.10
+    ports:
+      - "55000:88"
+      - "55000:88/udp"
+
+networks:
+  static-network:
+    ipam:
+      config:
+        - subnet: 192.168.239.0/24
+          gateway: 192.168.239.1
