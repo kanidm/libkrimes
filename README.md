@@ -116,3 +116,9 @@ KVNO Principal
 $ KRB5_TRACE=/dev/stdout KRB5_CONFIG=$(pwd)/kdc_test/krb5.conf kvno HOST/localhost
 ```
 
+## NOTES:
+
+* MacOS will only use kerberos to an SMB share, if the SMB share is discovered via avahi/bonjour.
+
+
+

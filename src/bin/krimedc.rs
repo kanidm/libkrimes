@@ -364,12 +364,20 @@ async fn process_ticket_grant(
         todo!();
     }
 
-    // Can't be before the start.
-    if requested_end_time < &start_time {
-        todo!();
-    }
-
-    let end_time = *requested_end_time;
+    // Some clients send a 0 for the requested end - fill it in with the tgt end time instead.
+    let end_time = if *requested_end_time == SystemTime::UNIX_EPOCH {
+        // It's 0, just return our tgt end time instead.
+        *client_tgt.end_time()
+    } else if requested_end_time < &start_time {
+        tracing::warn!(?requested_end_time, ?start_time);
+        // Mask with the tgt end.
+        *client_tgt.end_time()
+    } else if requested_end_time > client_tgt.end_time() {
+        // Clamp to tgt end time
+        *client_tgt.end_time()
+    } else {
+        *requested_end_time
+    };
 
     let renew_until = match (
         tgs_req_valid.requested_renew_until(),
