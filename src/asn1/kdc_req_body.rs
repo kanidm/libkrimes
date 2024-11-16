@@ -56,3 +56,28 @@ pub(crate) struct KdcReqBody {
     #[asn1(context_specific = "11", optional = "true")]
     pub(crate) additional_tickets: Option<Vec<TaggedTicket>>,
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::KdcReqBody;
+    use der::Decode;
+
+    #[test]
+    fn krb_kdc_req_heimal_macos() {
+        let _ = tracing_subscriber::fmt::try_init();
+        // Sample taken from macos while attempting to access a samba share.
+        //
+        // FIRST ISSUE HERE
+        // called `Result::unwrap()` on an `Err` value: Error { kind: Value { tag: Tag(0x02: INTEGER) }, position: None }
+        //
+        // tracing::debug!(kdc_req_body = hex::encode(&req_body.to_der().unwrap()));
+
+        let req_body_bytes = hex::decode("3079a00703050000000000a2151b134445562e4649525354594541522e49442e4155a32c302aa003020101a12330211b04636966731b1966696c65732e6465762e6669727374796561722e69642e6175a511180f31393730303130313030303030305aa7060204cd5c0274a80e300c020112020111020110020117").unwrap();
+        let req_body = der::Any::from_der(&req_body_bytes).unwrap();
+
+        let req_body = req_body.decode_as::<KdcReqBody>().unwrap();
+        tracing::trace!(?req_body);
+    }
+
+}
