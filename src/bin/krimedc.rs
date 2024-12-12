@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 #[instrument(level = "trace", skip_all)]
 async fn process_authentication(
@@ -395,6 +395,7 @@ async fn process_ticket_grant(
 
             Some(*requested_renew_until)
         }
+        (None, Some(ticket_renew_until)) => Some(*ticket_renew_until),
         (Some(_), None) => {
             todo!();
         }
@@ -423,8 +424,27 @@ async fn process_ticket_renewal(
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
     let stime = SystemTime::now();
+    let service_name = tgs_req_valid.service_name().clone();
+
+    if !tgs_req_valid
+        .ticket_flags()
+        .contains(TicketFlags::Renewable)
+    {
+        warn!("Denying renewal of ticket that is not renewable.");
+
+        return Err(KerberosReply::error_renew_denied(service_name, stime));
+    }
 
     let client_tgt = tgs_req_valid.ticket_granting_ticket();
+
+    // We currently default the renew until here to the client tgt, but in
+    // future we may be able to make server aware choices to clamp this during
+    // the renewal to expire sessions of bad actors.
+    let Some(renew_until) = client_tgt.renew_until().map(|s| *s) else {
+        warn!("Denying renewal of ticket that has no renew time.");
+
+        return Err(KerberosReply::error_renew_denied(service_name, stime));
+    };
 
     let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
         if requested_start_time < client_tgt.start_time() {
@@ -444,49 +464,31 @@ async fn process_ticket_renewal(
     };
 
     let requested_end_time = tgs_req_valid.requested_end_time();
+
     // Can't be past the tgt end.
     if requested_end_time > client_tgt.end_time() {
         todo!();
     }
 
-    // Some clients send a 0 for the requested end - fill it in with the tgt end time instead.
-    let end_time = if *requested_end_time == SystemTime::UNIX_EPOCH {
-        // It's 0, just return our tgt end time instead.
-        *client_tgt.end_time()
-    } else if requested_end_time < &start_time {
-        tracing::warn!(?requested_end_time, ?start_time);
-        // Mask with the tgt end.
-        *client_tgt.end_time()
-    } else if requested_end_time > client_tgt.end_time() {
-        // Clamp to tgt end time
-        *client_tgt.end_time()
+    // Since we're renewing, we need to treat this a bit differently to a tgs req
+    let possible_renew_until = stime + server_state.ticket_lifetime;
+
+    // If 0, then clamp to ticket lifetime.
+    let end_time = if *requested_end_time == SystemTime::UNIX_EPOCH ||
+        // If the request end is greater than what we will issue, clamp.
+        *requested_end_time > possible_renew_until
+    {
+        possible_renew_until
+    } else if *requested_end_time > renew_until {
+        // Longer than the max renewal window, clamp.
+        renew_until
     } else {
+        // It's less than the ticket lifetime.
         *requested_end_time
     };
 
-    let renew_until = match (
-        tgs_req_valid.requested_renew_until(),
-        client_tgt.renew_until(),
-    ) {
-        (Some(requested_renew_until), Some(ticket_renew_until)) => {
-            if requested_renew_until > ticket_renew_until {
-                todo!();
-            }
-
-            Some(*requested_renew_until)
-        }
-        (Some(_), None) => {
-            todo!();
-        }
-        (_, _) => None,
-    };
-
-    let tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
-
-    let service_name = tgs_req_valid.service_name().clone();
-
     let builder =
-        KerberosReply::ticket_renew_builder(tgs_req_valid, start_time, end_time, renew_until);
+        KerberosReply::ticket_renew_builder(tgs_req_valid, start_time, end_time, Some(renew_until));
 
     builder.build(&server_state.primary_key).map_err(|kdc_err| {
         error!(?kdc_err);
@@ -634,11 +636,12 @@ impl From<Config> for ServerState {
 
         let allowed_clock_skew = Duration::from_secs(300);
 
-        let ticket_lifetime = Duration::from_secs(3600 * 4);
+        // let ticket_lifetime = Duration::from_secs(3600 * 4);
+        let ticket_lifetime = Duration::from_secs(1800);
 
         let ticket_min_lifetime = Duration::from_secs(60);
 
-        let ticket_max_renew_time = Duration::from_secs(86400);
+        let ticket_max_renew_time = Duration::from_secs(86400 * 7);
 
         ServerState {
             realm,

@@ -987,6 +987,7 @@ impl Name {
         }
     }
 
+    #[tracing::instrument(level = "debug")]
     pub fn is_service_krbtgt(&self, check_realm: &str) -> bool {
         match self {
             // Cool bug - MIT KRB in an AS-REQ will send this with no instance, but then
@@ -997,6 +998,13 @@ impl Name {
                 instance: _,
                 realm,
             } => service == "krbtgt" && check_realm == realm,
+            // Doesn't matter what we send this as, Heimdal fucks it up.
+            Self::SrvPrincipal {
+                service,
+                host: _,
+                realm,
+            } => service == "krbtgt" && check_realm == realm,
+            Self::Principal { name, realm } => name == "krbtgt" && check_realm == realm,
             _ => false,
         }
     }

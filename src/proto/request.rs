@@ -27,7 +27,7 @@ use tracing::trace;
 
 use super::{
     DerivedKey, EncTicket, EncryptedData, KdcPrimaryKey, Name, Preauth, PreauthData, SessionKey,
-    Ticket,
+    Ticket, TicketFlags,
 };
 
 #[derive(Debug)]
@@ -409,6 +409,7 @@ impl TicketGrantRequestUnverified {
         let ap_req_ticket_service_name = Name::try_from(ap_req_ticket.sname)?;
 
         if !ap_req_ticket_service_name.is_service_krbtgt(realm) {
+            tracing::error!(?ap_req_ticket_service_name, "TgsTicketIsNotTgt");
             return Err(KrbError::TgsTicketIsNotTgt);
         }
 
@@ -555,6 +556,10 @@ impl TicketGrantRequest {
     /// KDC issued to the client.
     pub fn ticket_granting_ticket(&self) -> &Ticket {
         &self.ticket
+    }
+
+    pub fn ticket_flags(&self) -> &FlagSet<TicketFlags> {
+        &self.ticket.flags
     }
 
     pub fn etypes(&self) -> &[EncryptionType] {
