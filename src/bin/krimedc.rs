@@ -5,7 +5,7 @@ use libkrime::asn1::kerberos_flags::KerberosFlags;
 use libkrime::asn1::ticket_flags::TicketFlags;
 use libkrime::proto::{
     AuthenticationRequest, DerivedKey, KdcPrimaryKey, KerberosReply, KerberosRequest, Name,
-    TicketGrantRequestUnverified,
+    TicketGrantRequest, TicketGrantRequestUnverified,
 };
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
@@ -321,8 +321,6 @@ async fn process_ticket_grant(
     tgs_req: TicketGrantRequestUnverified,
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
-    let stime = SystemTime::now();
-
     let tgs_req_valid = tgs_req
         .validate(&server_state.primary_key, &server_state.realm)
         .unwrap();
@@ -332,6 +330,13 @@ async fn process_ticket_grant(
     let service_name = tgs_req_valid.service_name().clone().service_hst_normalise();
 
     trace!(?service_name);
+
+    if service_name.is_service_krbtgt(server_state.realm.as_str()) {
+        // This is a renewal request.
+        return process_ticket_renewal(tgs_req_valid, server_state).await;
+    }
+
+    let stime = SystemTime::now();
 
     // Is the service in our db?
     let Some(service_record) = server_state.principals.get(&service_name) else {
@@ -407,6 +412,83 @@ async fn process_ticket_grant(
     );
 
     builder.build(&service_record.base_key).map_err(|kdc_err| {
+        error!(?kdc_err);
+        KerberosReply::error_internal(service_name, stime)
+    })
+}
+
+#[instrument(level = "trace", skip_all)]
+async fn process_ticket_renewal(
+    tgs_req_valid: TicketGrantRequest,
+    server_state: &ServerState,
+) -> Result<KerberosReply, KerberosReply> {
+    let stime = SystemTime::now();
+
+    let client_tgt = tgs_req_valid.ticket_granting_ticket();
+
+    let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
+        if requested_start_time < client_tgt.start_time() {
+            todo!();
+        }
+
+        if requested_start_time > client_tgt.end_time() {
+            todo!();
+        }
+
+        // It's within valid bounds, lets go.
+
+        *requested_start_time
+    } else {
+        // Start from *now*.
+        stime
+    };
+
+    let requested_end_time = tgs_req_valid.requested_end_time();
+    // Can't be past the tgt end.
+    if requested_end_time > client_tgt.end_time() {
+        todo!();
+    }
+
+    // Some clients send a 0 for the requested end - fill it in with the tgt end time instead.
+    let end_time = if *requested_end_time == SystemTime::UNIX_EPOCH {
+        // It's 0, just return our tgt end time instead.
+        *client_tgt.end_time()
+    } else if requested_end_time < &start_time {
+        tracing::warn!(?requested_end_time, ?start_time);
+        // Mask with the tgt end.
+        *client_tgt.end_time()
+    } else if requested_end_time > client_tgt.end_time() {
+        // Clamp to tgt end time
+        *client_tgt.end_time()
+    } else {
+        *requested_end_time
+    };
+
+    let renew_until = match (
+        tgs_req_valid.requested_renew_until(),
+        client_tgt.renew_until(),
+    ) {
+        (Some(requested_renew_until), Some(ticket_renew_until)) => {
+            if requested_renew_until > ticket_renew_until {
+                todo!();
+            }
+
+            Some(*requested_renew_until)
+        }
+        (Some(_), None) => {
+            todo!();
+        }
+        (_, _) => None,
+    };
+
+    let tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+
+    let service_name = tgs_req_valid.service_name().clone();
+
+    let builder =
+        KerberosReply::ticket_renew_builder(tgs_req_valid, start_time, end_time, renew_until);
+
+    builder.build(&server_state.primary_key).map_err(|kdc_err| {
         error!(?kdc_err);
         KerberosReply::error_internal(service_name, stime)
     })

@@ -469,6 +469,8 @@ impl TicketGrantRequestUnverified {
             let client_name = Name::try_from((enc_ticket_part.cname, enc_ticket_part.crealm))?;
             let auth_time = enc_ticket_part.auth_time.to_system_time();
 
+            let flags = enc_ticket_part.flags;
+
             let start_time = enc_ticket_part
                 .start_time
                 .map(|t| t.to_system_time())
@@ -478,6 +480,7 @@ impl TicketGrantRequestUnverified {
             let renew_until = enc_ticket_part.renew_till.map(|t| t.to_system_time());
 
             Ticket {
+                flags,
                 client_name,
                 session_key,
                 start_time,

@@ -57,7 +57,6 @@ pub(crate) struct KdcReqBody {
     pub(crate) additional_tickets: Option<Vec<TaggedTicket>>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::KdcReqBody;
@@ -79,5 +78,4 @@ mod tests {
         let req_body = req_body.decode_as::<KdcReqBody>().unwrap();
         tracing::trace!(?req_body);
     }
-
 }
