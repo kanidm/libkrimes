@@ -347,6 +347,15 @@ impl KerberosReply {
         })
     }
 
+    pub fn error_renew_denied(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KdcErrPolicy,
+            service,
+            error_text: Some("Requested ticket is unable to be renewed".to_string()),
+            stime,
+        })
+    }
+
     pub fn error_internal(service: Name, stime: SystemTime) -> KerberosReply {
         KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KrbErrGeneric,

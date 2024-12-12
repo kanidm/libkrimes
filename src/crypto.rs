@@ -88,7 +88,6 @@ pub(crate) fn decrypt_aes256_cts_hmac_sha1_96(
         if my_hmac == msg_hmac {
             Ok(plaintext)
         } else {
-            assert!(false);
             Err(KrbError::MessageAuthenticationFailed)
         }
     } else {
