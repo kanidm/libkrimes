@@ -540,20 +540,20 @@ impl TicketGrantRequest {
 
     /// This is the time the client requested the ticket grant to start at. This value
     /// MUST be validated within the bounds of the ticket validity.
-    pub fn requested_start_time(&self) -> Option<&SystemTime> {
-        self.from.as_ref()
+    pub fn requested_start_time(&self) -> Option<SystemTime> {
+        self.from
     }
 
     /// This is the time the client requested the ticket grant to end at. This value
     /// MUST be validated within the bounds of the ticket validity.
-    pub fn requested_end_time(&self) -> &SystemTime {
-        &self.until
+    pub fn requested_end_time(&self) -> SystemTime {
+        self.until
     }
 
     /// This is the time the client requested the ticket grant to be renewable until.
     /// This value MUST be validated within the bounds of the tickets renewable validity.
-    pub fn requested_renew_until(&self) -> Option<&SystemTime> {
-        self.renew.as_ref()
+    pub fn requested_renew_until(&self) -> Option<SystemTime> {
+        self.renew
     }
 
     /// The cryptographically verified ticket granting ticket that this KDC or a trusted

@@ -1,11 +1,9 @@
 use clap::{Parser, Subcommand};
-use der::flagset::FlagSet;
 use futures::{SinkExt, StreamExt};
-use libkrime::asn1::kerberos_flags::KerberosFlags;
 use libkrime::asn1::ticket_flags::TicketFlags;
 use libkrime::proto::{
     AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
-    KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TimeBoundError,
+    KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TicketGrantTimeBound,
 };
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
@@ -186,56 +184,6 @@ async fn process_ticket_grant(
         return Err(KerberosReply::error_service_name(service_name, stime));
     };
 
-    let client_tgt = tgs_req_valid.ticket_granting_ticket();
-
-    // This is the maximal end time for this TGS.
-    let bound_end_time = cmp::min(
-        // Now + max tgs life.
-        stime + server_state.service_granting_ticket_lifetime,
-        // Or the renew until time - this may seem odd, but when we
-        // think about renewal here, the *end* time isn't the client tgt
-        // end time. The client tgt end time is the time by which the
-        // client needs to renew it's tgt. But it's not the end of the
-        // session as a whole, which can continue to renew.
-        //
-        // Realistically, this path will likely never be taken since
-        // the renewal window should be quite far ahead.
-        *client_tgt.renew_until().unwrap_or(client_tgt.end_time()),
-    );
-
-    let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
-        // Start time can not be less than the client_tgt start time.
-        if requested_start_time < client_tgt.start_time() {
-            todo!();
-        }
-
-        // Start time can not be greater than the end of the tgs time we are about to issue.
-        if *requested_start_time > bound_end_time {
-            todo!();
-        }
-
-        // It's within valid bounds, lets go.
-        *requested_start_time
-    } else {
-        // Start from *now*.
-        stime
-    };
-
-    let requested_end_time = tgs_req_valid.requested_end_time();
-
-    // Some clients send a 0 for the requested end - fill it in with the tgt end time instead.
-    let end_time = if *requested_end_time == SystemTime::UNIX_EPOCH {
-        // It's 0, just return our tgt end time instead.
-        bound_end_time
-    } else if requested_end_time < &start_time {
-        tracing::warn!(?requested_end_time, ?start_time);
-        bound_end_time
-    } else if *requested_end_time > bound_end_time {
-        bound_end_time
-    } else {
-        *requested_end_time
-    };
-
     // IMPORTANT - ticket grants aren't and can't be renewed.
     // https://k5wiki.kerberos.org/wiki/TGS_Requests
     // """
@@ -243,10 +191,19 @@ async fn process_ticket_grant(
     // * does not have any of the forwarded, proxy, renew, validate, enc-tkt-in-skey, or cname-in-addl-tkt options
     // """
 
-    let tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+    let time_bounds = match TicketGrantTimeBound::from_tgs_req(
+        stime,
+        server_state.allowed_clock_skew,
+        server_state.service_granting_ticket_lifetime,
+        &tgs_req_valid,
+    ) {
+        Ok(time_bounds) => time_bounds,
+        Err(time_bound_error) => {
+            return Err(time_bound_error.to_kerberos_reply(&service_name, stime))
+        }
+    };
 
-    let builder =
-        KerberosReply::ticket_grant_builder(tgs_req_valid, tkt_flags, start_time, end_time);
+    let builder = KerberosReply::ticket_grant_builder(tgs_req_valid, time_bounds);
 
     builder.build(&service_record.base_key).map_err(|kdc_err| {
         error!(?kdc_err);
@@ -276,7 +233,7 @@ async fn process_ticket_renewal(
     // We currently default the renew until here to the client tgt, but in
     // future we may be able to make server aware choices to clamp this during
     // the renewal to expire sessions of bad actors.
-    let Some(renew_until) = client_tgt.renew_until().map(|s| *s) else {
+    let Some(renew_until) = client_tgt.renew_until() else {
         warn!("Denying renewal of ticket that has no renew time.");
 
         return Err(KerberosReply::error_renew_denied(service_name, stime));
@@ -289,29 +246,29 @@ async fn process_ticket_renewal(
     );
 
     let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
-        if *requested_start_time < stime {
+        if requested_start_time < stime {
             todo!();
         }
 
-        if *requested_start_time > bound_end_time {
+        if requested_start_time > bound_end_time {
             todo!();
         }
 
         // It's within valid bounds, lets go.
 
-        *requested_start_time
+        requested_start_time
     } else {
         // Start from *now*.
         stime
     };
 
-    let end_time = cmp::min(bound_end_time, *tgs_req_valid.requested_end_time());
+    let end_time = cmp::min(bound_end_time, tgs_req_valid.requested_end_time());
 
     // Since we're renewing, we need to treat this a bit differently to a tgs req
     let renew_until = match tgs_req_valid.requested_renew_until() {
         Some(requested_renew_until) => {
             // Take the smaller of the values.
-            cmp::min(*requested_renew_until, renew_until)
+            cmp::min(requested_renew_until, renew_until)
         }
         None => renew_until,
     };
@@ -495,7 +452,6 @@ struct PrincipalRecord {
 #[derive(Debug)]
 struct ServerState {
     realm: String,
-    // address: SocketAddr,
     primary_key: KdcPrimaryKey,
     allowed_clock_skew: Duration,
 

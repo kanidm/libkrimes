@@ -1,5 +1,5 @@
 use crate::asn1::kerberos_flags::KerberosFlags;
-use crate::proto::{AuthenticationRequest, FlagSet, Name};
+use crate::proto::{AuthenticationRequest, FlagSet, Name, TicketGrantRequest};
 use crate::KerberosReply;
 use std::cmp;
 use std::time::{Duration, SystemTime};
@@ -322,4 +322,125 @@ fn is_within_allowed_skew(
             diff.duration() <= maximum_clock_skew
         }
     }
+}
+
+pub struct TicketGrantTimeBound {
+    start_time: SystemTime,
+    end_time: SystemTime,
+}
+
+impl TicketGrantTimeBound {
+    pub fn start_time(&self) -> SystemTime {
+        self.start_time
+    }
+
+    pub fn end_time(&self) -> SystemTime {
+        self.end_time
+    }
+
+    pub fn from_tgs_req(
+        current_time: SystemTime,
+        maximum_clock_skew: Duration,
+        maximum_service_ticket_lifetime: Duration,
+        tgs_req_valid: &TicketGrantRequest,
+    ) -> Result<TicketGrantTimeBound, TimeBoundError> {
+        let client_tgt = tgs_req_valid.ticket_granting_ticket();
+
+        // Ensure that current_time is at least equal or greater
+        // than the tgt auth_time (when it was issued). This checks
+        // for clock step backs.
+
+        let current_time = cmp::max(current_time, client_tgt.auth_time());
+
+        // Due to the authentication checks above, we can assert that:
+        // tgt_start_time < tgt_end_time < tgt_renew_until
+
+        let start_time = tgs_req_start_time(
+            current_time,
+            tgs_req_valid.requested_start_time(),
+            maximum_clock_skew,
+            client_tgt.start_time(),
+            client_tgt.end_time(),
+        )?;
+
+        let end_time = tgs_req_end_time(
+            start_time,
+            tgs_req_valid.requested_end_time(),
+            client_tgt.end_time(),
+            client_tgt.renew_until(),
+            maximum_service_ticket_lifetime,
+        )?;
+
+        Ok(TicketGrantTimeBound {
+            start_time,
+            end_time,
+        })
+    }
+}
+
+fn tgs_req_start_time(
+    current_time: SystemTime,
+    requested_start_time: Option<SystemTime>,
+    maximum_clock_skew: Duration,
+    client_tgt_start_time: SystemTime,
+    client_tgt_end_time: SystemTime,
+) -> Result<SystemTime, TimeBoundError> {
+    // No requested start time, set to now.
+    let requested_start_time = requested_start_time.unwrap_or(current_time);
+
+    let requested_start_time = if requested_start_time == SystemTime::UNIX_EPOCH {
+        current_time
+    } else {
+        requested_start_time
+    };
+
+    // The requested start time can't be *less* than the tgt start time.
+    let requested_start_time = cmp::min(requested_start_time, client_tgt_start_time);
+
+    // The requested start time needs to be "near" the current time at least.
+    if !is_within_allowed_skew(current_time, requested_start_time, maximum_clock_skew) {
+        return Err(TimeBoundError::Skew);
+    }
+
+    // The requested start_time *must not* exceed the end time.
+    if requested_start_time > client_tgt_end_time {
+        return Err(TimeBoundError::NeverValid);
+    }
+
+    Ok(requested_start_time)
+}
+
+fn tgs_req_end_time(
+    start_time: SystemTime,
+    requested_end_time: SystemTime,
+    client_tgt_end_time: SystemTime,
+    client_tgt_renew_until: Option<SystemTime>,
+    maximum_service_ticket_lifetime: Duration,
+) -> Result<SystemTime, TimeBoundError> {
+    // Clamp the end time to the maximum allowable.
+    let requested_end_time = match requested_end_time.duration_since(start_time) {
+        Ok(diff) => {
+            if diff > maximum_service_ticket_lifetime {
+                // Clamp to the maximum lifetime.
+                start_time + maximum_service_ticket_lifetime
+            } else {
+                // It's less than, so this time is valid.
+                requested_end_time
+            }
+        }
+        // Some clients send epoch to mean "just fuck my shit up fam", so
+        // we set a reasonable default here.
+        Err(_) if requested_end_time == SystemTime::UNIX_EPOCH => {
+            start_time + maximum_service_ticket_lifetime
+        }
+        // The end time was less than start time.
+        Err(_) => return Err(TimeBoundError::NeverValid),
+    };
+
+    // We bound to either the renew time if present, or the tgt_end time.
+    let clamp_bound = client_tgt_renew_until.unwrap_or(client_tgt_end_time);
+
+    let requested_end_time = cmp::min(requested_end_time, clamp_bound);
+
+    Ok(requested_end_time)
 }

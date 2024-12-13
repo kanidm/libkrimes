@@ -28,7 +28,7 @@ use tracing::trace;
 
 use super::{
     AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name,
-    PreauthData, SessionKey, Ticket, TicketGrantRequest,
+    PreauthData, SessionKey, Ticket, TicketGrantRequest, TicketGrantTimeBound,
 };
 use crate::proto::ms_pac::AdWin2kPac;
 
@@ -98,8 +98,8 @@ pub struct KerberosReplyTicketGrantBuilder {
 
     pac: Option<AdWin2kPac>,
 
-    start_time: SystemTime,
-    end_time: SystemTime,
+    time_bounds: TicketGrantTimeBound,
+
     ticket: Ticket,
 
     flags: FlagSet<TicketFlags>,
@@ -189,9 +189,7 @@ impl KerberosReply {
 
     pub fn ticket_grant_builder(
         ticket_grant_request: TicketGrantRequest,
-        flags: FlagSet<TicketFlags>,
-        start_time: SystemTime,
-        end_time: SystemTime,
+        time_bounds: TicketGrantTimeBound,
     ) -> KerberosReplyTicketGrantBuilder {
         let TicketGrantRequest {
             nonce,
@@ -205,6 +203,9 @@ impl KerberosReply {
             ticket,
         } = ticket_grant_request;
 
+        // Always empty on a TGS
+        let flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+
         // From is what the client requested.
         // Now is the kdc time.
         // ticket.start_time is when the ticket began.
@@ -217,8 +218,7 @@ impl KerberosReply {
 
             pac: None,
 
-            start_time,
-            end_time,
+            time_bounds,
             ticket,
 
             flags,
@@ -508,8 +508,9 @@ impl KerberosReplyTicketGrantBuilder {
         let (server_name, server_realm) = (&self.service_name).try_into().unwrap();
 
         let auth_time = KerberosTime::from_system_time(self.ticket.auth_time).unwrap();
-        let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
-        let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
+        let start_time =
+            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
         // TGS replies are never renewable
         let renew_till = None;
 
