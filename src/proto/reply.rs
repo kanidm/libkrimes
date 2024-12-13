@@ -84,7 +84,7 @@ pub struct KerberosReplyAuthenticationBuilder {
     client: Name,
     server: Name,
 
-    nonce: u32,
+    nonce: i32,
 
     auth_time: SystemTime,
     start_time: SystemTime,
@@ -95,7 +95,7 @@ pub struct KerberosReplyAuthenticationBuilder {
 }
 
 pub struct KerberosReplyTicketGrantBuilder {
-    nonce: u32,
+    nonce: i32,
     service_name: Name,
     // etypes: Vec<EncryptionType>,
     sub_session_key: Option<SessionKey>,
@@ -112,7 +112,7 @@ pub struct KerberosReplyTicketGrantBuilder {
 }
 
 pub struct KerberosReplyTicketRenewBuilder {
-    nonce: u32,
+    nonce: i32,
     service_name: Name,
     sub_session_key: Option<SessionKey>,
 
@@ -142,7 +142,7 @@ impl KerberosReply {
         start_time: SystemTime,
         end_time: SystemTime,
         renew_until: Option<SystemTime>,
-        nonce: u32,
+        nonce: i32,
         flags: FlagSet<TicketFlags>,
     ) -> KerberosReplyAuthenticationBuilder {
         let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;

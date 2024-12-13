@@ -46,7 +46,7 @@ pub(crate) struct KdcReqBody {
     #[asn1(context_specific = "6", optional = "true")]
     pub(crate) rtime: Option<KerberosTime>,
     #[asn1(context_specific = "7")]
-    pub(crate) nonce: u32,
+    pub(crate) nonce: i32,
     #[asn1(context_specific = "8")]
     pub(crate) etype: Vec<i32>,
     #[asn1(context_specific = "9", optional = "true")]
@@ -63,7 +63,7 @@ mod tests {
     use der::Decode;
 
     #[test]
-    fn krb_kdc_req_heimal_macos() {
+    fn krb_kdc_req_heimdal_macos() {
         let _ = tracing_subscriber::fmt::try_init();
         // Sample taken from macos while attempting to access a samba share.
         //
@@ -72,8 +72,64 @@ mod tests {
         //
         // tracing::debug!(kdc_req_body = hex::encode(&req_body.to_der().unwrap()));
 
-        let req_body_bytes = hex::decode("3079a00703050000000000a2151b134445562e4649525354594541522e49442e4155a32c302aa003020101a12330211b04636966731b1966696c65732e6465762e6669727374796561722e69642e6175a511180f31393730303130313030303030305aa7060204cd5c0274a80e300c020112020111020110020117").unwrap();
+        let req_body_bytes = hex::decode(concat!(
+            // Sequence
+            "3079",
+            // bit string
+            "a007",
+            "03050000000000",
+            // Realm
+            "a215",
+            "1b134445562e4649525354594541522e49442e4155",
+            // Service Name
+            "a32c",
+            // Sequence
+            "302a",
+            // Name type 1
+            "a003",
+            "020101",
+            // The name bits
+            "a123",
+            // Sequence
+            "3021",
+            // String "cifs"
+            "1b04",
+            "63696673",
+            // String "dev.firstyear.id.au"
+            "1b19",
+            "66696c65732e6465762e6669727374796561722e69642e6175",
+            // Generalised time
+            "a511",
+            "180f31393730303130313030303030305a",
+            // Nonce u32
+            // BUG BUG BUG
+            // KRB spec claims this is a u32, but heimdal sends i32, and MIT treats this as u31.
+            // When this is negative it causes our decode to break, where MIT ignores this.
+            "a706",
+            "02",
+            "04",
+            "cd5c0274",
+            // etypes
+            "a80e",
+            // Sequence
+            "300c",
+            "02",
+            "01",
+            "12",
+            "02",
+            "01",
+            "11",
+            "02",
+            "01",
+            "10",
+            "02",
+            "01",
+            "17",
+        ))
+        .unwrap();
         let req_body = der::Any::from_der(&req_body_bytes).unwrap();
+
+        tracing::trace!(?req_body);
 
         let req_body = req_body.decode_as::<KdcReqBody>().unwrap();
         tracing::trace!(?req_body);

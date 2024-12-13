@@ -31,7 +31,7 @@ pub(crate) struct EncKdcRepPart {
     #[asn1(context_specific = "1")]
     pub(crate) last_req: LastReq,
     #[asn1(context_specific = "2")]
-    pub(crate) nonce: u32,
+    pub(crate) nonce: i32,
     #[asn1(context_specific = "3", optional = "true")]
     pub(crate) key_expiration: Option<KerberosTime>,
     #[asn1(context_specific = "4")]
