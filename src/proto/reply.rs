@@ -29,6 +29,7 @@ use tracing::trace;
 use super::{
     AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name,
     PreauthData, SessionKey, Ticket, TicketGrantRequest, TicketGrantTimeBound,
+    TicketRenewTimeBound,
 };
 use crate::proto::ms_pac::AdWin2kPac;
 
@@ -110,9 +111,7 @@ pub struct KerberosReplyTicketRenewBuilder {
     service_name: Name,
     sub_session_key: Option<SessionKey>,
 
-    start_time: SystemTime,
-    end_time: SystemTime,
-    renew_until: Option<SystemTime>,
+    time_bounds: TicketRenewTimeBound,
 
     ticket: Ticket,
 }
@@ -157,9 +156,7 @@ impl KerberosReply {
 
     pub fn ticket_renew_builder(
         ticket_grant_request: TicketGrantRequest,
-        start_time: SystemTime,
-        end_time: SystemTime,
-        renew_until: Option<SystemTime>,
+        time_bounds: TicketRenewTimeBound,
     ) -> KerberosReplyTicketRenewBuilder {
         let TicketGrantRequest {
             nonce,
@@ -179,9 +176,7 @@ impl KerberosReply {
 
             sub_session_key,
 
-            start_time,
-            end_time,
-            renew_until,
+            time_bounds,
 
             ticket,
         }
@@ -610,21 +605,16 @@ impl KerberosReplyTicketGrantBuilder {
 }
 
 impl KerberosReplyTicketRenewBuilder {
-    pub fn renew_until(mut self, renew_until: Option<SystemTime>) -> Self {
-        self.renew_until = renew_until;
-        self
-    }
-
     pub fn build(self, primary_key: &KdcPrimaryKey) -> Result<KerberosReply, KrbError> {
         let (cname, crealm) = (&self.ticket.client_name).try_into().unwrap();
         let (server_name, server_realm) = (&self.service_name).try_into().unwrap();
 
         let auth_time = KerberosTime::from_system_time(self.ticket.auth_time).unwrap();
-        let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
-        let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
-        let renew_till = self
-            .renew_until
-            .map(|t| KerberosTime::from_system_time(t).unwrap());
+        let start_time =
+            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
+        let renew_till =
+            Some(KerberosTime::from_system_time(self.time_bounds.renew_until()).unwrap());
 
         let session_key: KdcEncryptionKey = self.ticket.session_key.clone().try_into()?;
 
