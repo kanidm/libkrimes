@@ -38,7 +38,7 @@ pub enum KerberosRequest {
 
 #[derive(Debug)]
 pub struct AuthenticationRequest {
-    pub nonce: u32,
+    pub nonce: i32,
     pub client_name: Name,
     pub service_name: Name,
     pub from: Option<SystemTime>,
@@ -58,7 +58,7 @@ pub struct TicketGrantRequestUnverified {
 
 #[derive(Debug)]
 pub struct TicketGrantRequest {
-    pub(crate) nonce: u32,
+    pub(crate) nonce: i32,
     pub(crate) service_name: Name,
     pub(crate) etypes: Vec<EncryptionType>,
     pub(crate) sub_session_key: Option<SessionKey>,
@@ -202,8 +202,11 @@ impl KerberosAuthenticationBuilder {
 
         // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
         // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
-        let nonce: u32 = thread_rng().gen();
-        let nonce = nonce & 0x7fff_ffff;
+        // Heimdal for whatever reason will happily send negative values, so no idea
+        // how they get away with it when we don't ....
+        let nonce: i32 = thread_rng().gen();
+        let nonce = nonce.abs();
+        // let nonce = nonce & 0x7fff_ffff;
 
         let preauth = preauth.unwrap_or_default();
 
@@ -269,8 +272,11 @@ impl TicketGrantRequestBuilder {
 
         // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
         // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
-        let nonce: u32 = thread_rng().gen();
-        let nonce = nonce & 0x7fff_ffff;
+        // Heimdal for whatever reason will happily send negative values, so no idea
+        // how they get away with it when we don't ....
+        let nonce: i32 = thread_rng().gen();
+        let nonce = nonce.abs();
+        // let nonce = nonce & 0x7fff_ffff;
 
         // So far we don't use preauth-here
         // let preauth = preauth.unwrap_or_default();

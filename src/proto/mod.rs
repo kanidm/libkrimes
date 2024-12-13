@@ -515,7 +515,7 @@ pub struct KdcReplyPart {
     pub(crate) key: SessionKey,
     // Last req shows "last login" and probably isn't important for our needs.
     // last_req: (),
-    pub(crate) nonce: u32,
+    pub(crate) nonce: i32,
     pub(crate) key_expiration: Option<SystemTime>,
     pub(crate) flags: FlagSet<TicketFlags>,
     pub(crate) auth_time: SystemTime,
