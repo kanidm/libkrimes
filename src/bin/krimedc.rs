@@ -409,6 +409,11 @@ async fn process_ticket_grant(
     };
 
     // IMPORTANT - ticket grants aren't and can't be renewed.
+    // https://k5wiki.kerberos.org/wiki/TGS_Requests
+    // """
+    // For the purposes of this article, a TGS request is considered "normal" if it:
+    // * does not have any of the forwarded, proxy, renew, validate, enc-tkt-in-skey, or cname-in-addl-tkt options
+    // """
 
     let tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
 
