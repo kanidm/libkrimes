@@ -1,13 +1,12 @@
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
-use libkrime::asn1::ticket_flags::TicketFlags;
 use libkrime::proto::{
     AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
     KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TicketGrantTimeBound,
+    TicketRenewTimeBound,
 };
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
-use std::cmp;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -18,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace};
 
 #[instrument(level = "info", skip_all)]
 async fn process_authentication(
@@ -219,62 +218,19 @@ async fn process_ticket_renewal(
     let stime = SystemTime::now();
     let service_name = tgs_req_valid.service_name().clone();
 
-    if !tgs_req_valid
-        .ticket_flags()
-        .contains(TicketFlags::Renewable)
-    {
-        warn!("Denying renewal of ticket that is not renewable.");
-
-        return Err(KerberosReply::error_renew_denied(service_name, stime));
-    }
-
-    let client_tgt = tgs_req_valid.ticket_granting_ticket();
-
-    // We currently default the renew until here to the client tgt, but in
-    // future we may be able to make server aware choices to clamp this during
-    // the renewal to expire sessions of bad actors.
-    let Some(renew_until) = client_tgt.renew_until() else {
-        warn!("Denying renewal of ticket that has no renew time.");
-
-        return Err(KerberosReply::error_renew_denied(service_name, stime));
+    let time_bounds = match TicketRenewTimeBound::from_tgs_req(
+        stime,
+        server_state.allowed_clock_skew,
+        server_state.ticket_granting_ticket_lifetime,
+        &tgs_req_valid,
+    ) {
+        Ok(time_bounds) => time_bounds,
+        Err(time_bound_error) => {
+            return Err(time_bound_error.to_kerberos_reply(&service_name, stime))
+        }
     };
 
-    // Maximal end time for this tgt renewal. Normally clamps to the tgt max life
-    let bound_end_time = cmp::min(
-        stime + server_state.ticket_granting_ticket_lifetime,
-        renew_until,
-    );
-
-    let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
-        if requested_start_time < stime {
-            todo!();
-        }
-
-        if requested_start_time > bound_end_time {
-            todo!();
-        }
-
-        // It's within valid bounds, lets go.
-
-        requested_start_time
-    } else {
-        // Start from *now*.
-        stime
-    };
-
-    let end_time = cmp::min(bound_end_time, tgs_req_valid.requested_end_time());
-
-    // Since we're renewing, we need to treat this a bit differently to a tgs req
-    let renew_until = match tgs_req_valid.requested_renew_until() {
-        Some(requested_renew_until) => {
-            // Take the smaller of the values.
-            cmp::min(requested_renew_until, renew_until)
-        }
-        None => renew_until,
-    };
-
-    let builder =
-        KerberosReply::ticket_renew_builder(tgs_req_valid, start_time, end_time, Some(renew_until));
+    let builder = KerberosReply::ticket_renew_builder(tgs_req_valid, time_bounds);
 
     builder.build(&server_state.primary_key).map_err(|kdc_err| {
         error!(?kdc_err);

@@ -1,10 +1,10 @@
 use crate::asn1::kerberos_flags::KerberosFlags;
-use crate::proto::{AuthenticationRequest, FlagSet, Name, TicketGrantRequest};
+use crate::proto::{AuthenticationRequest, FlagSet, Name, TicketFlags, TicketGrantRequest};
 use crate::KerberosReply;
 use std::cmp;
 use std::time::{Duration, SystemTime};
 
-use tracing::trace;
+use tracing::{trace, warn};
 
 pub enum TimeBoundError {
     Skew,
@@ -443,4 +443,72 @@ fn tgs_req_end_time(
     let requested_end_time = cmp::min(requested_end_time, clamp_bound);
 
     Ok(requested_end_time)
+}
+
+pub struct TicketRenewTimeBound {
+    start_time: SystemTime,
+    end_time: SystemTime,
+    renew_until: SystemTime,
+}
+
+impl TicketRenewTimeBound {
+    pub fn start_time(&self) -> SystemTime {
+        self.start_time
+    }
+
+    pub fn end_time(&self) -> SystemTime {
+        self.end_time
+    }
+
+    pub fn renew_until(&self) -> SystemTime {
+        self.renew_until
+    }
+
+    pub fn from_tgs_req(
+        current_time: SystemTime,
+        maximum_clock_skew: Duration,
+        maximum_ticket_lifetime: Duration,
+        tgs_req_valid: &TicketGrantRequest,
+    ) -> Result<TicketRenewTimeBound, TimeBoundError> {
+        if !tgs_req_valid
+            .ticket_flags()
+            .contains(TicketFlags::Renewable)
+        {
+            warn!("Denying renewal of ticket that is not renewable.");
+            return Err(TimeBoundError::RenewalNotAllowed);
+        }
+
+        let client_tgt = tgs_req_valid.ticket_granting_ticket();
+
+        // We currently default the renew until here to the client tgt, but in
+        // future we may be able to make server aware choices to clamp this during
+        // the renewal to expire sessions of bad actors.
+        let Some(renew_until) = client_tgt.renew_until() else {
+            warn!("Denying renewal of ticket that has no renew time.");
+
+            return Err(TimeBoundError::RenewalNotAllowed);
+        };
+
+        let start_time = tgs_req_start_time(
+            current_time,
+            tgs_req_valid.requested_start_time(),
+            maximum_clock_skew,
+            client_tgt.start_time(),
+            client_tgt.end_time(),
+        )?;
+
+        let end_time = tgs_req_end_time(
+            start_time,
+            tgs_req_valid.requested_end_time(),
+            client_tgt.end_time(),
+            client_tgt.renew_until(),
+            maximum_ticket_lifetime,
+        )?;
+
+        Ok(TicketRenewTimeBound {
+            start_time,
+            end_time,
+            renew_until,
+        })
+    }
 }

@@ -8,7 +8,9 @@ pub use self::request::{
     AuthenticationRequest, KerberosRequest, TicketGrantRequest, TicketGrantRequestUnverified,
 };
 
-pub use self::time::{AuthenticationTimeBound, TicketGrantTimeBound, TimeBoundError};
+pub use self::time::{
+    AuthenticationTimeBound, TicketGrantTimeBound, TicketRenewTimeBound, TimeBoundError,
+};
 
 use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;
