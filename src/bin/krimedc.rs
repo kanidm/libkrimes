@@ -22,7 +22,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, instrument, trace, warn};
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(level = "info", skip_all)]
 async fn process_authentication(
     auth_req: AuthenticationRequest,
     server_state: &ServerState,
@@ -166,7 +166,14 @@ async fn process_authentication(
      */
     let tkt_start_time = auth_req.from.map_or(Ok(tkt_auth_time), |from| {
         match tkt_auth_time.duration_since(from) {
-            Ok(_) => {
+            Ok(diff) => {
+                if diff > server_state.allowed_clock_skew {
+                    // Too far in the past.
+                    return Err(KerberosReply::error_clock_skew(
+                        auth_req.service_name.clone(),
+                        stime,
+                    ));
+                }
                 // From is in the past
                 Ok(tkt_auth_time)
             }
@@ -224,12 +231,18 @@ async fn process_authentication(
      * described fully in Section 5.4.1).
      */
     // TODO hardcoded lifetime, define KDC policy for default ticket lifetime
+    //
+    // I actually think we shouldn't - we should make this a sane default, preferably
+    // very short to match oauth2 and similar where an in-use ticket will continue to renew
+    // but the renewals allow the KDC to check for revocation etc. That way the longest
+    // time a compromised ticket can live for is one ticket lifetime which could be 15 minutes
+    // (contrast the current insecure default of MIT being 8 hours ....)
     let tkt_end_time = if auth_req.until == SystemTime::UNIX_EPOCH {
-        tkt_start_time + server_state.ticket_lifetime
+        tkt_start_time + server_state.ticket_granting_ticket_lifetime
     } else {
         cmp::min(
             auth_req.until,
-            tkt_start_time + server_state.ticket_lifetime,
+            tkt_start_time + server_state.ticket_granting_ticket_lifetime,
         )
     };
 
@@ -295,7 +308,8 @@ async fn process_authentication(
      */
 
     // We should not bother with forwarded/proxiable until there is a genuine
-    // need for them.
+    // need for them. If anything we should never add them as these are insecure
+    // options.
 
     let builder = KerberosReply::authentication_builder(
         auth_req.client_name,
@@ -316,7 +330,7 @@ async fn process_authentication(
         })
 }
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(level = "info", skip_all)]
 async fn process_ticket_grant(
     tgs_req: TicketGrantRequestUnverified,
     server_state: &ServerState,
@@ -346,17 +360,33 @@ async fn process_ticket_grant(
 
     let client_tgt = tgs_req_valid.ticket_granting_ticket();
 
+    // This is the maximal end time for this TGS.
+    let bound_end_time = cmp::min(
+        // Now + max tgs life.
+        stime + server_state.service_granting_ticket_lifetime,
+        // Or the renew until time - this may seem odd, but when we
+        // think about renewal here, the *end* time isn't the client tgt
+        // end time. The client tgt end time is the time by which the
+        // client needs to renew it's tgt. But it's not the end of the
+        // session as a whole, which can continue to renew.
+        //
+        // Realistically, this path will likely never be taken since
+        // the renewal window should be quite far ahead.
+        *client_tgt.renew_until().unwrap_or(client_tgt.end_time()),
+    );
+
     let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
+        // Start time can not be less than the client_tgt start time.
         if requested_start_time < client_tgt.start_time() {
             todo!();
         }
 
-        if requested_start_time > client_tgt.end_time() {
+        // Start time can not be greater than the end of the tgs time we are about to issue.
+        if *requested_start_time > bound_end_time {
             todo!();
         }
 
         // It's within valid bounds, lets go.
-
         *requested_start_time
     } else {
         // Start from *now*.
@@ -364,43 +394,21 @@ async fn process_ticket_grant(
     };
 
     let requested_end_time = tgs_req_valid.requested_end_time();
-    // Can't be past the tgt end.
-    if requested_end_time > client_tgt.end_time() {
-        todo!();
-    }
 
     // Some clients send a 0 for the requested end - fill it in with the tgt end time instead.
     let end_time = if *requested_end_time == SystemTime::UNIX_EPOCH {
         // It's 0, just return our tgt end time instead.
-        *client_tgt.end_time()
+        bound_end_time
     } else if requested_end_time < &start_time {
         tracing::warn!(?requested_end_time, ?start_time);
-        // Mask with the tgt end.
-        *client_tgt.end_time()
-    } else if requested_end_time > client_tgt.end_time() {
-        // Clamp to tgt end time
-        *client_tgt.end_time()
+        bound_end_time
+    } else if *requested_end_time > bound_end_time {
+        bound_end_time
     } else {
         *requested_end_time
     };
 
-    let renew_until = match (
-        tgs_req_valid.requested_renew_until(),
-        client_tgt.renew_until(),
-    ) {
-        (Some(requested_renew_until), Some(ticket_renew_until)) => {
-            if requested_renew_until > ticket_renew_until {
-                todo!();
-            }
-
-            Some(*requested_renew_until)
-        }
-        (None, Some(ticket_renew_until)) => Some(*ticket_renew_until),
-        (Some(_), None) => {
-            todo!();
-        }
-        (_, _) => None,
-    };
+    // IMPORTANT - ticket grants aren't and can't be renewed.
 
     let tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
 
@@ -409,7 +417,7 @@ async fn process_ticket_grant(
         tkt_flags,
         start_time,
         end_time,
-        renew_until,
+        // renew_until,
     );
 
     builder.build(&service_record.base_key).map_err(|kdc_err| {
@@ -418,7 +426,7 @@ async fn process_ticket_grant(
     })
 }
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(level = "info", skip_all)]
 async fn process_ticket_renewal(
     tgs_req_valid: TicketGrantRequest,
     server_state: &ServerState,
@@ -446,12 +454,18 @@ async fn process_ticket_renewal(
         return Err(KerberosReply::error_renew_denied(service_name, stime));
     };
 
+    // Maximal end time for this tgt renewal. Normally clamps to the tgt max life
+    let bound_end_time = cmp::min(
+        stime + server_state.ticket_granting_ticket_lifetime,
+        renew_until,
+    );
+
     let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
-        if requested_start_time < client_tgt.start_time() {
+        if *requested_start_time < stime {
             todo!();
         }
 
-        if requested_start_time > client_tgt.end_time() {
+        if *requested_start_time > bound_end_time {
             todo!();
         }
 
@@ -463,28 +477,15 @@ async fn process_ticket_renewal(
         stime
     };
 
-    let requested_end_time = tgs_req_valid.requested_end_time();
-
-    // Can't be past the tgt end.
-    if requested_end_time > client_tgt.end_time() {
-        todo!();
-    }
+    let end_time = cmp::min(bound_end_time, *tgs_req_valid.requested_end_time());
 
     // Since we're renewing, we need to treat this a bit differently to a tgs req
-    let possible_renew_until = stime + server_state.ticket_lifetime;
-
-    // If 0, then clamp to ticket lifetime.
-    let end_time = if *requested_end_time == SystemTime::UNIX_EPOCH ||
-        // If the request end is greater than what we will issue, clamp.
-        *requested_end_time > possible_renew_until
-    {
-        possible_renew_until
-    } else if *requested_end_time > renew_until {
-        // Longer than the max renewal window, clamp.
-        renew_until
-    } else {
-        // It's less than the ticket lifetime.
-        *requested_end_time
+    let renew_until = match tgs_req_valid.requested_renew_until() {
+        Some(requested_renew_until) => {
+            // Take the smaller of the values.
+            cmp::min(*requested_renew_until, renew_until)
+        }
+        None => renew_until,
     };
 
     let builder =
@@ -636,8 +637,8 @@ impl From<Config> for ServerState {
 
         let allowed_clock_skew = Duration::from_secs(300);
 
-        // let ticket_lifetime = Duration::from_secs(3600 * 4);
-        let ticket_lifetime = Duration::from_secs(1800);
+        let ticket_granting_ticket_lifetime = Duration::from_secs(1800);
+        let service_granting_ticket_lifetime = Duration::from_secs(300);
 
         let ticket_min_lifetime = Duration::from_secs(60);
 
@@ -650,7 +651,9 @@ impl From<Config> for ServerState {
             allowed_clock_skew,
             ticket_min_lifetime,
             ticket_max_renew_time,
-            ticket_lifetime,
+
+            ticket_granting_ticket_lifetime,
+            service_granting_ticket_lifetime,
         }
     }
 }
@@ -668,7 +671,10 @@ struct ServerState {
     primary_key: KdcPrimaryKey,
     allowed_clock_skew: Duration,
 
-    ticket_lifetime: Duration,
+    //
+    ticket_granting_ticket_lifetime: Duration,
+    service_granting_ticket_lifetime: Duration,
+
     ticket_min_lifetime: Duration,
     ticket_max_renew_time: Duration,
 
