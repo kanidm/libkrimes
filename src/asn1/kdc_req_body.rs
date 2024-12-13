@@ -129,8 +129,6 @@ mod tests {
         .unwrap();
         let req_body = der::Any::from_der(&req_body_bytes).unwrap();
 
-        tracing::trace!(?req_body);
-
         let req_body = req_body.decode_as::<KdcReqBody>().unwrap();
         tracing::trace!(?req_body);
     }

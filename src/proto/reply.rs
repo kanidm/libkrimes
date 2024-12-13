@@ -97,14 +97,12 @@ pub struct KerberosReplyAuthenticationBuilder {
 pub struct KerberosReplyTicketGrantBuilder {
     nonce: i32,
     service_name: Name,
-    // etypes: Vec<EncryptionType>,
     sub_session_key: Option<SessionKey>,
 
     pac: Option<AdWin2kPac>,
 
     start_time: SystemTime,
     end_time: SystemTime,
-    // renew_until: Option<SystemTime>,
     ticket: Ticket,
 
     flags: FlagSet<TicketFlags>,
@@ -199,7 +197,6 @@ impl KerberosReply {
         flags: FlagSet<TicketFlags>,
         start_time: SystemTime,
         end_time: SystemTime,
-        // renew_until: Option<SystemTime>,
     ) -> KerberosReplyTicketGrantBuilder {
         let TicketGrantRequest {
             nonce,
@@ -221,14 +218,12 @@ impl KerberosReply {
             nonce,
             service_name,
 
-            // etypes,
             sub_session_key,
 
             pac: None,
 
             start_time,
             end_time,
-            // renew_until,
             ticket,
 
             flags,
@@ -497,13 +492,6 @@ impl KerberosReplyAuthenticationBuilder {
 }
 
 impl KerberosReplyTicketGrantBuilder {
-    /*
-    pub fn renew_until(mut self, renew_until: Option<SystemTime>) -> Self {
-        self.renew_until = renew_until;
-        self
-    }
-    */
-
     pub fn build(self, service_key: &DerivedKey) -> Result<KerberosReply, KrbError> {
         let service_session_key = SessionKey::new();
         let service_session_key: KdcEncryptionKey = service_session_key.try_into()?;
@@ -514,11 +502,7 @@ impl KerberosReplyTicketGrantBuilder {
         let auth_time = KerberosTime::from_system_time(self.ticket.auth_time).unwrap();
         let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
         let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
-        /*
-        let renew_till = self
-            .renew_until
-            .map(|t| KerberosTime::from_system_time(t).unwrap());
-        */
+        // TGS replies are never renewable
         let renew_till = None;
 
         // TGS_REP The ciphertext is encrypted with the sub-session key

@@ -206,7 +206,6 @@ impl KerberosAuthenticationBuilder {
         // how they get away with it when we don't ....
         let nonce: i32 = thread_rng().gen();
         let nonce = nonce.abs();
-        // let nonce = nonce & 0x7fff_ffff;
 
         let preauth = preauth.unwrap_or_default();
 
@@ -276,7 +275,6 @@ impl TicketGrantRequestBuilder {
         // how they get away with it when we don't ....
         let nonce: i32 = thread_rng().gen();
         let nonce = nonce.abs();
-        // let nonce = nonce & 0x7fff_ffff;
 
         // So far we don't use preauth-here
         // let preauth = preauth.unwrap_or_default();
