@@ -1,11 +1,14 @@
 mod ms_pac;
 mod reply;
 mod request;
+mod time;
 
 pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGrantReply};
 pub use self::request::{
     AuthenticationRequest, KerberosRequest, TicketGrantRequest, TicketGrantRequestUnverified,
 };
+
+pub use self::time::{AuthenticationTimeBound, TimeBoundError};
 
 use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;

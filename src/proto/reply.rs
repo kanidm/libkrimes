@@ -27,8 +27,8 @@ use std::time::{Duration, SystemTime};
 use tracing::trace;
 
 use super::{
-    DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, SessionKey,
-    Ticket, TicketGrantRequest,
+    AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name,
+    PreauthData, SessionKey, Ticket, TicketGrantRequest,
 };
 use crate::proto::ms_pac::AdWin2kPac;
 
@@ -86,10 +86,7 @@ pub struct KerberosReplyAuthenticationBuilder {
 
     nonce: i32,
 
-    auth_time: SystemTime,
-    start_time: SystemTime,
-    end_time: SystemTime,
-    renew_until: Option<SystemTime>,
+    time_bounds: AuthenticationTimeBound,
 
     flags: FlagSet<TicketFlags>,
 }
@@ -135,14 +132,15 @@ impl KerberosReply {
     pub fn authentication_builder(
         client: Name,
         server: Name,
-        auth_time: SystemTime,
-        start_time: SystemTime,
-        end_time: SystemTime,
-        renew_until: Option<SystemTime>,
+        time_bounds: AuthenticationTimeBound,
         nonce: i32,
-        flags: FlagSet<TicketFlags>,
     ) -> KerberosReplyAuthenticationBuilder {
         let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;
+
+        let mut flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+        if time_bounds.renew_until().is_some() {
+            flags |= TicketFlags::Renewable;
+        }
 
         KerberosReplyAuthenticationBuilder {
             aes256_cts_hmac_sha1_96_iter_count,
@@ -152,10 +150,7 @@ impl KerberosReply {
 
             nonce,
 
-            auth_time,
-            start_time,
-            end_time,
-            renew_until,
+            time_bounds,
             flags,
         }
     }
@@ -228,6 +223,17 @@ impl KerberosReply {
 
             flags,
         }
+    }
+
+    pub fn error_request_invalid(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KrbErrGeneric,
+            service,
+            error_text: Some(
+                "The Kerberos Client sent a malformed and invalid request.".to_string(),
+            ),
+            stime,
+        })
     }
 
     pub fn error_no_etypes(service: Name, stime: SystemTime) -> KerberosReply {
@@ -422,11 +428,13 @@ impl KerberosReplyAuthenticationBuilder {
         let (cname, crealm) = (&self.client).try_into().unwrap();
         let (server_name, server_realm) = (&self.server).try_into().unwrap();
 
-        let auth_time = KerberosTime::from_system_time(self.auth_time).unwrap();
-        let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
-        let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
+        let auth_time = KerberosTime::from_system_time(self.time_bounds.auth_time()).unwrap();
+        let start_time =
+            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
         let renew_till = self
-            .renew_until
+            .time_bounds
+            .renew_until()
             .map(|t| KerberosTime::from_system_time(t).unwrap());
 
         let enc_kdc_rep_part = EncKdcRepPart {
