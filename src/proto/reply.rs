@@ -27,8 +27,9 @@ use std::time::{Duration, SystemTime};
 use tracing::trace;
 
 use super::{
-    DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name, PreauthData, SessionKey,
-    Ticket, TicketGrantRequest,
+    AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name,
+    PreauthData, SessionKey, Ticket, TicketGrantRequest, TicketGrantTimeBound,
+    TicketRenewTimeBound,
 };
 use crate::proto::ms_pac::AdWin2kPac;
 
@@ -84,31 +85,35 @@ pub struct KerberosReplyAuthenticationBuilder {
     client: Name,
     server: Name,
 
-    nonce: u32,
+    nonce: i32,
 
-    auth_time: SystemTime,
-    start_time: SystemTime,
-    end_time: SystemTime,
-    renew_until: Option<SystemTime>,
+    time_bounds: AuthenticationTimeBound,
 
     flags: FlagSet<TicketFlags>,
 }
 
 pub struct KerberosReplyTicketGrantBuilder {
-    nonce: u32,
+    nonce: i32,
     service_name: Name,
-    // etypes: Vec<EncryptionType>,
     sub_session_key: Option<SessionKey>,
 
     pac: Option<AdWin2kPac>,
 
-    start_time: SystemTime,
-    end_time: SystemTime,
-    renew_until: Option<SystemTime>,
+    time_bounds: TicketGrantTimeBound,
 
     ticket: Ticket,
 
     flags: FlagSet<TicketFlags>,
+}
+
+pub struct KerberosReplyTicketRenewBuilder {
+    nonce: i32,
+    service_name: Name,
+    sub_session_key: Option<SessionKey>,
+
+    time_bounds: TicketRenewTimeBound,
+
+    ticket: Ticket,
 }
 
 impl KerberosReply {
@@ -126,14 +131,15 @@ impl KerberosReply {
     pub fn authentication_builder(
         client: Name,
         server: Name,
-        auth_time: SystemTime,
-        start_time: SystemTime,
-        end_time: SystemTime,
-        renew_until: Option<SystemTime>,
-        nonce: u32,
-        flags: FlagSet<TicketFlags>,
+        time_bounds: AuthenticationTimeBound,
+        nonce: i32,
     ) -> KerberosReplyAuthenticationBuilder {
         let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;
+
+        let mut flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+        if time_bounds.renew_until().is_some() {
+            flags |= TicketFlags::Renewable;
+        }
 
         KerberosReplyAuthenticationBuilder {
             aes256_cts_hmac_sha1_96_iter_count,
@@ -143,20 +149,42 @@ impl KerberosReply {
 
             nonce,
 
-            auth_time,
-            start_time,
-            end_time,
-            renew_until,
+            time_bounds,
             flags,
+        }
+    }
+
+    pub fn ticket_renew_builder(
+        ticket_grant_request: TicketGrantRequest,
+        time_bounds: TicketRenewTimeBound,
+    ) -> KerberosReplyTicketRenewBuilder {
+        let TicketGrantRequest {
+            nonce,
+            service_name,
+            from: _,
+            until: _,
+            renew: _,
+            etypes: _,
+            sub_session_key,
+            client_time: _,
+            ticket,
+        } = ticket_grant_request;
+
+        KerberosReplyTicketRenewBuilder {
+            nonce,
+            service_name,
+
+            sub_session_key,
+
+            time_bounds,
+
+            ticket,
         }
     }
 
     pub fn ticket_grant_builder(
         ticket_grant_request: TicketGrantRequest,
-        flags: FlagSet<TicketFlags>,
-        start_time: SystemTime,
-        end_time: SystemTime,
-        renew_until: Option<SystemTime>,
+        time_bounds: TicketGrantTimeBound,
     ) -> KerberosReplyTicketGrantBuilder {
         let TicketGrantRequest {
             nonce,
@@ -170,6 +198,9 @@ impl KerberosReply {
             ticket,
         } = ticket_grant_request;
 
+        // Always empty on a TGS
+        let flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+
         // From is what the client requested.
         // Now is the kdc time.
         // ticket.start_time is when the ticket began.
@@ -178,19 +209,26 @@ impl KerberosReply {
             nonce,
             service_name,
 
-            // etypes,
             sub_session_key,
 
             pac: None,
 
-            start_time,
-            end_time,
-            renew_until,
-
+            time_bounds,
             ticket,
 
             flags,
         }
+    }
+
+    pub fn error_request_invalid(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KrbErrGeneric,
+            service,
+            error_text: Some(
+                "The Kerberos Client sent a malformed and invalid request.".to_string(),
+            ),
+            stime,
+        })
     }
 
     pub fn error_no_etypes(service: Name, stime: SystemTime) -> KerberosReply {
@@ -303,6 +341,15 @@ impl KerberosReply {
         })
     }
 
+    pub fn error_renew_denied(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KdcErrPolicy,
+            service,
+            error_text: Some("Requested ticket is unable to be renewed".to_string()),
+            stime,
+        })
+    }
+
     pub fn error_internal(service: Name, stime: SystemTime) -> KerberosReply {
         KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KrbErrGeneric,
@@ -376,11 +423,13 @@ impl KerberosReplyAuthenticationBuilder {
         let (cname, crealm) = (&self.client).try_into().unwrap();
         let (server_name, server_realm) = (&self.server).try_into().unwrap();
 
-        let auth_time = KerberosTime::from_system_time(self.auth_time).unwrap();
-        let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
-        let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
+        let auth_time = KerberosTime::from_system_time(self.time_bounds.auth_time()).unwrap();
+        let start_time =
+            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
         let renew_till = self
-            .renew_until
+            .time_bounds
+            .renew_until()
             .map(|t| KerberosTime::from_system_time(t).unwrap());
 
         let enc_kdc_rep_part = EncKdcRepPart {
@@ -446,11 +495,6 @@ impl KerberosReplyAuthenticationBuilder {
 }
 
 impl KerberosReplyTicketGrantBuilder {
-    pub fn renew_until(mut self, renew_until: Option<SystemTime>) -> Self {
-        self.renew_until = renew_until;
-        self
-    }
-
     pub fn build(self, service_key: &DerivedKey) -> Result<KerberosReply, KrbError> {
         let service_session_key = SessionKey::new();
         let service_session_key: KdcEncryptionKey = service_session_key.try_into()?;
@@ -459,11 +503,11 @@ impl KerberosReplyTicketGrantBuilder {
         let (server_name, server_realm) = (&self.service_name).try_into().unwrap();
 
         let auth_time = KerberosTime::from_system_time(self.ticket.auth_time).unwrap();
-        let start_time = Some(KerberosTime::from_system_time(self.start_time).unwrap());
-        let end_time = KerberosTime::from_system_time(self.end_time).unwrap();
-        let renew_till = self
-            .renew_until
-            .map(|t| KerberosTime::from_system_time(t).unwrap());
+        let start_time =
+            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
+        // TGS replies are never renewable
+        let renew_till = None;
 
         // TGS_REP The ciphertext is encrypted with the sub-session key
         // from the authenticator.
@@ -543,6 +587,94 @@ impl KerberosReplyTicketGrantBuilder {
         };
 
         let ticket_enc_part = service_key.encrypt_tgs(ticket_inner)?;
+
+        let ticket = EncTicket {
+            tkt_vno: 5,
+            service: self.service_name,
+            enc_part: ticket_enc_part,
+        };
+
+        let client_name = self.ticket.client_name;
+
+        Ok(KerberosReply::TGS(TicketGrantReply {
+            client_name,
+            enc_part,
+            ticket,
+        }))
+    }
+}
+
+impl KerberosReplyTicketRenewBuilder {
+    pub fn build(self, primary_key: &KdcPrimaryKey) -> Result<KerberosReply, KrbError> {
+        let (cname, crealm) = (&self.ticket.client_name).try_into().unwrap();
+        let (server_name, server_realm) = (&self.service_name).try_into().unwrap();
+
+        let auth_time = KerberosTime::from_system_time(self.ticket.auth_time).unwrap();
+        let start_time =
+            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
+        let renew_till =
+            Some(KerberosTime::from_system_time(self.time_bounds.renew_until()).unwrap());
+
+        let session_key: KdcEncryptionKey = self.ticket.session_key.clone().try_into()?;
+
+        // TGS_REP The ciphertext is encrypted with the sub-session key
+        // from the authenticator.
+        // If absent, the session key is used (with no kvno).
+        // 5.4.2 reads as though the the clients version number is used here for kvno?
+
+        // KeyUsage == 8 for session key, or == 9 for subkey.
+        // let enc_part = EncTGSRepPart == EncKDCRepPart;
+
+        let enc_kdc_rep_part = EncKdcRepPart {
+            key: session_key.clone(),
+            // Not 100% clear on this field.
+            last_req: Vec::with_capacity(0),
+            nonce: self.nonce,
+            key_expiration: None,
+            flags: self.ticket.flags,
+            auth_time,
+            start_time,
+            end_time,
+            renew_till,
+            server_realm,
+            server_name,
+            client_addresses: None,
+        };
+
+        let enc_part = if let Some(sub_session_key) = self.sub_session_key {
+            sub_session_key.encrypt_tgs_rep_part(enc_kdc_rep_part, true)?
+        } else {
+            self.ticket
+                .session_key
+                .encrypt_tgs_rep_part(enc_kdc_rep_part, false)?
+        };
+
+        let authorization_data = None;
+
+        let transited = TransitedEncoding {
+            tr_type: 1,
+            // Since no transit has occured, we record an empty str.
+            contents: OctetString::new(b"").unwrap(),
+        };
+
+        // EncTicketPart
+        // Encrypted to the key of the service
+        let ticket_inner = EncTicketPart {
+            flags: self.ticket.flags,
+            key: session_key,
+            crealm,
+            cname,
+            transited,
+            auth_time,
+            start_time,
+            end_time,
+            renew_till,
+            client_addresses: None,
+            authorization_data,
+        };
+
+        let ticket_enc_part = primary_key.encrypt_tgs(ticket_inner)?;
 
         let ticket = EncTicket {
             tkt_vno: 5,

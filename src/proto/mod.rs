@@ -1,10 +1,15 @@
 mod ms_pac;
 mod reply;
 mod request;
+mod time;
 
 pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGrantReply};
 pub use self::request::{
     AuthenticationRequest, KerberosRequest, TicketGrantRequest, TicketGrantRequestUnverified,
+};
+
+pub use self::time::{
+    AuthenticationTimeBound, TicketGrantTimeBound, TicketRenewTimeBound, TimeBoundError,
 };
 
 use crate::asn1::ap_req::ApReq;
@@ -466,6 +471,27 @@ impl KdcPrimaryKey {
             }
         }
     }
+
+    pub(crate) fn encrypt_tgs(
+        &self,
+        ticket_inner: EncTicketPart,
+    ) -> Result<EncryptedData, KrbError> {
+        let data = TaggedEncTicketPart(ticket_inner)
+            .to_der()
+            .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
+
+        // When we renew a clients ticket, we need to use key_usage 3 here, not 2
+        // like in a normal TGS response since we are using the KDC Primary Key
+        // instead of a service key.
+        let key_usage = 3;
+
+        match self {
+            KdcPrimaryKey::Aes256 { k } => {
+                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -476,6 +502,7 @@ pub struct Ticket {
     pub(crate) end_time: SystemTime,
     pub(crate) renew_until: Option<SystemTime>,
     pub(crate) session_key: SessionKey,
+    pub(crate) flags: FlagSet<TicketFlags>,
 }
 
 #[derive(Debug, Clone)]
@@ -494,7 +521,7 @@ pub struct KdcReplyPart {
     pub(crate) key: SessionKey,
     // Last req shows "last login" and probably isn't important for our needs.
     // last_req: (),
-    pub(crate) nonce: u32,
+    pub(crate) nonce: i32,
     pub(crate) key_expiration: Option<SystemTime>,
     pub(crate) flags: FlagSet<TicketFlags>,
     pub(crate) auth_time: SystemTime,
@@ -859,16 +886,24 @@ impl TryInto<Asn1Ticket> for EncTicket {
 }
 
 impl Ticket {
-    pub fn start_time(&self) -> &SystemTime {
-        &self.start_time
+    pub fn start_time(&self) -> SystemTime {
+        self.start_time
     }
 
-    pub fn end_time(&self) -> &SystemTime {
-        &self.end_time
+    pub fn end_time(&self) -> SystemTime {
+        self.end_time
     }
 
-    pub fn renew_until(&self) -> Option<&SystemTime> {
-        self.renew_until.as_ref()
+    pub fn auth_time(&self) -> SystemTime {
+        self.auth_time
+    }
+
+    pub fn renew_until(&self) -> Option<SystemTime> {
+        self.renew_until
+    }
+
+    pub fn flags(&self) -> &FlagSet<TicketFlags> {
+        &self.flags
     }
 }
 
@@ -962,13 +997,24 @@ impl Name {
         }
     }
 
+    #[tracing::instrument(level = "debug")]
     pub fn is_service_krbtgt(&self, check_realm: &str) -> bool {
         match self {
+            // Cool bug - MIT KRB in an AS-REQ will send this with no instance, but then
+            // expects an instance to be filled in. So sometimes for the krbtgt you need
+            // an instance and sometimes you don't. How fun!
             Self::SrvInst {
                 service,
-                instance,
+                instance: _,
                 realm,
-            } => service == "krbtgt" && check_realm == realm && instance.is_empty(),
+            } => service == "krbtgt" && check_realm == realm,
+            // Doesn't matter what we send this as, Heimdal fucks it up.
+            Self::SrvPrincipal {
+                service,
+                host: _,
+                realm,
+            } => service == "krbtgt" && check_realm == realm,
+            Self::Principal { name, realm } => name == "krbtgt" && check_realm == realm,
             _ => false,
         }
     }

@@ -1,15 +1,12 @@
 use clap::{Parser, Subcommand};
-use der::flagset::FlagSet;
 use futures::{SinkExt, StreamExt};
-use libkrime::asn1::kerberos_flags::KerberosFlags;
-use libkrime::asn1::ticket_flags::TicketFlags;
 use libkrime::proto::{
-    AuthenticationRequest, DerivedKey, KdcPrimaryKey, KerberosReply, KerberosRequest, Name,
-    TicketGrantRequestUnverified,
+    AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
+    KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TicketGrantTimeBound,
+    TicketRenewTimeBound,
 };
 use libkrime::KdcTcpCodec;
 use serde::Deserialize;
-use std::cmp;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -22,7 +19,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, instrument, trace};
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(level = "info", skip_all)]
 async fn process_authentication(
     auth_req: AuthenticationRequest,
     server_state: &ServerState,
@@ -115,175 +112,20 @@ async fn process_authentication(
         trace!("PREAUTH SUCCESS");
     }
 
-    let mut tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
-
-    /*
-     * auth_time
-     *
-     * This field in the ticket indicates the time of initial authentication
-     * for the named principal. It is the time of issue for the original ticket
-     * on which this ticket is based. It is included in the ticket to
-     * provide additional information to the end service, and to provide
-     * the necessary information for implementation of a "hot list"
-     * service at the KDC. An end service that is particularly paranoid
-     * could refuse to accept tickets for which the initial
-     * authentication occurred "too far" in the past.  This field is also
-     * returned as part of the response from the KDC.  When it is
-     * returned as part of the response to initial authentication
-     * (KRB_AS_REP), this is the current time on the Kerberos server.  It
-     * is NOT recommended that this time value be used to adjust the
-     * workstation's clock, as the workstation cannot reliably determine
-     * that such a KRB_AS_REP actually came from the proper KDC in a
-     * timely manner.
-     */
-    let tkt_auth_time = stime;
-
-    /*
-     * start_time
-     *
-     * This field in the ticket specifies the time after which the ticket
-     * is valid. Together with endtime, this field specifies the life of
-     * the ticket. If the starttime field is absent from the ticket,
-     * then the authtime field SHOULD be used in its place to determine
-     * the life of the ticket.
-     *
-     * When building the AS-REP:
-     * If the requested starttime is absent (from field in the AS-REQ),
-     * indicates a time in the past,
-     * or is within the window of acceptable clock skew for the KDC and the
-     * POSTDATE option has not been specified, then the starttime of the
-     * ticket is set to the authentication server's current time.
-     *
-     * If it indicates a time in the future beyond the acceptable clock skew, but
-     * the POSTDATED option has not been specified, then the error
-     * KDC_ERR_CANNOT_POSTDATE is returned.  Otherwise the requested
-     * starttime is checked against the policy of the local realm (the
-     * administrator might decide to prohibit certain types or ranges of
-     * postdated tickets), and if the ticket's starttime is acceptable, it
-     * is set as requested, and the INVALID flag is set in the new ticket.
-     * The postdated ticket MUST be validated before use by presenting it to
-     * the KDC after the starttime has been reached.
-     */
-    let tkt_start_time = auth_req.from.map_or(Ok(tkt_auth_time), |from| {
-        match tkt_auth_time.duration_since(from) {
-            Ok(_) => {
-                // From is in the past
-                Ok(tkt_auth_time)
-            }
-            Err(diff) => {
-                // From is in the future
-                if diff.duration() > server_state.allowed_clock_skew {
-                    // Beyond clock skew and we refuse to post date
-                    return Err(KerberosReply::error_cannot_postdate(
-                        auth_req.service_name.clone(),
-                        stime,
-                    ));
-                }
-                Ok(tkt_auth_time)
-            }
+    // This function will perform safe calculations of the time bounds.
+    let time_bounds = match AuthenticationTimeBound::from_as_req(
+        stime,
+        server_state.allowed_clock_skew,
+        server_state.ticket_min_lifetime,
+        server_state.ticket_granting_ticket_lifetime,
+        server_state.ticket_granting_ticket_lifetime,
+        server_state.ticket_max_renew_time,
+        &auth_req,
+    ) {
+        Ok(time_bounds) => time_bounds,
+        Err(time_bound_error) => {
+            return Err(time_bound_error.to_kerberos_reply(&auth_req.service_name, stime))
         }
-    })?;
-
-    /*
-     * end_time
-     *
-     * In a ticket, this field contains the time after which the ticket will not be
-     * honored (its expiration time).  Note that individual services MAY
-     * place their own limits on the life of a ticket and MAY reject
-     * tickets which have not yet expired.  As such, this is really an
-     * upper bound on the expiration time for the ticket.
-     *
-     * In the AS-REQ, this field contains the expiration date requested by the client in
-     * a ticket request.  It is not optional, but if the requested
-     * endtime is "19700101000000Z", the requested ticket is to have the
-     * maximum endtime permitted according to KDC policy.  Implementation
-     * note: This special timestamp corresponds to a UNIX time_t value of
-     * zero on most systems.
-     *
-     * When building the AS-REP:
-     * The expiration time of the ticket will be set to the earlier of the
-     * requested endtime and a time determined by local policy, possibly by
-     * using realm- or principal-specific factors.  For example, the
-     * expiration time MAY be set to the earliest of the following:
-     * - The expiration time (endtime) requested in the KRB_AS_REQ message.
-     * - The ticket's starttime plus the maximum allowable lifetime
-     *   associated with the client principal from the authentication
-     *   server's database.
-     * - The ticket's starttime plus the maximum allowable lifetime
-     *   associated with the server principal.
-     * - The ticket's starttime plus the maximum lifetime set by the policy
-     *   of the local realm.
-     *
-     * If the requested expiration time minus the starttime (as determined
-     * above) is less than a site-determined minimum lifetime, an error
-     * message with code KDC_ERR_NEVER_VALID is returned.  If the requested
-     * expiration time for the ticket exceeds what was determined as above,
-     * and if the 'RENEWABLE-OK' option was requested, then the 'RENEWABLE'
-     * flag is set in the new ticket, and the renew-till value is set as if
-     * the 'RENEWABLE' option were requested (the field and option names are
-     * described fully in Section 5.4.1).
-     */
-    // TODO hardcoded lifetime, define KDC policy for default ticket lifetime
-    let tkt_end_time = if auth_req.until == SystemTime::UNIX_EPOCH {
-        tkt_start_time + server_state.ticket_lifetime
-    } else {
-        cmp::min(
-            auth_req.until,
-            tkt_start_time + server_state.ticket_lifetime,
-        )
-    };
-
-    let tkt_duration = tkt_end_time
-        .duration_since(tkt_start_time)
-        .map_err(|_| KerberosReply::error_never_valid(auth_req.service_name.clone(), stime))?;
-
-    if tkt_duration < server_state.ticket_min_lifetime {
-        return Err(KerberosReply::error_never_valid(
-            auth_req.service_name.clone(),
-            stime,
-        ));
-    }
-
-    /*
-     * renew-till
-     *
-     * This field is the requested renew-till time sent from a client to
-     * the KDC in a ticket request. It is optional.
-     *
-     * In a ticket, this field is only present in tickets that have the RENEWABLE flag
-     * set in the flags field. It indicates the maximum endtime that may
-     * be included in a renewal. It can be thought of as the absolute
-     * expiration time for the ticket, including all renewals.
-     *
-     * When building the AS-REP:
-     * If the RENEWABLE option has been requested or if the RENEWABLE-OK
-     * option has been set and a renewable ticket is to be issued, then the
-     * renew-till field MAY be set to the earliest of:
-     *
-     * - Its requested value.
-     * - The starttime of the ticket plus the minimum of the two maximum
-     *   renewable lifetimes associated with the principals' database
-     *   entries.
-     * - The starttime of the ticket plus the maximum renewable lifetime
-     *   set by the policy of the local realm.
-     */
-    let tkt_renew_until = if auth_req.kdc_options.contains(KerberosFlags::RenewableOk)
-        || auth_req.kdc_options.contains(KerberosFlags::Renewable)
-    {
-        tkt_flags |= TicketFlags::Renewable;
-        // TODO hardcoded lifetime, create a kdc policy for default renew time
-        auth_req.renew.map_or(
-            Some(tkt_start_time + server_state.ticket_max_renew_time),
-            |t| {
-                Some(cmp::min(
-                    t,
-                    tkt_start_time + server_state.ticket_max_renew_time,
-                ))
-            },
-        )
-    } else {
-        tkt_flags.retain(|f| f != TicketFlags::Renewable);
-        None
     };
 
     /*
@@ -295,17 +137,14 @@ async fn process_authentication(
      */
 
     // We should not bother with forwarded/proxiable until there is a genuine
-    // need for them.
+    // need for them. If anything we should never add them as these are insecure
+    // options.
 
     let builder = KerberosReply::authentication_builder(
         auth_req.client_name,
         Name::service_krbtgt(server_state.realm.as_str()),
-        tkt_auth_time,
-        tkt_start_time,
-        tkt_end_time,
-        tkt_renew_until,
+        time_bounds,
         auth_req.nonce,
-        tkt_flags,
     );
 
     builder
@@ -316,13 +155,11 @@ async fn process_authentication(
         })
 }
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(level = "info", skip_all)]
 async fn process_ticket_grant(
     tgs_req: TicketGrantRequestUnverified,
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
-    let stime = SystemTime::now();
-
     let tgs_req_valid = tgs_req
         .validate(&server_state.primary_key, &server_state.realm)
         .unwrap();
@@ -333,80 +170,69 @@ async fn process_ticket_grant(
 
     trace!(?service_name);
 
+    if service_name.is_service_krbtgt(server_state.realm.as_str()) {
+        // This is a renewal request for the users TGT
+        return process_ticket_renewal(tgs_req_valid, server_state).await;
+    }
+
+    let stime = SystemTime::now();
+
     // Is the service in our db?
     let Some(service_record) = server_state.principals.get(&service_name) else {
         error!(?service_name, "Unable to find service name");
         return Err(KerberosReply::error_service_name(service_name, stime));
     };
 
-    let client_tgt = tgs_req_valid.ticket_granting_ticket();
+    // IMPORTANT - ticket grants aren't and can't be renewed.
+    // https://k5wiki.kerberos.org/wiki/TGS_Requests
+    // """
+    // For the purposes of this article, a TGS request is considered "normal" if it:
+    // * does not have any of the forwarded, proxy, renew, validate, enc-tkt-in-skey, or cname-in-addl-tkt options
+    // """
 
-    let start_time = if let Some(requested_start_time) = tgs_req_valid.requested_start_time() {
-        if requested_start_time < client_tgt.start_time() {
-            todo!();
-        }
-
-        if requested_start_time > client_tgt.end_time() {
-            todo!();
-        }
-
-        // It's within valid bounds, lets go.
-
-        *requested_start_time
-    } else {
-        // Start from *now*.
-        stime
-    };
-
-    let requested_end_time = tgs_req_valid.requested_end_time();
-    // Can't be past the tgt end.
-    if requested_end_time > client_tgt.end_time() {
-        todo!();
-    }
-
-    // Some clients send a 0 for the requested end - fill it in with the tgt end time instead.
-    let end_time = if *requested_end_time == SystemTime::UNIX_EPOCH {
-        // It's 0, just return our tgt end time instead.
-        *client_tgt.end_time()
-    } else if requested_end_time < &start_time {
-        tracing::warn!(?requested_end_time, ?start_time);
-        // Mask with the tgt end.
-        *client_tgt.end_time()
-    } else if requested_end_time > client_tgt.end_time() {
-        // Clamp to tgt end time
-        *client_tgt.end_time()
-    } else {
-        *requested_end_time
-    };
-
-    let renew_until = match (
-        tgs_req_valid.requested_renew_until(),
-        client_tgt.renew_until(),
+    let time_bounds = match TicketGrantTimeBound::from_tgs_req(
+        stime,
+        server_state.allowed_clock_skew,
+        server_state.service_granting_ticket_lifetime,
+        &tgs_req_valid,
     ) {
-        (Some(requested_renew_until), Some(ticket_renew_until)) => {
-            if requested_renew_until > ticket_renew_until {
-                todo!();
-            }
-
-            Some(*requested_renew_until)
+        Ok(time_bounds) => time_bounds,
+        Err(time_bound_error) => {
+            return Err(time_bound_error.to_kerberos_reply(&service_name, stime))
         }
-        (Some(_), None) => {
-            todo!();
-        }
-        (_, _) => None,
     };
 
-    let tkt_flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
-
-    let builder = KerberosReply::ticket_grant_builder(
-        tgs_req_valid,
-        tkt_flags,
-        start_time,
-        end_time,
-        renew_until,
-    );
+    let builder = KerberosReply::ticket_grant_builder(tgs_req_valid, time_bounds);
 
     builder.build(&service_record.base_key).map_err(|kdc_err| {
+        error!(?kdc_err);
+        KerberosReply::error_internal(service_name, stime)
+    })
+}
+
+#[instrument(level = "info", skip_all)]
+async fn process_ticket_renewal(
+    tgs_req_valid: TicketGrantRequest,
+    server_state: &ServerState,
+) -> Result<KerberosReply, KerberosReply> {
+    let stime = SystemTime::now();
+    let service_name = tgs_req_valid.service_name().clone();
+
+    let time_bounds = match TicketRenewTimeBound::from_tgs_req(
+        stime,
+        server_state.allowed_clock_skew,
+        server_state.ticket_granting_ticket_lifetime,
+        &tgs_req_valid,
+    ) {
+        Ok(time_bounds) => time_bounds,
+        Err(time_bound_error) => {
+            return Err(time_bound_error.to_kerberos_reply(&service_name, stime))
+        }
+    };
+
+    let builder = KerberosReply::ticket_renew_builder(tgs_req_valid, time_bounds);
+
+    builder.build(&server_state.primary_key).map_err(|kdc_err| {
         error!(?kdc_err);
         KerberosReply::error_internal(service_name, stime)
     })
@@ -552,11 +378,12 @@ impl From<Config> for ServerState {
 
         let allowed_clock_skew = Duration::from_secs(300);
 
-        let ticket_lifetime = Duration::from_secs(3600 * 4);
+        let ticket_granting_ticket_lifetime = Duration::from_secs(1800);
+        let service_granting_ticket_lifetime = Duration::from_secs(300);
 
         let ticket_min_lifetime = Duration::from_secs(60);
 
-        let ticket_max_renew_time = Duration::from_secs(86400);
+        let ticket_max_renew_time = Some(Duration::from_secs(86400 * 7));
 
         ServerState {
             realm,
@@ -565,7 +392,9 @@ impl From<Config> for ServerState {
             allowed_clock_skew,
             ticket_min_lifetime,
             ticket_max_renew_time,
-            ticket_lifetime,
+
+            ticket_granting_ticket_lifetime,
+            service_granting_ticket_lifetime,
         }
     }
 }
@@ -579,13 +408,14 @@ struct PrincipalRecord {
 #[derive(Debug)]
 struct ServerState {
     realm: String,
-    // address: SocketAddr,
     primary_key: KdcPrimaryKey,
     allowed_clock_skew: Duration,
 
-    ticket_lifetime: Duration,
+    ticket_granting_ticket_lifetime: Duration,
+    service_granting_ticket_lifetime: Duration,
+
     ticket_min_lifetime: Duration,
-    ticket_max_renew_time: Duration,
+    ticket_max_renew_time: Option<Duration>,
 
     principals: BTreeMap<Name, PrincipalRecord>,
 }

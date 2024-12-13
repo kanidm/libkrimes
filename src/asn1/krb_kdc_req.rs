@@ -127,7 +127,7 @@ mod tests {
         from: Option<KerberosTime>,
         till: KerberosTime,
         rtime: Option<KerberosTime>,
-        nonce: u32,
+        nonce: i32,
         etype: Vec<i32>,
         addresses: Option<Vec<(i32, OctetString)>>,
     }

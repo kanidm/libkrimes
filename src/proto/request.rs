@@ -27,7 +27,7 @@ use tracing::trace;
 
 use super::{
     DerivedKey, EncTicket, EncryptedData, KdcPrimaryKey, Name, Preauth, PreauthData, SessionKey,
-    Ticket,
+    Ticket, TicketFlags,
 };
 
 #[derive(Debug)]
@@ -38,7 +38,7 @@ pub enum KerberosRequest {
 
 #[derive(Debug)]
 pub struct AuthenticationRequest {
-    pub nonce: u32,
+    pub nonce: i32,
     pub client_name: Name,
     pub service_name: Name,
     pub from: Option<SystemTime>,
@@ -58,7 +58,7 @@ pub struct TicketGrantRequestUnverified {
 
 #[derive(Debug)]
 pub struct TicketGrantRequest {
-    pub(crate) nonce: u32,
+    pub(crate) nonce: i32,
     pub(crate) service_name: Name,
     pub(crate) etypes: Vec<EncryptionType>,
     pub(crate) sub_session_key: Option<SessionKey>,
@@ -202,8 +202,10 @@ impl KerberosAuthenticationBuilder {
 
         // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
         // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
-        let nonce: u32 = thread_rng().gen();
-        let nonce = nonce & 0x7fff_ffff;
+        // Heimdal for whatever reason will happily send negative values, so no idea
+        // how they get away with it when we don't ....
+        let nonce: i32 = thread_rng().gen();
+        let nonce = nonce.abs();
 
         let preauth = preauth.unwrap_or_default();
 
@@ -269,8 +271,10 @@ impl TicketGrantRequestBuilder {
 
         // BUG IN MIT KRB5 - If the value is greater than i32 max you get:
         // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
-        let nonce: u32 = thread_rng().gen();
-        let nonce = nonce & 0x7fff_ffff;
+        // Heimdal for whatever reason will happily send negative values, so no idea
+        // how they get away with it when we don't ....
+        let nonce: i32 = thread_rng().gen();
+        let nonce = nonce.abs();
 
         // So far we don't use preauth-here
         // let preauth = preauth.unwrap_or_default();
@@ -409,6 +413,7 @@ impl TicketGrantRequestUnverified {
         let ap_req_ticket_service_name = Name::try_from(ap_req_ticket.sname)?;
 
         if !ap_req_ticket_service_name.is_service_krbtgt(realm) {
+            tracing::error!(?ap_req_ticket_service_name, "TgsTicketIsNotTgt");
             return Err(KrbError::TgsTicketIsNotTgt);
         }
 
@@ -469,6 +474,8 @@ impl TicketGrantRequestUnverified {
             let client_name = Name::try_from((enc_ticket_part.cname, enc_ticket_part.crealm))?;
             let auth_time = enc_ticket_part.auth_time.to_system_time();
 
+            let flags = enc_ticket_part.flags;
+
             let start_time = enc_ticket_part
                 .start_time
                 .map(|t| t.to_system_time())
@@ -478,6 +485,7 @@ impl TicketGrantRequestUnverified {
             let renew_until = enc_ticket_part.renew_till.map(|t| t.to_system_time());
 
             Ticket {
+                flags,
                 client_name,
                 session_key,
                 start_time,
@@ -532,26 +540,30 @@ impl TicketGrantRequest {
 
     /// This is the time the client requested the ticket grant to start at. This value
     /// MUST be validated within the bounds of the ticket validity.
-    pub fn requested_start_time(&self) -> Option<&SystemTime> {
-        self.from.as_ref()
+    pub fn requested_start_time(&self) -> Option<SystemTime> {
+        self.from
     }
 
     /// This is the time the client requested the ticket grant to end at. This value
     /// MUST be validated within the bounds of the ticket validity.
-    pub fn requested_end_time(&self) -> &SystemTime {
-        &self.until
+    pub fn requested_end_time(&self) -> SystemTime {
+        self.until
     }
 
     /// This is the time the client requested the ticket grant to be renewable until.
     /// This value MUST be validated within the bounds of the tickets renewable validity.
-    pub fn requested_renew_until(&self) -> Option<&SystemTime> {
-        self.renew.as_ref()
+    pub fn requested_renew_until(&self) -> Option<SystemTime> {
+        self.renew
     }
 
     /// The cryptographically verified ticket granting ticket that this KDC or a trusted
     /// KDC issued to the client.
     pub fn ticket_granting_ticket(&self) -> &Ticket {
         &self.ticket
+    }
+
+    pub fn ticket_flags(&self) -> &FlagSet<TicketFlags> {
+        &self.ticket.flags
     }
 
     pub fn etypes(&self) -> &[EncryptionType] {
