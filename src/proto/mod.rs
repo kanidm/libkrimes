@@ -8,7 +8,7 @@ pub use self::request::{
     AuthenticationRequest, KerberosRequest, TicketGrantRequest, TicketGrantRequestUnverified,
 };
 
-pub use self::time::{AuthenticationTimeBound, TimeBoundError};
+pub use self::time::{AuthenticationTimeBound, TicketGrantTimeBound, TimeBoundError};
 
 use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;
@@ -884,16 +884,20 @@ impl TryInto<Asn1Ticket> for EncTicket {
 }
 
 impl Ticket {
-    pub fn start_time(&self) -> &SystemTime {
-        &self.start_time
+    pub fn start_time(&self) -> SystemTime {
+        self.start_time
     }
 
-    pub fn end_time(&self) -> &SystemTime {
-        &self.end_time
+    pub fn end_time(&self) -> SystemTime {
+        self.end_time
     }
 
-    pub fn renew_until(&self) -> Option<&SystemTime> {
-        self.renew_until.as_ref()
+    pub fn auth_time(&self) -> SystemTime {
+        self.auth_time
+    }
+
+    pub fn renew_until(&self) -> Option<SystemTime> {
+        self.renew_until
     }
 
     pub fn flags(&self) -> &FlagSet<TicketFlags> {
