@@ -346,7 +346,7 @@ async fn process_ticket_grant(
     trace!(?service_name);
 
     if service_name.is_service_krbtgt(server_state.realm.as_str()) {
-        // This is a renewal request.
+        // This is a renewal request for the users TGT
         return process_ticket_renewal(tgs_req_valid, server_state).await;
     }
 
@@ -422,7 +422,6 @@ async fn process_ticket_grant(
         tkt_flags,
         start_time,
         end_time,
-        // renew_until,
     );
 
     builder.build(&service_record.base_key).map_err(|kdc_err| {
@@ -676,7 +675,6 @@ struct ServerState {
     primary_key: KdcPrimaryKey,
     allowed_clock_skew: Duration,
 
-    //
     ticket_granting_ticket_lifetime: Duration,
     service_granting_ticket_lifetime: Duration,
 
