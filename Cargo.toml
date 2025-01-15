@@ -41,6 +41,10 @@ toml = "^0.5.11"
 
 serde = { version = "^1.0.204", features = ["derive"] }
 assert_hex = "0.4.1"
+users = "0.11.0"
+keyutils = "0.4.0"
+errno = "0.3.9"
+libc = "0.2.162"
 
 [dev-dependencies]
 base64 = "0.22.0"

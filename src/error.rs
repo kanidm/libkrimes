@@ -43,10 +43,12 @@ pub enum KrbError {
     NameNotServiceHost,
     NameNumberOfComponents,
 
+    CredentialCacheCannotCreate(String),
     UnsupportedCredentialCacheType,
     UnsupportedKeytabType,
     IoError(std::io::Error),
     BinRWError(binrw::Error),
+    KeyutilsError(errno::Errno),
 
     InvalidMessageType,
     InvalidMessageDirection,

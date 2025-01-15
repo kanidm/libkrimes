@@ -1,0 +1,29 @@
+From 54dbeb55387dade2ec3a4c848793c2e2b4d17474 Mon Sep 17 00:00:00 2001
+From: Samuel Cabrero <scabrero@suse.de>
+Date: Fri, 5 Jul 2024 18:23:54 +0200
+Subject: [PATCH] Fix debug build
+
+---
+ src/appl/simple/client/sim_client.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/appl/simple/client/sim_client.c b/src/appl/simple/client/sim_client.c
+index 6f42833756..dc87a867ab 100644
+--- a/src/appl/simple/client/sim_client.c
++++ b/src/appl/simple/client/sim_client.c
+@@ -43,6 +43,12 @@
+ 
+ #include "simple.h"
+ 
++#ifdef DEBUG
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#endif
++
+ /* for old Unixes and friends ... */
+ #ifndef MAXHOSTNAMELEN
+ #define MAXHOSTNAMELEN 64
+-- 
+2.45.2
+
