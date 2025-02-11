@@ -1,23 +1,35 @@
 # LibKrimes
 
 Kerberos is an authentication protocol designed in 1993 before TLS was ubiquitious. It has largely
-fallen out of favour due to it's inherent security risks and complexity but a number of ecosystems
+fallen out of favour due to it's inherent security risks and complexity, but a number of ecosystems
 have embedded Kerberos deeply in their operation making it sometimes, unavoidable.
 
 This library aims to make a secure-as-possible implementation of a kerberos client and distribution
 centre that can be included into other Rust applications.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kanidm/libkrimes/master/static/IMG_1775.JPG" width="80%" height="auto" />
+  <img src="https://raw.githubusercontent.com/kanidm/libkrimes/master/static/IMG_8786.JPG" width="80%" height="auto" />
 </p>
 
 ## Cryptography Warning
 
-The current 'state of the art' in Kerberos Cryptography is AES-256-CTS-HMAC-SHA1-96. These are to
-put it mildly, not the primitives that any other reasonable modern ecosystem would choose.
+As Kerberos chooses the *strongest* cryptographic method that is shared between the client and KDC,
+then a malicious client is able to choose the *weakest* option from that
+selection and attack it. This means that even if you offered password authenticated key exchange (PAKE)
+methods, the existence of RC4-HMAC in your KDC completely undermines this. Because of this, we must
+judge Kerberos implementations by the minimums they offer, and the maximums they can consume.
 
-While [RFC8009](https://www.rfc-editor.org/rfc/rfc8009) does exist, it should be noted that no KDC
-we have tested with supports it in their latest versions (last tested June 2024).
+Navigating this complexity, the current 'state of the art' minimum in Kerberos between operating
+systems is AES-256-CTS-HMAC-SHA1-96. This is not the primitives that any other reasonable modern
+ecosystem would choose.
+
+While stronger methods like [RFC8009](https://www.rfc-editor.org/rfc/rfc8009) do exist, it should be
+noted that no KDC we have tested with supports it in their latest versions (last tested June 2024)
+by default, and even if it *was* enabled, AES-256-CTS-HMAC-SHA1-96 is still the global default
+minimum that all clients and servers need to offer and support.
+
+Because of this, we need to attempt to make AES-256-CTS-HMAC-SHA1-96 reasonably secure. There are a
+number of ways libkrimes will achieve this, but a major one is password length.
 
 Due to how passwords interact with these primitives in Kerberos, it is *critical* that passwords
 are at least 12 characters or more to remain secure against possible bruteforce attacks. We may
