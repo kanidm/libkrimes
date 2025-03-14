@@ -6,6 +6,7 @@ pub enum KrbError {
     InsufficientData,
     PlaintextEmpty,
     CtsCiphertextInvalid,
+    InsecurePassphrase,
     UnsupportedEncryption,
     MissingPaData,
     MissingServiceNameWithRealm,
@@ -24,6 +25,7 @@ pub enum KrbError {
     DerEncodeApReq(der::Error),
     DerEncodeKdcReqBody(der::Error),
     DerError(der::Error),
+    DerEncodeKerberosTime,
 
     PreauthUnsupported,
     PreauthMissingEtypeInfo2,

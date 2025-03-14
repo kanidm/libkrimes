@@ -32,7 +32,7 @@ Because of this, we need to attempt to make AES-256-CTS-HMAC-SHA1-96 reasonably 
 number of ways libkrimes will achieve this, but a major one is password length.
 
 Due to how passwords interact with these primitives in Kerberos, it is *critical* that passwords
-are at least 12 characters or more to remain secure against possible bruteforce attacks. We may
+are at least 16 characters or more to remain secure against possible bruteforce attacks. We may
 change this advice in future.
 
 ## Intentional Design Limits

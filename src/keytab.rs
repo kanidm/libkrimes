@@ -233,7 +233,7 @@ impl From<Name> for Principal {
 }
 
 impl Keytab {
-    pub fn write<W: Write + Seek>(self: &Self, writer: &mut W) -> Result<(), KrbError> {
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> Result<(), KrbError> {
         match self {
             Keytab::File(_) => {
                 let fk: FileKeytab = self.into();
