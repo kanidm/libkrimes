@@ -11,6 +11,9 @@ license = "MPL-2.0"
 homepage = "https://github.com/Firstyear/libkrimes"
 repository = "https://github.com/Firstyear/libkrimes"
 
+[features]
+keyring = ["dep:libc", "dep:keyutils"]
+
 [dependencies]
 bytes = "^1.1.0"
 clap = { version = "4.1", features = ["derive", "env"] }
@@ -42,9 +45,10 @@ toml = "^0.5.11"
 serde = { version = "^1.0.204", features = ["derive"] }
 assert_hex = "0.4.1"
 users = "0.11.0"
-keyutils = "0.4.0"
 errno = "0.3.9"
-libc = "0.2.162"
+
+libc = { version = "0.2.162", optional = true }
+keyutils = { version = "0.4.0", optional = true }
 
 [dev-dependencies]
 base64 = "0.22.0"
