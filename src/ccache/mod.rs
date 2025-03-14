@@ -1,4 +1,6 @@
 mod cc_file;
+
+#[cfg(feature = "keyring")]
 mod cc_keyring;
 
 use std::env;
@@ -331,7 +333,10 @@ pub fn store(
             clock_skew,
             ccache_name.as_str(),
         );
-    } else if ccache_name.starts_with("KEYRING:") {
+    }
+
+    #[cfg(feature = "keyring")]
+    if ccache_name.starts_with("KEYRING:") {
         return cc_keyring::store(
             name,
             ticket,
@@ -348,9 +353,13 @@ pub fn destroy(ccache_name: Option<&str>) -> Result<(), KrbError> {
     let ccache_name = parse_ccache_name(ccache_name);
     if ccache_name.starts_with("FILE:") {
         return cc_file::destroy(ccache_name.as_str());
-    } else if ccache_name.starts_with("KEYRING:") {
+    }
+
+    #[cfg(feature = "keyring")]
+    if ccache_name.starts_with("KEYRING:") {
         return cc_keyring::destroy(ccache_name.as_str());
     }
+
     Err(KrbError::UnsupportedCredentialCacheType)
 }
 
