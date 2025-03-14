@@ -276,19 +276,15 @@ fn as_req_renew_until(
             // Requested a renew until but no flags!
             Err(TimeBoundError::FlagsInconsistent)
         }
-        (None, _, false) => {
-            // No renewal requested
-            Ok(None)
-        }
-        (_, None, true) => {
+        (_, None, _) => {
             // Requested a renew, but it's denied
             Err(TimeBoundError::RenewalNotAllowed)
         }
-        (None, Some(maximum_renew_lifetime), true) => {
+        (None, Some(maximum_renew_lifetime), _) => {
             // Easy, just default to our renew lifetime.
             Ok(Some(start_time + maximum_renew_lifetime))
         }
-        (Some(requested_renew_until), Some(maximum_renew_lifetime), true) => {
+        (Some(requested_renew_until), Some(maximum_renew_lifetime), _) => {
             // This is the hard path, we have to validate things.
 
             if requested_renew_until < end_time {
@@ -327,6 +323,7 @@ fn is_within_allowed_skew(
 pub struct TicketGrantTimeBound {
     start_time: SystemTime,
     end_time: SystemTime,
+    renew_until: Option<SystemTime>,
 }
 
 impl TicketGrantTimeBound {
@@ -336,6 +333,10 @@ impl TicketGrantTimeBound {
 
     pub fn end_time(&self) -> SystemTime {
         self.end_time
+    }
+
+    pub fn renew_until(&self) -> Option<SystemTime> {
+        self.renew_until
     }
 
     pub fn from_tgs_req(
@@ -371,9 +372,13 @@ impl TicketGrantTimeBound {
             maximum_service_ticket_lifetime,
         )?;
 
+        // Pretty much nothing handles tgs renewals in a sane way, so we have to make this None.
+        let renew_until = None;
+
         Ok(TicketGrantTimeBound {
             start_time,
             end_time,
+            renew_until,
         })
     }
 }

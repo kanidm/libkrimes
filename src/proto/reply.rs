@@ -198,7 +198,6 @@ impl KerberosReply {
             ticket,
         } = ticket_grant_request;
 
-        // Always empty on a TGS
         let flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
 
         // From is what the client requested.
@@ -495,7 +494,7 @@ impl KerberosReplyAuthenticationBuilder {
 }
 
 impl KerberosReplyTicketGrantBuilder {
-    pub fn build(self, service_key: &DerivedKey) -> Result<KerberosReply, KrbError> {
+    pub fn build(mut self, service_key: &DerivedKey) -> Result<KerberosReply, KrbError> {
         let service_session_key = SessionKey::new();
         let service_session_key: KdcEncryptionKey = service_session_key.try_into()?;
 
@@ -506,8 +505,16 @@ impl KerberosReplyTicketGrantBuilder {
         let start_time =
             Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
         let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
-        // TGS replies are never renewable
-        let renew_till = None;
+
+        let renew_till = if let Some(renew_until) = self.time_bounds.renew_until() {
+            self.flags |= TicketFlags::Renewable;
+            Some(
+                KerberosTime::from_system_time(renew_until)
+                    .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+            )
+        } else {
+            None
+        };
 
         // TGS_REP The ciphertext is encrypted with the sub-session key
         // from the authenticator.
@@ -533,6 +540,8 @@ impl KerberosReplyTicketGrantBuilder {
             client_addresses: None,
         };
 
+        // Encrypt this with the original tickets sub_session_key so that they
+        // can decrypt this and get the service_session_key out.
         let enc_part = if let Some(sub_session_key) = self.sub_session_key {
             sub_session_key.encrypt_tgs_rep_part(enc_kdc_rep_part, true)?
         } else {
@@ -571,7 +580,8 @@ impl KerberosReplyTicketGrantBuilder {
         };
 
         // EncTicketPart
-        // Encrypted to the key of the service
+        // Encrypted to the key of the service - this is what the ticket holder
+        // forwards to the service to that it is aware of it's service session key.
         let ticket_inner = EncTicketPart {
             flags: self.flags,
             key: service_session_key,

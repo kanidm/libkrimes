@@ -62,8 +62,13 @@ async fn process_authentication(
         let Some(pre_enc_timestamp) = auth_req.preauth.enc_timestamp() else {
             info!("ENC-TS Preauth not present, returning pre-auth parameters.");
             let parep = KerberosReply::preauth_builder(auth_req.service_name, stime)
+                // This sets the correct number of iterations based on what the principals
+                // key is set to use. We generally bump this value up because the defaults
+                // are woefully inadequate.
                 .set_key_params(&principal_record.base_key)
                 .build();
+
+            trace!(?parep);
 
             // Request pre-auth.
             return Ok(parep);
@@ -177,18 +182,16 @@ async fn process_ticket_grant(
 
     let stime = SystemTime::now();
 
+    // TODO!!!!!
+    // =========
+    // At this point we should also be verifying the requesting principals session
+    // validity.
+
     // Is the service in our db?
     let Some(service_record) = server_state.principals.get(&service_name) else {
         error!(?service_name, "Unable to find service name");
         return Err(KerberosReply::error_service_name(service_name, stime));
     };
-
-    // IMPORTANT - ticket grants aren't and can't be renewed.
-    // https://k5wiki.kerberos.org/wiki/TGS_Requests
-    // """
-    // For the purposes of this article, a TGS request is considered "normal" if it:
-    // * does not have any of the forwarded, proxy, renew, validate, enc-tkt-in-skey, or cname-in-addl-tkt options
-    // """
 
     let time_bounds = match TicketGrantTimeBound::from_tgs_req(
         stime,
@@ -378,12 +381,28 @@ impl From<Config> for ServerState {
 
         let allowed_clock_skew = Duration::from_secs(300);
 
-        let ticket_granting_ticket_lifetime = Duration::from_secs(1800);
-        let service_granting_ticket_lifetime = Duration::from_secs(300);
-
+        // Short tickets are good, but not too short.
         let ticket_min_lifetime = Duration::from_secs(60);
-
+        // Should be short-ish to promote frequent renewals.
+        let ticket_granting_ticket_lifetime = Duration::from_secs(900);
+        // You can renew for up to a week. We may change this ....
         let ticket_max_renew_time = Some(Duration::from_secs(86400 * 7));
+
+        // This needs to be *long* because TGS can't be renewed, and most
+        // applications absolutely *lose their mind* when this expires rapidly.
+        //
+        // For example, finder on macos with SMB just disconnects you soon after this
+        // expires, doesn't try to get a new TGS and open a new session to continue
+        // the connection or make a new connection.
+        //
+        // The only way to make this work is for the TGS to be looooooooooongggggggg.
+        // I'm really not sure what value should be because if it's too long then that
+        // allows an attacker a long-term access to the service. If it's too short,
+        // then things break.
+        //
+        // Likely we need to ensure that there is a way to kill sessions on the SMB side
+        // when we expire an account. Thought needed to what this value should be ...
+        let service_granting_ticket_lifetime = Duration::from_secs(3600 * 8);
 
         ServerState {
             realm,

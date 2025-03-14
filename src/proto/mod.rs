@@ -7,7 +7,6 @@ pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGr
 pub use self::request::{
     AuthenticationRequest, KerberosRequest, TicketGrantRequest, TicketGrantRequestUnverified,
 };
-
 pub use self::time::{
     AuthenticationTimeBound, TicketGrantTimeBound, TicketRenewTimeBound, TimeBoundError,
 };
@@ -33,25 +32,23 @@ use crate::asn1::{
     ticket_flags::TicketFlags,
     Ia5String, OctetString,
 };
-use crate::constants::{AES_256_KEY_LEN, RFC_PKBDF2_SHA1_ITER};
+use crate::constants::{AES_256_KEY_LEN, PKBDF2_SHA1_ITER, RFC_PKBDF2_SHA1_ITER};
 use crate::crypto::{
     checksum_hmac_sha1_96_aes256, decrypt_aes256_cts_hmac_sha1_96,
     derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
+use crate::KerberosTcpCodec;
 use der::{asn1::Any, flagset::FlagSet, Decode, Encode};
+use futures::SinkExt;
+use futures::StreamExt;
 use rand::{thread_rng, Rng};
-
 use std::cmp::Ordering;
 use std::fmt;
 use std::time::{Duration, SystemTime};
-use tracing::{error, trace};
-
-use crate::KerberosTcpCodec;
-use futures::SinkExt;
-use futures::StreamExt;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
+use tracing::{error, trace};
 
 // Zeroize blocked on https://github.com/RustCrypto/block-ciphers/issues/426
 // use zeroize::Zeroizing;
@@ -82,8 +79,12 @@ impl DerivedKey {
     }
 
     pub fn new_aes256_cts_hmac_sha1_96(passphrase: &str, salt: &str) -> Result<Self, KrbError> {
-        // let iter_count = PKBDF2_SHA1_ITER;
-        let iter_count = RFC_PKBDF2_SHA1_ITER;
+        if passphrase.len() < 16 {
+            // Due to how the cryptography of KRB works, we need to ensure not only that the password
+            // is long, but also that the pkbdf2 rounds is high.
+            return Err(KrbError::InsecurePassphrase);
+        }
+        let iter_count = PKBDF2_SHA1_ITER;
 
         derive_key_aes256_cts_hmac_sha1_96(passphrase.as_bytes(), salt.as_bytes(), iter_count).map(
             |k| DerivedKey::Aes256CtsHmacSha196 {
@@ -1472,5 +1473,13 @@ mod tests {
         let calculated_checksum = calculated_checksum.checksum.as_bytes();
 
         assert_eq_hex!(checksum, calculated_checksum);
+    }
+
+    #[test]
+    fn test_derived_key() {
+        use super::DerivedKey;
+
+        let _ = tracing_subscriber::fmt::try_init();
+        let _ = DerivedKey::new_aes256_cts_hmac_sha1_96("password", "salt").unwrap();
     }
 }
