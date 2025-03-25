@@ -155,13 +155,13 @@ mod tests {
         // we perform checksums in the TGS path.
         let req_body = asreq.req_body.decode_as::<KdcReqBody>().unwrap();
 
-        let ref cname = req_body.cname.as_ref().unwrap();
+        let cname = req_body.cname.as_ref().unwrap();
         assert_eq!(cname.name_type, 1);
         assert_eq!(cname.name_string[0].0.to_string(), tasreq.principal);
 
         assert_eq!(req_body.realm.0.to_string(), tasreq.realm);
 
-        let ref sname = req_body.sname.as_ref().unwrap();
+        let sname = req_body.sname.as_ref().unwrap();
         assert_eq!(sname.name_type, 2);
         assert_eq!(sname.name_string[0].0.to_string(), "krbtgt");
         assert_eq!(sname.name_string[1].0.to_string(), tasreq.realm);

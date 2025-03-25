@@ -103,7 +103,7 @@ struct Record {
     #[bw(if (matches!(rdata, RecordData::Entry { .. })), calc = 0)]
     // This field is always written as 0, the custom rdata writer will seek back to fill it
     rlen: i32,
-    #[br(map_stream = |s| s.take_seek(rlen.abs() as u64), args { version, rlen })]
+    #[br(map_stream = |s| s.take_seek(rlen.unsigned_abs() as u64), args { version, rlen })]
     #[bw(if (matches!(rdata, RecordData::Entry { .. })), write_with = write_rdata)]
     rdata: RecordData,
 }
@@ -237,7 +237,7 @@ impl Keytab {
         match self {
             Keytab::File(_) => {
                 let fk: FileKeytab = self.into();
-                fk.write(writer).map_err(|e| KrbError::BinRWError(e))
+                fk.write(writer).map_err(KrbError::BinRWError)
             }
         }
     }
@@ -278,13 +278,13 @@ mod tests {
             let mut reader = binrw::io::Cursor::new(inner);
             let keytab: FileKeytab = reader
                 .read_type(binrw::Endian::Big)
-                .map_err(|e| KrbError::BinRWError(e))?;
+                .map_err(KrbError::BinRWError)?;
             Ok(keytab)
         }
 
         pub fn load(path: Option<PathBuf>) -> Result<Self, KrbError> {
             let mut f: File = match path {
-                Some(p) => File::open(p).map_err(|e| KrbError::IoError(e)),
+                Some(p) => File::open(p).map_err(KrbError::IoError),
                 None => match env::var("KRB5_KTNAME") {
                     Ok(val) => {
                         if !val.starts_with("FILE:") {
@@ -292,7 +292,7 @@ mod tests {
                         }
                         let p = val.strip_prefix("FILE:").expect("Failed to strip prefix");
                         let p = PathBuf::from(p);
-                        File::open(p).map_err(|e| KrbError::IoError(e))
+                        File::open(p).map_err(KrbError::IoError)
                     }
                     _ => {
                         // default_keytab_name from config file
@@ -301,14 +301,13 @@ mod tests {
                 },
             }?;
             let mut buffer = Vec::new();
-            f.read_to_end(&mut buffer)
-                .map_err(|e| KrbError::IoError(e))?;
+            f.read_to_end(&mut buffer).map_err(KrbError::IoError)?;
             FileKeytab::read(&buffer)
         }
 
-        pub fn store(self: &Self, path: Option<PathBuf>) -> Result<(), KrbError> {
+        pub fn store(&self, path: Option<PathBuf>) -> Result<(), KrbError> {
             let mut f: File = match path {
-                Some(p) => File::create(p).map_err(|e| KrbError::IoError(e)),
+                Some(p) => File::create(p).map_err(KrbError::IoError),
                 None => match env::var("KRB5_KTNAME") {
                     Ok(val) => {
                         if !val.starts_with("FILE:") {
@@ -316,7 +315,7 @@ mod tests {
                         }
                         let p = val.strip_prefix("FILE:").expect("Failed to strip prefix");
                         let p = PathBuf::from(p);
-                        File::create(p).map_err(|e| KrbError::IoError(e))
+                        File::create(p).map_err(KrbError::IoError)
                     }
                     _ => {
                         // default_keytab_name from config file
@@ -324,7 +323,7 @@ mod tests {
                     }
                 },
             }?;
-            self.write(&mut f).map_err(|x| KrbError::BinRWError(x))
+            self.write(&mut f).map_err(KrbError::BinRWError)
         }
     }
 
@@ -363,9 +362,8 @@ mod tests {
 
         let mut holes_len = 0;
         for r in &k.records {
-            match &r.rdata {
-                RecordData::Hole { pad } => holes_len += pad.len() + 4,
-                _ => (),
+            if let RecordData::Hole { pad } = &r.rdata {
+                holes_len += pad.len() + 4
             }
         }
 
@@ -374,7 +372,7 @@ mod tests {
         krime_keytab.write(&mut c).expect("Failed to write");
         let krime_buf = c.into_inner();
 
-        assert_eq!(mit_buf.len() - holes_len as usize, krime_buf.len());
+        assert_eq!(mit_buf.len() - holes_len, krime_buf.len());
 
         let krime_keytab2 = FileKeytab::read(&krime_buf).expect("Failed to read from buffer");
         let FileKeytab::V2(k2) = &krime_keytab2;

@@ -21,14 +21,17 @@ use tracing::{debug, error, info, instrument, trace};
 
 #[instrument(level = "info", skip_all)]
 async fn process_authentication(
-    auth_req: AuthenticationRequest,
+    auth_req: &AuthenticationRequest,
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
     let stime = SystemTime::now();
 
     // Got any etypes?
     if auth_req.etypes.is_empty() {
-        return Err(KerberosReply::error_no_etypes(auth_req.service_name, stime));
+        return Err(KerberosReply::error_no_etypes(
+            auth_req.service_name.clone(),
+            stime,
+        ));
     }
 
     // The service name must be krbtgt for this realm.
@@ -38,7 +41,7 @@ async fn process_authentication(
     {
         error!("Request not for KRBTGT");
         return Err(KerberosReply::error_as_not_krbtgt(
-            auth_req.service_name,
+            auth_req.service_name.clone(),
             stime,
         ));
     }
@@ -49,7 +52,7 @@ async fn process_authentication(
     // the name enum
     let Some(principal_record) = server_state.principals.get(&auth_req.client_name) else {
         return Err(KerberosReply::error_client_username(
-            auth_req.service_name,
+            auth_req.service_name.clone(),
             stime,
         ));
     };
@@ -61,7 +64,7 @@ async fn process_authentication(
     if !principal_record.service {
         let Some(pre_enc_timestamp) = auth_req.preauth.enc_timestamp() else {
             info!("ENC-TS Preauth not present, returning pre-auth parameters.");
-            let parep = KerberosReply::preauth_builder(auth_req.service_name, stime)
+            let parep = KerberosReply::preauth_builder(auth_req.service_name.clone(), stime)
                 // This sets the correct number of iterations based on what the principals
                 // key is set to use. We generally bump this value up because the defaults
                 // are woefully inadequate.
@@ -146,7 +149,7 @@ async fn process_authentication(
     // options.
 
     let builder = KerberosReply::authentication_builder(
-        auth_req.client_name,
+        auth_req.client_name.clone(),
         Name::service_krbtgt(server_state.realm.as_str()),
         time_bounds,
         auth_req.nonce,
@@ -162,7 +165,7 @@ async fn process_authentication(
 
 #[instrument(level = "info", skip_all)]
 async fn process_ticket_grant(
-    tgs_req: TicketGrantRequestUnverified,
+    tgs_req: &TicketGrantRequestUnverified,
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
     let tgs_req_valid = tgs_req
@@ -249,7 +252,7 @@ async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerSt
         trace!(?kdc_req);
         match kdc_req {
             KerberosRequest::AS(auth_req) => {
-                let reply = match process_authentication(auth_req, &server_state).await {
+                let reply = match process_authentication(&auth_req, &server_state).await {
                     Ok(rep) => rep,
                     Err(krb_err) => krb_err,
                 };
@@ -261,7 +264,7 @@ async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerSt
                 continue;
             }
             KerberosRequest::TGS(tgs_req) => {
-                let reply = match process_ticket_grant(tgs_req, &server_state).await {
+                let reply = match process_ticket_grant(&tgs_req, &server_state).await {
                     Ok(rep) => rep,
                     Err(krb_err) => krb_err,
                 };
@@ -472,7 +475,7 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
     let key = principal_record.base_key.clone();
 
     let entry = KeytabEntry {
-        principal: principal_name.into(),
+        principal: principal_name,
         timestamp: 0,
         key,
         kvno: 0,

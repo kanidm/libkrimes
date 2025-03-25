@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn etype_info2_entry_parse() {
         let blob = "3018a003020112a1111b0f41464f524553542e41447573657231";
-        let blob = hex::decode(&blob).expect("Failed to decode sample");
+        let blob = hex::decode(blob).expect("Failed to decode sample");
         let info2 = ETypeInfo2Entry::from_der(&blob).expect("Failed to decode");
         assert_eq!(info2.etype, EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32);
         assert_eq!(info2.salt.unwrap().0.to_string(), "AFOREST.ADuser1");

@@ -106,7 +106,7 @@ impl AuthenticationTimeBound {
             end_time,
             auth_req.renew,
             maximum_renew_lifetime,
-            &auth_req.kdc_options,
+            auth_req.kdc_options,
         )?;
 
         Ok(AuthenticationTimeBound {
@@ -262,7 +262,7 @@ fn as_req_renew_until(
     end_time: SystemTime,
     requested_renew_until: Option<SystemTime>,
     maximum_renew_lifetime: Option<Duration>,
-    kdc_options: &FlagSet<KerberosFlags>,
+    kdc_options: FlagSet<KerberosFlags>,
 ) -> Result<Option<SystemTime>, TimeBoundError> {
     let renewal_flags_set = kdc_options.contains(KerberosFlags::RenewableOk)
         || kdc_options.contains(KerberosFlags::Renewable);

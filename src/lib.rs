@@ -101,7 +101,7 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosRequest, buf: &mut BytesMut) -> io::Result<()> {
-        let req: KrbKdcReq = msg.try_into().unwrap();
+        let req: KrbKdcReq = (&msg).try_into().unwrap();
 
         let der_bytes = req
             .to_der()
@@ -308,7 +308,7 @@ mod tests {
             .await
             .expect("Failed to transmit request");
         let response = krb_stream.next().await;
-        let _cleartext = match response {
+        match response {
             Some(Ok(KerberosReply::TGS(_))) => {}
             _ => unreachable!(),
         };

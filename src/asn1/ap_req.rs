@@ -62,6 +62,7 @@ impl EncodeValue for ApReq {
     fn value_len(&self) -> der::Result<der::Length> {
         self.0.encoded_len()
     }
+
     fn encode_value(&self, encoder: &mut impl der::Writer) -> der::Result<()> {
         self.0.encode(encoder)?;
         Ok(())
@@ -71,6 +72,12 @@ impl EncodeValue for ApReq {
 impl From<ApReq> for ApReqInner {
     fn from(value: ApReq) -> ApReqInner {
         value.0
+    }
+}
+
+impl AsRef<ApReqInner> for ApReq {
+    fn as_ref(&self) -> &ApReqInner {
+        &self.0
     }
 }
 

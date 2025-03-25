@@ -113,12 +113,10 @@ impl DerivedKey {
 
                 let maybe_etype_info2 = pa_data_etype_info2
                     .iter()
-                    .map(|slice| slice.iter())
-                    .flatten()
-                    .filter(|etype_info2| {
+                    .flat_map(|slice| slice.iter())
+                    .find(|etype_info2| {
                         matches!(&etype_info2.etype, EncryptionType::AES256_CTS_HMAC_SHA1_96)
-                    })
-                    .next();
+                    });
 
                 let (salt, iter_count) = if let Some(etype_info2) = maybe_etype_info2 {
                     let salt = etype_info2.salt.as_ref().cloned();
@@ -128,7 +126,7 @@ impl DerivedKey {
                             return Err(KrbError::PreauthInvalidS2KParams);
                         };
                         let mut iter_count = [0u8; 4];
-                        iter_count.copy_from_slice(&s2kparams);
+                        iter_count.copy_from_slice(s2kparams);
 
                         Some(u32::from_be_bytes(iter_count))
                     } else {
@@ -179,7 +177,7 @@ impl DerivedKey {
                         return Err(KrbError::PreauthInvalidS2KParams);
                     };
                     let mut iter_count = [0u8; 4];
-                    iter_count.copy_from_slice(&s2kparams);
+                    iter_count.copy_from_slice(s2kparams);
 
                     u32::from_be_bytes(iter_count)
                 } else {
@@ -233,7 +231,7 @@ impl DerivedKey {
 
         match self {
             DerivedKey::Aes256CtsHmacSha196 { i, s, k } => {
-                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
                 let enc_part = EncryptedData::Aes256CtsHmacSha196 { kvno: None, data };
 
                 let ei = EtypeInfo2 {
@@ -259,7 +257,7 @@ impl DerivedKey {
 
         match self {
             DerivedKey::Aes256CtsHmacSha196 { k, .. } => {
-                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
                 Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
             }
         }
@@ -300,8 +298,7 @@ impl TryInto<KdcEncryptionKey> for SessionKey {
     fn try_into(self) -> Result<KdcEncryptionKey, KrbError> {
         match self {
             SessionKey::Aes256CtsHmacSha196 { k } => {
-                let key_value =
-                    OctetString::new(k).map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                let key_value = OctetString::new(k).map_err(KrbError::DerEncodeOctetString)?;
 
                 Ok(KdcEncryptionKey {
                     key_type: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
@@ -354,7 +351,7 @@ impl SessionKey {
             (
                 EncryptedData::Aes256CtsHmacSha196 { kvno: _, data },
                 SessionKey::Aes256CtsHmacSha196 { k },
-            ) => decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?,
+            ) => decrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?,
         };
 
         Authenticator::from_der(&data).map_err(KrbError::DerDecodeAuthenticator)
@@ -377,7 +374,7 @@ impl SessionKey {
 
         match self {
             SessionKey::Aes256CtsHmacSha196 { k } => {
-                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
                 let enc_part = EncryptedData::Aes256CtsHmacSha196 { kvno, data };
 
                 Ok(enc_part)
@@ -391,7 +388,7 @@ impl SessionKey {
     ) -> Result<EncryptedData, KrbError> {
         let data = authenticator
             .to_der()
-            .map_err(|e| KrbError::DerEncodeAuthenticator(e))?;
+            .map_err(KrbError::DerEncodeAuthenticator)?;
 
         let key_usage = 7;
         match self {
@@ -403,9 +400,7 @@ impl SessionKey {
     }
 
     fn checksum_kdc_req_body(&self, req_body: &Any) -> Result<Checksum, KrbError> {
-        let req_body = req_body
-            .to_der()
-            .map_err(|e| KrbError::DerEncodeKdcReqBody(e))?;
+        let req_body = req_body.to_der().map_err(KrbError::DerEncodeKdcReqBody)?;
         self.checksum(req_body.as_slice(), 6)
     }
 
@@ -466,7 +461,7 @@ impl KdcPrimaryKey {
 
         match self {
             KdcPrimaryKey::Aes256 { k } => {
-                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
                 Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
             }
         }
@@ -487,7 +482,7 @@ impl KdcPrimaryKey {
 
         match self {
             KdcPrimaryKey::Aes256 { k } => {
-                let data = encrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?;
+                let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
                 Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
             }
         }
@@ -749,7 +744,7 @@ impl EncryptedData {
             (
                 EncryptedData::Aes256CtsHmacSha196 { kvno: _, data },
                 DerivedKey::Aes256CtsHmacSha196 { k, .. },
-            ) => decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage),
+            ) => decrypt_aes256_cts_hmac_sha1_96(k, data, key_usage),
         }
     }
 
@@ -761,7 +756,7 @@ impl EncryptedData {
 
         let data = match (self, primary_key) {
             (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, KdcPrimaryKey::Aes256 { k }) => {
-                decrypt_aes256_cts_hmac_sha1_96(&k, &data, key_usage)?
+                decrypt_aes256_cts_hmac_sha1_96(k, data, key_usage)?
             }
         };
 
@@ -1042,9 +1037,9 @@ impl Name {
     }
 }
 
-impl Into<String> for &Name {
-    fn into(self) -> String {
-        match self {
+impl From<&Name> for String {
+    fn from(val: &Name) -> Self {
+        match val {
             Name::Principal { name, realm } => {
                 format!("{}@{}", name, realm)
             }
@@ -1261,12 +1256,20 @@ impl TryFrom<PrincipalName> for Name {
     type Error = KrbError;
 
     fn try_from(princ: PrincipalName) -> Result<Self, Self::Error> {
+        Self::try_from(&princ)
+    }
+}
+
+impl TryFrom<&PrincipalName> for Name {
+    type Error = KrbError;
+
+    fn try_from(princ: &PrincipalName) -> Result<Self, Self::Error> {
         let PrincipalName {
             name_type,
             name_string,
         } = princ;
 
-        let name_type: PrincipalNameType = name_type.try_into().map_err(|err| {
+        let name_type: PrincipalNameType = (*name_type).try_into().map_err(|err| {
             error!(?err, ?name_type, "invalid principal name type");
             KrbError::PrincipalNameInvalidType
         })?;
@@ -1277,7 +1280,7 @@ impl TryFrom<PrincipalName> for Name {
             PrincipalNameType::NtPrincipal => match name_string.len() {
                 2 => {
                     let name = name_string
-                        .get(0)
+                        .first()
                         .ok_or(KrbError::PrincipalNameInvalidComponents)
                         .map(|krb_string| krb_string.to_string())?;
 
@@ -1289,7 +1292,7 @@ impl TryFrom<PrincipalName> for Name {
                 }
                 3 => {
                     let service = name_string
-                        .get(0)
+                        .first()
                         .ok_or(KrbError::PrincipalNameInvalidComponents)
                         .map(|krb_string| krb_string.to_string())?;
 
@@ -1328,7 +1331,7 @@ impl TryFrom<PrincipalName> for Name {
             }
             PrincipalNameType::NtSrvHst => {
                 let service = name_string
-                    .get(0)
+                    .first()
                     .ok_or(KrbError::PrincipalNameInvalidComponents)
                     .map(|krb_string| krb_string.to_string())?;
 
@@ -1347,7 +1350,7 @@ impl TryFrom<PrincipalName> for Name {
                     realm,
                 })
             }
-            _ => todo!(),
+            _ => Err(KrbError::PrincipalNameInvalidType),
         }
     }
 }
@@ -1380,11 +1383,11 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 // MIT KRB will encode services an NtPrinc, so check the length.
                 match name_string.len() {
                     1 => {
-                        let name = name_string.get(0).unwrap().into();
+                        let name = name_string.first().unwrap().into();
                         Ok(Name::Principal { name, realm })
                     }
                     2 => {
-                        let service = name_string.get(0).unwrap().into();
+                        let service = name_string.first().unwrap().into();
                         let host = name_string.get(1).unwrap().into();
                         Ok(Name::SrvPrincipal {
                             service,
@@ -1404,7 +1407,7 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 })
             }
             PrincipalNameType::NtSrvHst => {
-                let service = name_string.get(0).unwrap().into();
+                let service = name_string.first().unwrap().into();
                 let host = name_string.get(1).unwrap().into();
                 Ok(Name::SrvHst {
                     service,
@@ -1412,7 +1415,7 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                     realm,
                 })
             }
-            _ => todo!(),
+            _ => Err(KrbError::PrincipalNameInvalidType),
         }
     }
 }
@@ -1454,7 +1457,7 @@ pub async fn get_tgt(
         .next()
         .await
         .unwrap()
-        .map_err(|e| KrbError::IoError(e))?;
+        .map_err(KrbError::IoError)?;
 
     let (name, ticket, kdc_reply): (Name, EncTicket, KdcReplyPart) = match response {
         KerberosReply::AS(AuthenticationReply {
