@@ -71,7 +71,7 @@ impl<'a> DecodeValue<'a> for TaggedKrbError {
     }
 }
 
-impl<'a> EncodeValue for TaggedKrbError {
+impl EncodeValue for TaggedKrbError {
     fn value_len(&self) -> der::Result<der::Length> {
         KrbError::value_len(&self.0)
     }

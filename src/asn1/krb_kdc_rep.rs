@@ -7,6 +7,10 @@ use der::{Tag, TagNumber, Writer};
 /// TGS-REP         ::= [APPLICATION 13] KDC-REP
 /// ```
 #[derive(Debug, Eq, PartialEq)]
+// For clarity and keeping to the spec, we allow this warning.
+// Normally clippy likes to say "no" because each variant ends
+// with 'rep'.
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum KrbKdcRep {
     AsRep(KdcRep),
     TgsRep(KdcRep),

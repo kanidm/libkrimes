@@ -46,18 +46,19 @@ impl<'a> DecodeValue<'a> for TaggedTicket {
     }
 }
 
-impl<'a> EncodeValue for TaggedTicket {
+impl EncodeValue for TaggedTicket {
     fn value_len(&self) -> der::Result<der::Length> {
         self.0.encoded_len()
     }
+
     fn encode_value(&self, encoder: &mut impl der::Writer) -> der::Result<()> {
         self.0.encode(encoder)?;
         Ok(())
     }
 }
 
-impl Into<Ticket> for TaggedTicket {
-    fn into(self) -> Ticket {
-        self.0
+impl From<TaggedTicket> for Ticket {
+    fn from(value: TaggedTicket) -> Self {
+        value.0
     }
 }
