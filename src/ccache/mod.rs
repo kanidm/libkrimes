@@ -241,7 +241,7 @@ impl TryFrom<&Name> for PrincipalV4 {
                 };
                 Ok(p)
             }
-            _ => todo!(),
+            _ => Err(KrbError::PrincipalNameInvalidType),
         }
     }
 }
@@ -273,7 +273,7 @@ impl TryInto<Name> for PrincipalV4 {
                 let n: Name = Name::SrvInst {
                     service: self
                         .components
-                        .get(0)
+                        .first()
                         .ok_or(KrbError::NameNotPrincipal)
                         .map(|x| String::from_utf8_lossy(x.value.as_slice()).to_string())?,
                     instance: self
@@ -287,7 +287,7 @@ impl TryInto<Name> for PrincipalV4 {
                 };
                 Ok(n)
             }
-            _ => todo!(),
+            _ => Err(KrbError::PrincipalNameInvalidType),
         }
     }
 }

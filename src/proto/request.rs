@@ -32,8 +32,8 @@ use super::{
 
 #[derive(Debug)]
 pub enum KerberosRequest {
-    AS(AuthenticationRequest),
-    TGS(TicketGrantRequestUnverified),
+    AS(Box<AuthenticationRequest>),
+    TGS(Box<TicketGrantRequestUnverified>),
 }
 
 #[derive(Debug)]
@@ -212,7 +212,7 @@ impl KerberosAuthenticationBuilder {
         let mut kdc_options = FlagSet::<KerberosFlags>::new(0b0).expect("Failed to build FlagSet");
         kdc_options |= KerberosFlags::Renewable;
 
-        KerberosRequest::AS(AuthenticationRequest {
+        KerberosRequest::AS(Box::new(AuthenticationRequest {
             nonce,
             client_name,
             service_name,
@@ -222,7 +222,7 @@ impl KerberosAuthenticationBuilder {
             preauth,
             etypes,
             kdc_options,
-        })
+        }))
     }
 }
 
@@ -341,8 +341,8 @@ impl TicketGrantRequestBuilder {
             .encrypt_ap_req_authenticator(&authenticator)?;
         let authenticator: KdcEncryptedData = match authenticator {
             EncryptedData::Aes256CtsHmacSha196 { kvno, data } => {
-                let cipher = OctetString::new(data.clone())
-                    .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                let cipher =
+                    OctetString::new(data.clone()).map_err(KrbError::DerEncodeOctetString)?;
                 KdcEncryptedData {
                     etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
                     kvno,
@@ -362,16 +362,15 @@ impl TicketGrantRequestBuilder {
             ..Default::default()
         };
 
-        Ok(KerberosRequest::TGS(TicketGrantRequestUnverified {
-            preauth,
-            req_body,
-        }))
+        Ok(KerberosRequest::TGS(Box::new(
+            TicketGrantRequestUnverified { preauth, req_body },
+        )))
     }
 }
 
 impl TicketGrantRequestUnverified {
     pub fn validate(
-        self,
+        &self,
         primary_key: &KdcPrimaryKey,
         realm: &str,
     ) -> Result<TicketGrantRequest, KrbError> {
@@ -391,14 +390,14 @@ impl TicketGrantRequestUnverified {
             return Err(KrbError::TgsMissingPaApReq);
         };
 
-        let ap_req: ApReqInner = ap_req.into();
+        let ap_req: &ApReqInner = ap_req.as_ref();
 
         if ap_req.pvno != 5 || ap_req.msg_type != 14 {
             return Err(KrbError::TgsInvalidPaApReq);
         };
 
-        let ap_req_ticket = ap_req.ticket.0;
-        let ap_req_authenticator = EncryptedData::try_from(ap_req.authenticator)?;
+        let ap_req_ticket = &ap_req.ticket.0;
+        let ap_req_authenticator = EncryptedData::try_from(ap_req.authenticator.clone())?;
         // let ap_req_options = ap_req.ap_options;
 
         trace!(?ap_req_ticket);
@@ -410,14 +409,14 @@ impl TicketGrantRequestUnverified {
             return Err(KrbError::TgsNotForRealm);
         }
 
-        let ap_req_ticket_service_name = Name::try_from(ap_req_ticket.sname)?;
+        let ap_req_ticket_service_name = Name::try_from(&ap_req_ticket.sname)?;
 
         if !ap_req_ticket_service_name.is_service_krbtgt(realm) {
             tracing::error!(?ap_req_ticket_service_name, "TgsTicketIsNotTgt");
             return Err(KrbError::TgsTicketIsNotTgt);
         }
 
-        let ap_req_ticket_enc = EncryptedData::try_from(ap_req_ticket.enc_part)?;
+        let ap_req_ticket_enc = EncryptedData::try_from(ap_req_ticket.enc_part.clone())?;
 
         let enc_ticket_part = ap_req_ticket_enc.decrypt_enc_tgt(primary_key)?;
 
@@ -438,7 +437,7 @@ impl TicketGrantRequestUnverified {
             return Err(KrbError::TgsAuthMissingChecksum);
         };
 
-        let checksum = session_key.checksum_kdc_req_body(&req_body)?;
+        let checksum = session_key.checksum_kdc_req_body(req_body)?;
 
         // Validate that the checksum matches what our authenticator contains.
 
@@ -464,7 +463,7 @@ impl TicketGrantRequestUnverified {
 
         let sub_session_key = authenticator
             .subkey
-            .map(|subkey| SessionKey::try_from(subkey))
+            .map(SessionKey::try_from)
             // Invert the Option<Result> to Result<Option>
             .transpose()?;
 
@@ -571,39 +570,46 @@ impl TicketGrantRequest {
     }
 }
 
-impl TryInto<KrbKdcReq> for KerberosRequest {
+impl TryInto<KrbKdcReq> for &KerberosRequest {
     type Error = KrbError;
 
     fn try_into(self) -> Result<KrbKdcReq, Self::Error> {
         match self {
-            KerberosRequest::AS(AuthenticationRequest {
-                nonce,
-                client_name,
-                service_name,
-                from,
-                until,
-                renew,
-                preauth,
-                etypes,
-                kdc_options,
-            }) => {
-                let padata = if preauth.pa_fx_cookie.is_some() || preauth.enc_timestamp.is_some() {
+            KerberosRequest::AS(
+                /*
+                AuthenticationRequest {
+                    nonce,
+                    client_name,
+                    service_name,
+                    from,
+                    until,
+                    renew,
+                    preauth,
+                    etypes,
+                    kdc_options,
+                }
+                */
+                auth_req,
+            ) => {
+                let padata = if auth_req.preauth.pa_fx_cookie.is_some()
+                    || auth_req.preauth.enc_timestamp.is_some()
+                {
                     let mut padata_inner = Vec::with_capacity(2);
 
-                    if let Some(fx_cookie) = &preauth.pa_fx_cookie {
+                    if let Some(fx_cookie) = &auth_req.preauth.pa_fx_cookie {
                         let padata_value = OctetString::new(fx_cookie.clone())
-                            .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                            .map_err(KrbError::DerEncodeOctetString)?;
                         padata_inner.push(PaData {
                             padata_type: PaDataType::PaFxCookie as u32,
                             padata_value,
                         })
                     }
 
-                    if let Some(enc_data) = &preauth.enc_timestamp {
+                    if let Some(enc_data) = &auth_req.preauth.enc_timestamp {
                         let padata_value = match enc_data {
                             EncryptedData::Aes256CtsHmacSha196 { kvno: _, data } => {
                                 let cipher = OctetString::new(data.clone())
-                                    .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                                    .map_err(KrbError::DerEncodeOctetString)?;
                                 KdcEncryptedData {
                                     etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
                                     kvno: None,
@@ -616,7 +622,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                         let padata_value = padata_value
                             .to_der()
                             .and_then(OctetString::new)
-                            .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                            .map_err(KrbError::DerEncodeOctetString)?;
 
                         padata_inner.push(PaData {
                             padata_type: PaDataType::PaEncTimestamp as u32,
@@ -641,11 +647,11 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                     None
                 };
 
-                let (cname, realm) = (&client_name).try_into().unwrap();
-                let sname = (&service_name).try_into().unwrap();
+                let (cname, realm) = (&auth_req.client_name).try_into().unwrap();
+                let sname = (&auth_req.service_name).try_into().unwrap();
 
                 let req_body = KdcReqBody {
-                    kdc_options,
+                    kdc_options: auth_req.kdc_options,
                     cname: Some(cname),
                     // Per the RFC this is the "servers realm" in an AsReq but also the clients. So it's really
                     // not clear if the sname should have the realm or not or if this can be divergent between
@@ -654,18 +660,18 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                     // krb does, because it's probably wrong, but it's the reference impl.
                     realm,
                     sname: Some(sname),
-                    from: from.map(|t| {
+                    from: auth_req.from.map(|t| {
                         KerberosTime::from_system_time(t)
                             .expect("Failed to build KerberosTime from SystemTime")
                     }),
-                    till: KerberosTime::from_system_time(until)
+                    till: KerberosTime::from_system_time(auth_req.until)
                         .expect("Failed to build KerberosTime from SystemTime"),
-                    rtime: renew.map(|t| {
+                    rtime: auth_req.renew.map(|t| {
                         KerberosTime::from_system_time(t)
                             .expect("Failed to build KerberosTime from SystemTime")
                     }),
-                    nonce,
-                    etype: etypes.iter().map(|e| *e as i32).collect(),
+                    nonce: auth_req.nonce,
+                    etype: auth_req.etypes.iter().map(|e| *e as i32).collect(),
                     addresses: None,
                     enc_authorization_data: None,
                     additional_tickets: None,
@@ -680,15 +686,15 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                     req_body,
                 }))
             }
-            KerberosRequest::TGS(TicketGrantRequestUnverified { preauth, req_body }) => {
-                let padata = if preauth.tgs_req.is_some() {
+            KerberosRequest::TGS(unverified_tgs_req) => {
+                let padata = if unverified_tgs_req.preauth.tgs_req.is_some() {
                     let mut padata_inner = Vec::with_capacity(1);
 
-                    if let Some(ap_req) = &preauth.tgs_req {
+                    if let Some(ap_req) = &unverified_tgs_req.preauth.tgs_req {
                         let padata_value = ap_req
                             .to_der()
                             .and_then(OctetString::new)
-                            .map_err(|e| KrbError::DerEncodeApReq(e))?;
+                            .map_err(KrbError::DerEncodeApReq)?;
                         padata_inner.push(PaData {
                             padata_type: PaDataType::PaTgsReq as u32,
                             padata_value,
@@ -704,7 +710,7 @@ impl TryInto<KrbKdcReq> for KerberosRequest {
                     pvno: 5,
                     msg_type: KrbMessageType::KrbTgsReq as u8,
                     padata,
-                    req_body,
+                    req_body: unverified_tgs_req.req_body.clone(),
                 }))
             }
         }
@@ -755,7 +761,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
 
                 let preauth = req
                     .padata
-                    .map(|pavec| Preauth::try_from(pavec))
+                    .map(Preauth::try_from)
                     .transpose()?
                     .unwrap_or_default();
                 trace!(?preauth);
@@ -783,7 +789,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                 // enc_authorization_data,
                 // additional_tickets,
 
-                Ok(KerberosRequest::AS(AuthenticationRequest {
+                Ok(KerberosRequest::AS(Box::new(AuthenticationRequest {
                     nonce,
                     client_name,
                     service_name,
@@ -793,7 +799,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                     etypes,
                     preauth,
                     kdc_options,
-                }))
+                })))
             }
             KrbMessageType::KrbTgsReq => {
                 trace!(?req);
@@ -810,15 +816,17 @@ impl TryFrom<KdcReq> for KerberosRequest {
                 // own bag of complexity ...
                 let preauth = req
                     .padata
-                    .map(|pavec| Preauth::try_from(pavec))
+                    .map(Preauth::try_from)
                     .transpose()?
                     .unwrap_or_default();
                 trace!(?preauth);
 
-                Ok(KerberosRequest::TGS(TicketGrantRequestUnverified {
-                    preauth,
-                    req_body: req.req_body,
-                }))
+                Ok(KerberosRequest::TGS(Box::new(
+                    TicketGrantRequestUnverified {
+                        preauth,
+                        req_body: req.req_body,
+                    },
+                )))
             }
             _ => Err(KrbError::InvalidMessageDirection),
         }

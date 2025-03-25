@@ -5,7 +5,7 @@ pub struct AdWin2kPac {}
 // I think this is a raw binary structure, not asn.1.
 impl AdWin2kPac {
     pub fn to_bytes(&self) -> Vec<u8> {
-        todo!();
+        Vec::default()
     }
 }
 

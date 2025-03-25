@@ -553,7 +553,7 @@ impl KerberosReplyTicketGrantBuilder {
             // Need to work out the signatures here.
 
             let pac_data_inner =
-                OctetString::new(pac.to_bytes()).map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                OctetString::new(pac.to_bytes()).map_err(KrbError::DerEncodeOctetString)?;
 
             let pac_data = AuthorizationData {
                 ad_type: AuthorizationDataType::AdWin2kPac.into(),
@@ -561,7 +561,7 @@ impl KerberosReplyTicketGrantBuilder {
             }
             .to_der()
             .and_then(OctetString::new)
-            .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+            .map_err(KrbError::DerEncodeOctetString)?;
 
             Some(vec![AuthorizationData {
                 ad_type: AuthorizationDataType::AdIfRelevant.into(),
@@ -808,13 +808,13 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                         let etype_padata_value = etype_padata_vec
                             .to_der()
                             .and_then(OctetString::new)
-                            .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                            .map_err(KrbError::DerEncodeOctetString)?;
 
                         let pavec = vec![
                             PaData {
                                 padata_type: PaDataType::PaEncTimestamp as u32,
-                                padata_value: OctetString::new(&[])
-                                    .map_err(|e| KrbError::DerEncodeOctetString(e))?,
+                                padata_value: OctetString::new([])
+                                    .map_err(KrbError::DerEncodeOctetString)?,
                             },
                             PaData {
                                 padata_type: PaDataType::PaEtypeInfo2 as u32,
@@ -887,13 +887,13 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                 let etype_padata_value = etype_padata_vec
                     .to_der()
                     .and_then(OctetString::new)
-                    .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                    .map_err(KrbError::DerEncodeOctetString)?;
 
                 let pavec = vec![
                     PaData {
                         padata_type: PaDataType::PaEncTimestamp as u32,
-                        padata_value: OctetString::new(&[])
-                            .map_err(|e| KrbError::DerEncodeOctetString(e))?,
+                        padata_value: OctetString::new([])
+                            .map_err(KrbError::DerEncodeOctetString)?,
                     },
                     PaData {
                         padata_type: PaDataType::PaEtypeInfo2 as u32,
@@ -905,7 +905,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                     .to_der()
                     .and_then(OctetString::new)
                     .map(Some)
-                    .map_err(|e| KrbError::DerEncodeOctetString(e))?;
+                    .map_err(KrbError::DerEncodeOctetString)?;
 
                 let error_text = Ia5String::new("Preauthentication Required")
                     .map(KerberosString)
@@ -1000,10 +1000,7 @@ impl TryFrom<KdcRep> for KerberosReply {
                 let enc_part = EncryptedData::try_from(rep.enc_part)?;
                 trace!(?enc_part);
 
-                let pa_data = rep
-                    .padata
-                    .map(|pavec| PreauthData::try_from(pavec))
-                    .transpose()?;
+                let pa_data = rep.padata.map(PreauthData::try_from).transpose()?;
                 trace!(?pa_data);
 
                 let name = (rep.cname, rep.crealm).try_into()?;
@@ -1017,7 +1014,7 @@ impl TryFrom<KdcRep> for KerberosReply {
                 }))
             }
             KrbMessageType::KrbTgsRep => {
-                todo!();
+                unimplemented!();
             }
             _ => Err(KrbError::InvalidMessageDirection),
         }

@@ -61,7 +61,7 @@ pub(crate) fn decrypt_aes256_cts_hmac_sha1_96(
     // Split to get the mac.
     if let Some((ciphertext, msg_hmac)) = ciphertext.split_last_chunk::<SHA1_HMAC_LEN>() {
         // Check the ciphertext length.
-        assert!(ciphertext.len() > 0);
+        assert!(!ciphertext.is_empty());
         if ciphertext.is_empty() {
             return Err(KrbError::MessageEmpty);
         };
@@ -115,7 +115,7 @@ pub(crate) fn encrypt_aes256_cts_hmac_sha1_96(
     let mut mac = HmacSha1::new_from_slice(&ki).map_err(|_| KrbError::InvalidHmacSha1Key)?;
 
     mac.update(&confuzzler);
-    mac.update(&plaintext);
+    mac.update(plaintext);
 
     let mut buf = [0u8; 20];
     mac.finalize_into((&mut buf).into());
@@ -123,12 +123,11 @@ pub(crate) fn encrypt_aes256_cts_hmac_sha1_96(
     // Truncate to 96 bits.
     let my_hmac = &buf[0..SHA1_HMAC_LEN];
 
-    let mut ciphertext = Vec::with_capacity(AES_BLOCK_SIZE + plaintext.len() + SHA1_HMAC_LEN);
-    ciphertext.resize(ciphertext.capacity(), 0);
+    let mut ciphertext = vec![0; AES_BLOCK_SIZE + plaintext.len() + SHA1_HMAC_LEN];
     let (cipher, hmac) = ciphertext.split_at_mut(AES_BLOCK_SIZE + plaintext.len());
 
     encrypt_aes256_cts(&ke, &confuzzler, plaintext, cipher)?;
-    hmac.copy_from_slice(&my_hmac);
+    hmac.copy_from_slice(my_hmac);
 
     Ok(ciphertext)
 }
@@ -167,7 +166,7 @@ fn dk_kc_aes_256(buf: &[u8; AES_256_KEY_LEN], key_usage: i32) -> [u8; AES_256_KE
         29 => &N_FOLD_KEY_USAGE_KC_29,
         30 => &N_FOLD_KEY_USAGE_KC_30,
         31 => &N_FOLD_KEY_USAGE_KC_31,
-        _ => todo!(),
+        _ => unreachable!(),
     };
 
     let mut kc = [0u8; AES_256_KEY_LEN];
@@ -218,7 +217,7 @@ fn dk_ki_ke_aes_256(
         29 => (&N_FOLD_KEY_USAGE_KI_29, &N_FOLD_KEY_USAGE_KE_29),
         30 => (&N_FOLD_KEY_USAGE_KI_30, &N_FOLD_KEY_USAGE_KE_30),
         31 => (&N_FOLD_KEY_USAGE_KI_31, &N_FOLD_KEY_USAGE_KE_31),
-        _ => todo!(),
+        _ => unreachable!(),
     };
 
     let mut ki = [0u8; AES_256_KEY_LEN];
@@ -315,7 +314,7 @@ fn encrypt_aes256_cts(
     c_n_star_2.copy_from_slice(c_n1_star_2);
 
     for i in 0..p_n_star_len {
-        p_n_star[i] = p_n_star[i] ^ c_n1_star[i];
+        p_n_star[i] ^= c_n1_star[i];
     }
 
     let mut raw_cipher = Aes256::new(key.into());
@@ -333,7 +332,7 @@ fn decrypt_aes256_cts(key: &[u8; AES_256_KEY_LEN], ciphertext: &[u8]) -> Result<
     use aes::cipher::{KeyInit, KeyIvInit};
 
     // Should not be possible
-    debug_assert!(ciphertext.len() > 0);
+    debug_assert!(!ciphertext.is_empty());
 
     let ctxt_len = ciphertext.len();
 
@@ -345,9 +344,8 @@ fn decrypt_aes256_cts(key: &[u8; AES_256_KEY_LEN], ciphertext: &[u8]) -> Result<
         return Err(KrbError::CtsCiphertextInvalid);
     }
 
-    let mut plaintext = Vec::with_capacity(ctxt_len);
-    // Fill with 0, we can't use fill as we haven't allocated yet.
-    plaintext.resize(ctxt_len, 0);
+    // Fill with zeros
+    let mut plaintext = vec![0; ctxt_len];
 
     let plaintext_chunks = plaintext.chunks_mut(AES_BLOCK_SIZE);
     let ciphertext_chunks = ciphertext.chunks(AES_BLOCK_SIZE);
@@ -447,7 +445,7 @@ pub(crate) fn checksum_hmac_sha1_96_aes256(
 
     let kc = dk_kc_aes_256(key, key_usage);
     let mut mac = HmacSha1::new_from_slice(&kc).map_err(|_| KrbError::InvalidHmacSha1Key)?;
-    mac.update(&plaintext);
+    mac.update(plaintext);
 
     let mut buf = [0u8; 20];
     mac.finalize_into((&mut buf).into());
