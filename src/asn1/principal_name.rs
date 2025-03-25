@@ -27,10 +27,10 @@ pub(crate) struct PrincipalName {
     pub(crate) name_string: Vec<KerberosString>,
 }
 
-impl Into<String> for PrincipalName {
-    fn into(self) -> String {
-        let v: Vec<String> = self.name_string.iter().map(|x| x.0.to_string()).collect();
-        v.join("/").clone()
+impl From<PrincipalName> for String {
+    fn from(value: PrincipalName) -> Self {
+        let v: Vec<&str> = value.name_string.iter().map(|x| x.as_ref()).collect();
+        v.join("/")
     }
 }
 
