@@ -1,11 +1,11 @@
+use crate::asn1::constants::encryption_types::EncryptionType;
+use crate::error::KrbError;
+use crate::proto::{DerivedKey, Name};
 use binrw::helpers::until_eof;
 use binrw::io::TakeSeekExt;
 use binrw::io::{Seek, SeekFrom, Write};
 use binrw::{binread, binwrite, BinWrite};
 use std::fmt;
-use crate::asn1::constants::encryption_types::EncryptionType;
-use crate::error::KrbError;
-use crate::proto::{DerivedKey, Name};
 use tracing::error;
 
 #[binwrite]
@@ -237,11 +237,10 @@ impl Keytab {
         match self {
             Keytab::File(_) => {
                 let fk: FileKeytab = self.into();
-                fk.write(writer)
-                    .map_err(|binrw_err| {
-                        error!(?binrw_err, "Unable to write binary data.");
-                        KrbError::BinRWError
-                    })
+                fk.write(writer).map_err(|binrw_err| {
+                    error!(?binrw_err, "Unable to write binary data.");
+                    KrbError::BinRWError
+                })
             }
         }
     }

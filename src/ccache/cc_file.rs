@@ -149,11 +149,10 @@ pub fn store(
     })?;
 
     let fccache = FileCredentialCache::new(name, ticket, kdc_reply_part, clock_skew)?;
-    fccache.write(&mut f)
-        .map_err(|binrw_err| {
-            error!(?binrw_err, "Unable to write binary data.");
-            KrbError::BinRWError
-        })?;
+    fccache.write(&mut f).map_err(|binrw_err| {
+        error!(?binrw_err, "Unable to write binary data.");
+        KrbError::BinRWError
+    })?;
     Ok(())
 }
 
@@ -176,7 +175,8 @@ mod tests {
     impl FileCredentialCache {
         pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
             let mut reader = binrw::io::Cursor::new(inner);
-            let ccache: FileCredentialCache = reader.read_type(binrw::Endian::Big)
+            let ccache: FileCredentialCache = reader
+                .read_type(binrw::Endian::Big)
                 .expect("Unable to create reader");
             Ok(ccache)
         }
@@ -193,8 +193,7 @@ mod tests {
         let krime_ccache = FileCredentialCache::read(&mit_buf)?;
 
         let mut c = std::io::Cursor::new(Vec::new());
-        krime_ccache.write(&mut c)
-            .unwrap();
+        krime_ccache.write(&mut c).unwrap();
         let krime_buf = c.into_inner();
 
         assert_eq!(krime_buf, mit_buf);
@@ -216,8 +215,7 @@ mod tests {
         let krime_ccache =
             FileCredentialCache::new(&name, &ticket, &kdc_reply, Some(Duration::new(0, 0)))?;
         let mut c = std::io::Cursor::new(Vec::new());
-        krime_ccache.write(&mut c)
-            .expect("Unable to write ccache");
+        krime_ccache.write(&mut c).expect("Unable to write ccache");
         let krime_buf = c.into_inner();
 
         assert_eq!(mit_buf.len(), krime_buf.len());

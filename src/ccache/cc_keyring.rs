@@ -87,7 +87,8 @@ use std::time::Duration;
 
 impl From<errno::Errno> for KrbError {
     fn from(value: errno::Errno) -> Self {
-        KrbError::KeyutilsError(value)
+        error!(errno = ?value, "kernel keyring error");
+        KrbError::KeyutilsError
     }
 }
 
@@ -177,7 +178,7 @@ fn get_subsidiary_principal(keyring: &Keyring) -> Result<Option<Name>, KrbError>
             Ok(Some(name))
         }
         Err(errno::Errno(libc::ENOKEY)) => Ok(None),
-        Err(e) => Err(KrbError::KeyutilsError(e)),
+        Err(e) => Err(KrbError::from(e)),
     }
 }
 
@@ -186,7 +187,7 @@ fn subsidiary_exists(collection: &Keyring, name: &str) -> Result<Option<Keyring>
     match collection.search_for_keyring(name, None) {
         Ok(k) => Ok(Some(k)),
         Err(errno::Errno(libc::ENOKEY)) => Ok(None),
-        Err(e) => Err(KrbError::KeyutilsError(e)),
+        Err(e) => Err(KrbError::from(e)),
     }
 }
 
@@ -286,7 +287,7 @@ fn get_primary_subsidiary_name(collection: &mut Keyring) -> Result<Option<String
             Ok(Some(pn))
         }
         Err(errno::Errno(libc::ENOKEY)) => Ok(None),
-        Err(e) => Err(KrbError::KeyutilsError(e)),
+        Err(e) => Err(KrbError::from(e)),
     }
 }
 
@@ -317,7 +318,7 @@ fn store_credential(
     let vec = c.into_inner();
     subsidiary
         .add_key::<User, &str, &[u8]>(key_name.as_str(), vec.as_slice())
-        .map_err(KrbError::KeyutilsError)?;
+        .map_err(KrbError::from)?;
     Ok(())
 }
 
@@ -340,7 +341,7 @@ fn store_principal(name: &Name, subsidiary: &mut Keyring) -> Result<(), KrbError
             let vec = c.into_inner();
             subsidiary
                 .add_key::<User, &str, &[u8]>(key_name, vec.as_slice())
-                .map_err(KrbError::KeyutilsError)?;
+                .map_err(KrbError::from)?;
             Ok(())
         }
     }
@@ -362,10 +363,10 @@ fn store_primary_subsidiary_name(
             let vec = c.into_inner();
             collection
                 .add_key::<User, &str, &[u8]>(key_name, vec.as_slice())
-                .map_err(KrbError::KeyutilsError)?;
+                .map_err(KrbError::from)?;
             Ok(())
         }
-        Err(e) => Err(KrbError::KeyutilsError(e)),
+        Err(e) => Err(KrbError::from(e)),
     }
 }
 
@@ -450,7 +451,7 @@ pub fn destroy(residual: &str) -> Result<(), KrbError> {
         Ok(subsidiary) => collection.unlink_keyring(&subsidiary),
         Err(e) => Err(e),
     }
-    .map_err(KrbError::KeyutilsError)
+    .map_err(KrbError::from)
 }
 
 #[cfg(test)]
