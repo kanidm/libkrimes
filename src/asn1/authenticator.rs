@@ -3,6 +3,7 @@ use super::{
     kerberos_time::KerberosTime, microseconds::Microseconds, principal_name::PrincipalName,
     realm::Realm,
 };
+use crate::error::KrbError;
 use der::{Decode, DecodeValue, Encode, EncodeValue, FixedTag, Sequence, Tag, TagNumber};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -97,14 +98,15 @@ impl Authenticator {
         subkey: Option<EncryptionKey>,
         sequence_number: Option<u32>,
         authorization_data: Option<AuthorizationData>,
-    ) -> Self {
-        let client_time: Duration = client_time
+    ) -> Result<Self, KrbError> {
+        let client_time = client_time
             .duration_since(UNIX_EPOCH)
-            .expect("System time before unix epoch");
+            .map_err(|_| KrbError::DoYouHaveATimeMachine)?;
+
+        let ctime = KerberosTime::from_unix_duration(Duration::from_secs(client_time.as_secs()))
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
+
         let cusec: Microseconds = client_time.subsec_micros();
-        let ctime: KerberosTime =
-            KerberosTime::from_unix_duration(Duration::from_secs(client_time.as_secs()))
-                .expect("Failed to build KerberosTime");
         let a: AuthenticatorInner = AuthenticatorInner {
             authenticator_vno: 5,
             crealm: client_realm,
@@ -116,7 +118,7 @@ impl Authenticator {
             seq_number: sequence_number,
             authorization_data,
         };
-        Self(a)
+        Ok(Self(a))
     }
 }
 

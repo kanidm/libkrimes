@@ -37,16 +37,11 @@ use crate::crypto::{
     derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use crate::KerberosTcpCodec;
 use der::{asn1::Any, flagset::FlagSet, Decode, Encode};
-use futures::SinkExt;
-use futures::StreamExt;
 use rand::{thread_rng, Rng};
 use std::cmp::Ordering;
 use std::fmt;
 use std::time::{Duration, SystemTime};
-use tokio::net::TcpStream;
-use tokio_util::codec::Framed;
 use tracing::{error, trace};
 
 // Zeroize blocked on https://github.com/RustCrypto/block-ciphers/issues/426
@@ -298,7 +293,7 @@ impl TryInto<KdcEncryptionKey> for SessionKey {
     fn try_into(self) -> Result<KdcEncryptionKey, KrbError> {
         match self {
             SessionKey::Aes256CtsHmacSha196 { k } => {
-                let key_value = OctetString::new(k).map_err(KrbError::DerEncodeOctetString)?;
+                let key_value = OctetString::new(k).map_err(|_| KrbError::DerEncodeOctetString)?;
 
                 Ok(KdcEncryptionKey {
                     key_type: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
@@ -354,7 +349,7 @@ impl SessionKey {
             ) => decrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?,
         };
 
-        Authenticator::from_der(&data).map_err(KrbError::DerDecodeAuthenticator)
+        Authenticator::from_der(&data).map_err(|_| KrbError::DerDecodeAuthenticator)
     }
 
     pub(crate) fn encrypt_tgs_rep_part(
@@ -388,7 +383,7 @@ impl SessionKey {
     ) -> Result<EncryptedData, KrbError> {
         let data = authenticator
             .to_der()
-            .map_err(KrbError::DerEncodeAuthenticator)?;
+            .map_err(|_| KrbError::DerEncodeAuthenticator)?;
 
         let key_usage = 7;
         match self {
@@ -400,7 +395,9 @@ impl SessionKey {
     }
 
     fn checksum_kdc_req_body(&self, req_body: &Any) -> Result<Checksum, KrbError> {
-        let req_body = req_body.to_der().map_err(KrbError::DerEncodeKdcReqBody)?;
+        let req_body = req_body
+            .to_der()
+            .map_err(|_| KrbError::DerEncodeKdcReqBody)?;
         self.checksum(req_body.as_slice(), 6)
     }
 
@@ -768,6 +765,7 @@ impl EncryptedData {
             .map(|TaggedEncTicketPart(part)| part)
     }
 
+    #[cfg(test)]
     pub(crate) fn decrypt_enc_kdc_rep(
         &self,
         base_key: &DerivedKey,
@@ -1426,11 +1424,20 @@ impl Preauth {
     }
 }
 
+// TODO; This should probably be a test-only function or removed. Or find a way to make it a proper
+// client.
+#[cfg(test)]
 pub async fn get_tgt(
     principal: &str,
     realm: &str,
     password: &str,
 ) -> Result<(Name, EncTicket, KdcReplyPart), KrbError> {
+    use crate::KerberosTcpCodec;
+    use futures::SinkExt;
+    use futures::StreamExt;
+    use tokio::net::TcpStream;
+    use tokio_util::codec::Framed;
+
     let stream = TcpStream::connect("127.0.0.1:55000")
         .await
         .expect("Unable to connect to localhost:55000");
@@ -1456,8 +1463,8 @@ pub async fn get_tgt(
     let response = krb_stream
         .next()
         .await
-        .unwrap()
-        .map_err(KrbError::IoError)?;
+        .expect("Error reading from stream")
+        .expect("No messages available in stream");
 
     let (name, ticket, kdc_reply): (Name, EncTicket, KdcReplyPart) = match response {
         KerberosReply::AS(AuthenticationReply {
