@@ -78,7 +78,7 @@ impl<'a> DecodeValue<'a> for TaggedEncTicketPart {
     }
 }
 
-impl<'a> EncodeValue for TaggedEncTicketPart {
+impl EncodeValue for TaggedEncTicketPart {
     fn value_len(&self) -> der::Result<der::Length> {
         self.0.encoded_len()
     }
@@ -88,8 +88,8 @@ impl<'a> EncodeValue for TaggedEncTicketPart {
     }
 }
 
-impl Into<EncTicketPart> for TaggedEncTicketPart {
-    fn into(self) -> EncTicketPart {
-        self.0
+impl From<TaggedEncTicketPart> for EncTicketPart {
+    fn from(value: TaggedEncTicketPart) -> Self {
+        value.0
     }
 }

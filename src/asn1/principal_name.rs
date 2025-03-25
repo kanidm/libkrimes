@@ -1,5 +1,7 @@
 use super::kerberos_string::KerberosString;
+use crate::error::KrbError;
 use der::Sequence;
+use std::str::FromStr;
 
 /// ```text
 ///   PrincipalName   ::= SEQUENCE {
@@ -32,24 +34,22 @@ impl Into<String> for PrincipalName {
     }
 }
 
-impl From<(i32, String)> for PrincipalName {
-    fn from(value: (i32, String)) -> Self {
-        let name_type = value.0;
-        let name_string: Vec<KerberosString> = value.1.split("/").map(|x| x.into()).collect();
-        Self {
-            name_type,
-            name_string,
-        }
-    }
-}
+impl<T> TryFrom<(i32, T)> for PrincipalName
+where
+    T: AsRef<str>,
+{
+    type Error = KrbError;
 
-impl From<(i32, &str)> for PrincipalName {
-    fn from(value: (i32, &str)) -> Self {
-        let name_type = value.0;
-        let name_string: Vec<KerberosString> = value.1.split("/").map(|x| x.into()).collect();
-        Self {
+    fn try_from((name_type, name_str): (i32, T)) -> Result<Self, Self::Error> {
+        let name_string = name_str
+            .as_ref()
+            .split("/")
+            .map(KerberosString::from_str)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
             name_type,
             name_string,
-        }
+        })
     }
 }

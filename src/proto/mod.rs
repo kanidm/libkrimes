@@ -10,7 +10,6 @@ pub use self::request::{
 pub use self::time::{
     AuthenticationTimeBound, TicketGrantTimeBound, TicketRenewTimeBound, TimeBoundError,
 };
-
 use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;
 use crate::asn1::checksum::Checksum;
@@ -663,7 +662,7 @@ impl TryFrom<Vec<PaData>> for PreauthData {
                         };
 
                         // I think at this point we should ignore any etypes we don't support.
-                        let salt = einfo2.salt.map(|s| s.into());
+                        let salt = einfo2.salt.as_ref().map(String::from);
                         let s2kparams = einfo2.s2kparams.map(|v| v.as_bytes().to_vec());
 
                         etype_info2.push(EtypeInfo2 {
@@ -1267,23 +1266,43 @@ impl TryFrom<PrincipalName> for Name {
             name_string,
         } = princ;
 
-        let name_type: PrincipalNameType = name_type
-            .try_into()
-            .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
+        let name_type: PrincipalNameType = name_type.try_into().map_err(|err| {
+            error!(?err, ?name_type, "invalid principal name type");
+            KrbError::PrincipalNameInvalidType
+        })?;
 
         trace!(?name_type, ?name_string);
 
         match name_type {
             PrincipalNameType::NtPrincipal => match name_string.len() {
                 2 => {
-                    let name = name_string.get(0).unwrap().into();
-                    let realm = name_string.get(1).unwrap().into();
+                    let name = name_string
+                        .get(0)
+                        .ok_or(KrbError::PrincipalNameInvalidComponents)
+                        .map(|krb_string| krb_string.to_string())?;
+
+                    let realm = name_string
+                        .get(1)
+                        .ok_or(KrbError::PrincipalNameInvalidComponents)
+                        .map(|krb_string| krb_string.to_string())?;
                     Ok(Name::Principal { name, realm })
                 }
                 3 => {
-                    let service = name_string.get(0).unwrap().into();
-                    let host = name_string.get(1).unwrap().into();
-                    let realm = name_string.get(2).unwrap().into();
+                    let service = name_string
+                        .get(0)
+                        .ok_or(KrbError::PrincipalNameInvalidComponents)
+                        .map(|krb_string| krb_string.to_string())?;
+
+                    let host = name_string
+                        .get(1)
+                        .ok_or(KrbError::PrincipalNameInvalidComponents)
+                        .map(|krb_string| krb_string.to_string())?;
+
+                    let realm = name_string
+                        .get(2)
+                        .ok_or(KrbError::PrincipalNameInvalidComponents)
+                        .map(|krb_string| krb_string.to_string())?;
+
                     Ok(Name::SrvPrincipal {
                         service,
                         host,
@@ -1293,10 +1312,14 @@ impl TryFrom<PrincipalName> for Name {
                 _ => Err(KrbError::NameNumberOfComponents),
             },
             PrincipalNameType::NtSrvInst => {
-                let (service, instance) = name_string.split_first().unwrap();
+                let (service, instance) = name_string
+                    .split_first()
+                    .ok_or(KrbError::PrincipalNameInvalidComponents)?;
                 let service: String = service.into();
                 let mut instance: Vec<String> = instance.iter().map(|x| x.into()).collect();
-                let realm: String = instance.pop().unwrap();
+                let realm: String = instance
+                    .pop()
+                    .ok_or(KrbError::PrincipalNameInvalidComponents)?;
                 Ok(Name::SrvInst {
                     service,
                     instance,
@@ -1304,9 +1327,20 @@ impl TryFrom<PrincipalName> for Name {
                 })
             }
             PrincipalNameType::NtSrvHst => {
-                let service = name_string.get(0).unwrap().into();
-                let host = name_string.get(1).unwrap().into();
-                let realm = name_string.get(2).unwrap().into();
+                let service = name_string
+                    .get(0)
+                    .ok_or(KrbError::PrincipalNameInvalidComponents)
+                    .map(|krb_string| krb_string.to_string())?;
+
+                let host = name_string
+                    .get(1)
+                    .ok_or(KrbError::PrincipalNameInvalidComponents)
+                    .map(|krb_string| krb_string.to_string())?;
+
+                let realm = name_string
+                    .get(2)
+                    .ok_or(KrbError::PrincipalNameInvalidComponents)
+                    .map(|krb_string| krb_string.to_string())?;
                 Ok(Name::SrvHst {
                     service,
                     host,
@@ -1327,10 +1361,11 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
             name_string,
         } = princ;
 
-        let realm = realm.into();
-        let name_type: PrincipalNameType = name_type
-            .try_into()
-            .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
+        let realm = String::from(&realm);
+        let name_type: PrincipalNameType = name_type.try_into().map_err(|err| {
+            error!(?err, ?name_type, "invalid principal name type");
+            KrbError::PrincipalNameInvalidType
+        })?;
 
         // IMPORTANT!!!!!
         // MIT KRB5 has a bug in it's KVNO tool that causes it to send NtSrvHst as
