@@ -369,7 +369,9 @@ pub fn destroy(ccache_name: Option<&str>) -> Result<(), KrbError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
+    #[cfg(feature = "keyring")]
+    use std::process::Stdio;
 
     #[tokio::test]
     async fn test_ccache_file_store() -> Result<(), KrbError> {
@@ -407,6 +409,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "keyring")]
     async fn test_ccache_keyring_store() -> Result<(), KrbError> {
         let ccache_name = "KEYRING:session:abc";
 
