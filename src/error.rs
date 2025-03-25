@@ -1,8 +1,18 @@
 #[derive(Debug)]
 pub enum KrbError {
-    // IMPORTANT: Don't add values to this enum - it's a potential security risk
-    // as you can leak internal state in an error. If you want to debug the error,
-    // then use the error! macro at the error raise site to report relevant information.
+    // =========================================================================================
+    // IMPORTANT: Don't add variables to variants in this  enum - it's a potential security risk
+    // as you can leak internal state in an error as these can end up in userfacing contexts!!!
+    //
+    // In other words, any extra information you add here is a potential CVE.
+    //
+    // If you want to debug the error, then use the error! macro at the error raise site to
+    // report relevant information.
+    //
+    // Lastly, the whole reason we have so many error variants is so that just from the error
+    // variant alone, we already have a large amount of anonymised detail about the potential
+    // cause the error.
+    // =========================================================================================
     InvalidHmacSha1Key,
     MessageAuthenticationFailed,
     MessageEmpty,
@@ -21,15 +31,15 @@ pub enum KrbError {
     DerDecodePaEncTsEnc,
     DerDecodeEncKdcRepPart,
     DerEncodeEncKdcRepPart,
-    DerEncodeOctetString(der::Error),
+    DerEncodeOctetString,
     DerEncodeEncTicketPart,
-    DerEncodeAuthenticator(der::Error),
-    DerDecodeAuthenticator(der::Error),
-    DerEncodeApReq(der::Error),
-    DerEncodeKdcReqBody(der::Error),
+    DerEncodeAuthenticator,
+    DerDecodeAuthenticator,
+    DerEncodeApReq,
+    DerEncodeKdcReqBody,
     DerEncodeKerberosString,
-    DerError(der::Error),
     DerEncodeKerberosTime,
+    DerEncodeKrbErrorCode,
 
     PreauthUnsupported,
     PreauthMissingEtypeInfo2,
@@ -52,41 +62,18 @@ pub enum KrbError {
     PrincipalNameInvalidComponents,
     PrincipalNameInvalidType,
 
-    CredentialCacheCannotCreate(String),
     UnsupportedCredentialCacheType,
     UnsupportedKeytabType,
-    IoError(std::io::Error),
-    BinRWError(binrw::Error),
-    KeyutilsError(errno::Errno),
-    FromHexError(hex::FromHexError),
+
+    IoError,
+    BinRWError,
+    KeyutilsError,
 
     InvalidMessageType,
     InvalidMessageDirection,
     InvalidPvno,
     InvalidEncryptionKey,
-    InvalidEnumValue(String, i32),
-}
 
-impl From<der::Error> for KrbError {
-    fn from(value: der::Error) -> Self {
-        KrbError::DerError(value)
-    }
-}
-
-impl From<binrw::Error> for KrbError {
-    fn from(value: binrw::Error) -> Self {
-        KrbError::BinRWError(value)
-    }
-}
-
-impl From<std::io::Error> for KrbError {
-    fn from(value: std::io::Error) -> Self {
-        KrbError::IoError(value)
-    }
-}
-
-impl From<hex::FromHexError> for KrbError {
-    fn from(value: hex::FromHexError) -> Self {
-        KrbError::FromHexError(value)
-    }
+    /// No really, do you have a time machine? How did you go back to before 1970?
+    DoYouHaveATimeMachine,
 }

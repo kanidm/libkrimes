@@ -29,7 +29,7 @@ use crate::error::KrbError;
 use crate::proto::ms_pac::AdWin2kPac;
 use der::{flagset::FlagSet, Decode, Encode};
 use std::time::{Duration, SystemTime};
-use tracing::trace;
+use tracing::{error, trace};
 
 #[derive(Debug)]
 pub enum KerberosReply {
@@ -553,7 +553,7 @@ impl KerberosReplyTicketGrantBuilder {
             // Need to work out the signatures here.
 
             let pac_data_inner =
-                OctetString::new(pac.to_bytes()).map_err(KrbError::DerEncodeOctetString)?;
+                OctetString::new(pac.to_bytes()).map_err(|_| KrbError::DerEncodeOctetString)?;
 
             let pac_data = AuthorizationData {
                 ad_type: AuthorizationDataType::AdWin2kPac.into(),
@@ -561,7 +561,7 @@ impl KerberosReplyTicketGrantBuilder {
             }
             .to_der()
             .and_then(OctetString::new)
-            .map_err(KrbError::DerEncodeOctetString)?;
+            .map_err(|_| KrbError::DerEncodeOctetString)?;
 
             Some(vec![AuthorizationData {
                 ad_type: AuthorizationDataType::AdIfRelevant.into(),
@@ -732,10 +732,8 @@ impl TryFrom<KdcKrbError> for KerberosReply {
         }
 
         let error_code = KrbErrorCode::try_from(rep.error_code).map_err(|_| {
-            KrbError::InvalidEnumValue(
-                std::any::type_name::<KrbErrorCode>().to_string(),
-                rep.error_code,
-            )
+            error!(?rep.error_code, "Unable to encode error code");
+            KrbError::DerEncodeKrbErrorCode
         })?;
 
         let stime = rep.stime.to_system_time();
@@ -808,13 +806,13 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                         let etype_padata_value = etype_padata_vec
                             .to_der()
                             .and_then(OctetString::new)
-                            .map_err(KrbError::DerEncodeOctetString)?;
+                            .map_err(|_| KrbError::DerEncodeOctetString)?;
 
                         let pavec = vec![
                             PaData {
                                 padata_type: PaDataType::PaEncTimestamp as u32,
                                 padata_value: OctetString::new([])
-                                    .map_err(KrbError::DerEncodeOctetString)?,
+                                    .map_err(|_| KrbError::DerEncodeOctetString)?,
                             },
                             PaData {
                                 padata_type: PaDataType::PaEtypeInfo2 as u32,
@@ -887,13 +885,13 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                 let etype_padata_value = etype_padata_vec
                     .to_der()
                     .and_then(OctetString::new)
-                    .map_err(KrbError::DerEncodeOctetString)?;
+                    .map_err(|_| KrbError::DerEncodeOctetString)?;
 
                 let pavec = vec![
                     PaData {
                         padata_type: PaDataType::PaEncTimestamp as u32,
                         padata_value: OctetString::new([])
-                            .map_err(KrbError::DerEncodeOctetString)?,
+                            .map_err(|_| KrbError::DerEncodeOctetString)?,
                     },
                     PaData {
                         padata_type: PaDataType::PaEtypeInfo2 as u32,
@@ -905,7 +903,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                     .to_der()
                     .and_then(OctetString::new)
                     .map(Some)
-                    .map_err(KrbError::DerEncodeOctetString)?;
+                    .map_err(|_| KrbError::DerEncodeOctetString)?;
 
                 let error_text = Ia5String::new("Preauthentication Required")
                     .map(KerberosString)

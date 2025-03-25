@@ -3,10 +3,10 @@ use binrw::io::TakeSeekExt;
 use binrw::io::{Seek, SeekFrom, Write};
 use binrw::{binread, binwrite, BinWrite};
 use std::fmt;
-
 use crate::asn1::constants::encryption_types::EncryptionType;
 use crate::error::KrbError;
 use crate::proto::{DerivedKey, Name};
+use tracing::error;
 
 #[binwrite]
 #[brw(big)]
@@ -237,7 +237,11 @@ impl Keytab {
         match self {
             Keytab::File(_) => {
                 let fk: FileKeytab = self.into();
-                fk.write(writer).map_err(KrbError::BinRWError)
+                fk.write(writer)
+                    .map_err(|binrw_err| {
+                        error!(?binrw_err, "Unable to write binary data.");
+                        KrbError::BinRWError
+                    })
             }
         }
     }
@@ -278,52 +282,47 @@ mod tests {
             let mut reader = binrw::io::Cursor::new(inner);
             let keytab: FileKeytab = reader
                 .read_type(binrw::Endian::Big)
-                .map_err(KrbError::BinRWError)?;
+                .expect("Unable to create reader");
             Ok(keytab)
         }
 
-        pub fn load(path: Option<PathBuf>) -> Result<Self, KrbError> {
+        pub fn load(path: Option<PathBuf>) -> FileKeytab {
             let mut f: File = match path {
-                Some(p) => File::open(p).map_err(KrbError::IoError),
+                Some(p) => File::open(p).expect("Unable to open file"),
                 None => match env::var("KRB5_KTNAME") {
                     Ok(val) => {
-                        if !val.starts_with("FILE:") {
-                            return Err(KrbError::UnsupportedKeytabType);
-                        }
                         let p = val.strip_prefix("FILE:").expect("Failed to strip prefix");
                         let p = PathBuf::from(p);
-                        File::open(p).map_err(KrbError::IoError)
+                        File::open(p).expect("Unable to open file")
                     }
                     _ => {
                         // default_keytab_name from config file
                         todo!()
                     }
                 },
-            }?;
+            };
             let mut buffer = Vec::new();
-            f.read_to_end(&mut buffer).map_err(KrbError::IoError)?;
-            FileKeytab::read(&buffer)
+            f.read_to_end(&mut buffer)
+                .expect("Unable to read to end of file");
+            FileKeytab::read(&buffer).expect("Unable to read keytab from buffer")
         }
 
-        pub fn store(&self, path: Option<PathBuf>) -> Result<(), KrbError> {
+        pub fn store(&self, path: Option<PathBuf>) {
             let mut f: File = match path {
-                Some(p) => File::create(p).map_err(KrbError::IoError),
+                Some(p) => File::create(p).expect("Unable to create file"),
                 None => match env::var("KRB5_KTNAME") {
                     Ok(val) => {
-                        if !val.starts_with("FILE:") {
-                            return Err(KrbError::UnsupportedKeytabType);
-                        }
                         let p = val.strip_prefix("FILE:").expect("Failed to strip prefix");
                         let p = PathBuf::from(p);
-                        File::create(p).map_err(KrbError::IoError)
+                        File::create(p).expect("Unable to create file")
                     }
                     _ => {
                         // default_keytab_name from config file
                         todo!()
                     }
                 },
-            }?;
-            self.write(&mut f).map_err(KrbError::BinRWError)
+            };
+            self.write(&mut f).expect("Unable to write to file")
         }
     }
 
@@ -450,9 +449,7 @@ mod tests {
         let keytab = FileKeytab::read(&buf).expect("Failed to read from buffer");
 
         let path = "/tmp/krime.keytab";
-        keytab
-            .store(Some(PathBuf::from(path)))
-            .expect("Failed to write");
+        keytab.store(Some(PathBuf::from(path)));
 
         let status = Command::new("klist")
             .stdout(Stdio::null())
@@ -462,8 +459,7 @@ mod tests {
             .status()
             .expect("Failed to klist");
 
-        let keytab2 =
-            FileKeytab::load(Some(PathBuf::from(path))).expect("Failed to load from file");
+        let keytab2 = FileKeytab::load(Some(PathBuf::from(path)));
         assert_eq!(keytab, keytab2);
 
         fs::remove_file(path).expect("Failed to rm ccache file");

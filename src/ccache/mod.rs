@@ -181,7 +181,8 @@ impl CredentialV4 {
                             enc_part: Asn1EncryptedData {
                                 etype: Asn1EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
                                 kvno: Some(1), // TODO Why?
-                                cipher: OctetString::new(data.clone())?,
+                                cipher: OctetString::new(data.clone())
+                                    .map_err(|_| KrbError::DerEncodeOctetString)?,
                             },
                         };
                         let tt = Asn1TaggedTicket::new(t);
@@ -384,7 +385,7 @@ mod tests {
             None,
             Some(ccache_name.as_str()),
         )?;
-        assert!(std::fs::exists(path)?);
+        assert!(std::fs::exists(path).expect("Unable to check if file exists"));
 
         // TODO load and compare
 
@@ -392,14 +393,15 @@ mod tests {
         let output = Command::new("klist")
             .arg("-c")
             .arg(ccache_name.as_str())
-            .output()?;
+            .output()
+            .expect("Unable to execute command klist");
         assert!(output.status.success());
 
         let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
         assert!(output.contains("testuser@EXAMPLE.COM"));
 
         super::destroy(Some(ccache_name.as_str()))?;
-        assert!(!std::fs::exists(path)?);
+        assert!(!std::fs::exists(path).expect("Unable to check if file exists"));
 
         Ok(())
     }
@@ -421,7 +423,8 @@ mod tests {
             .arg("-c")
             .arg(ccache_name)
             .arg("-A")
-            .output()?;
+            .output()
+            .expect("Unable to execute command klist");
         assert!(output.status.success());
 
         let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
@@ -435,7 +438,8 @@ mod tests {
             .arg("-c")
             .arg(ccache_name)
             .arg("-A")
-            .output()?;
+            .output()
+            .expect("Unable to execute command klist");
         assert!(output.status.success());
 
         let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
