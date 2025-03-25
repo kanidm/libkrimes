@@ -134,7 +134,7 @@ impl<'a> DecodeValue<'a> for Authenticator {
     }
 }
 
-impl<'a> EncodeValue for Authenticator {
+impl EncodeValue for Authenticator {
     fn value_len(&self) -> der::Result<der::Length> {
         self.0.encoded_len()
     }
@@ -144,8 +144,8 @@ impl<'a> EncodeValue for Authenticator {
     }
 }
 
-impl Into<AuthenticatorInner> for Authenticator {
-    fn into(self) -> AuthenticatorInner {
-        self.0
+impl From<Authenticator> for AuthenticatorInner {
+    fn from(value: Authenticator) -> Self {
+        value.0
     }
 }

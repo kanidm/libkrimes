@@ -1,8 +1,11 @@
+use crate::error::KrbError;
 use der::asn1::Ia5String;
 use der::DecodeValue;
 use der::EncodeValue;
 use der::FixedTag;
 use der::Tag;
+use std::fmt;
+use std::str::FromStr;
 
 /// ```text
 /// KerberosString  ::= GeneralString (IA5String)
@@ -21,7 +24,7 @@ impl<'a> DecodeValue<'a> for KerberosString {
     }
 }
 
-impl<'a> EncodeValue for KerberosString {
+impl EncodeValue for KerberosString {
     fn value_len(&self) -> der::Result<der::Length> {
         Ia5String::value_len(&self.0)
     }
@@ -30,32 +33,36 @@ impl<'a> EncodeValue for KerberosString {
     }
 }
 
-impl Into<String> for KerberosString {
-    fn into(self) -> String {
-        self.0.to_string()
+impl fmt::Display for KerberosString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
-impl Into<String> for &KerberosString {
-    fn into(self) -> String {
-        self.0.to_string()
+impl AsRef<str> for KerberosString {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
     }
 }
 
 impl KerberosString {
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        self.as_ref()
     }
 }
 
-impl From<String> for KerberosString {
-    fn from(value: String) -> Self {
-        KerberosString(Ia5String::new(&value).expect("Failed to build Ia5String"))
+impl From<&KerberosString> for String {
+    fn from(value: &KerberosString) -> Self {
+        value.to_string()
     }
 }
 
-impl From<&str> for KerberosString {
-    fn from(value: &str) -> Self {
-        KerberosString(Ia5String::new(value).expect("Failed to build Ia5String"))
+impl FromStr for KerberosString {
+    type Err = KrbError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ia5String::new(s)
+            .map_err(|_| KrbError::DerEncodeKerberosString)
+            .map(KerberosString)
     }
 }

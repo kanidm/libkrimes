@@ -3,10 +3,6 @@ mod cc_file;
 #[cfg(feature = "keyring")]
 mod cc_keyring;
 
-use std::env;
-use std::time::Duration;
-use users::get_current_uid;
-
 use crate::asn1::constants::encryption_types::EncryptionType as Asn1EncryptionType;
 use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
@@ -17,7 +13,11 @@ use crate::proto::{EncTicket, EncryptedData, KdcReplyPart, Name, SessionKey};
 use binrw::{binread, binwrite};
 use der::asn1::OctetString;
 use der::Encode;
+use std::env;
+use std::time::Duration;
 use std::time::SystemTime;
+use tracing::error;
+use users::get_current_uid;
 
 /* TODO:
  *   - Handle cache conf entries. CredentialCache::new() could take a KV pair collection
@@ -251,9 +251,11 @@ impl TryInto<Name> for PrincipalV4 {
 
     fn try_into(self) -> Result<Name, Self::Error> {
         let name_type: i32 = self.name_type as i32;
-        let name_type: PrincipalNameType = name_type
-            .try_into()
-            .map_err(|_| KrbError::InvalidPrincipalNameType(name_type))?;
+        let name_type: PrincipalNameType = name_type.try_into().map_err(|err| {
+            error!(?err, ?name_type, "invalid principal name type");
+            KrbError::PrincipalNameInvalidType
+        })?;
+
         match name_type {
             PrincipalNameType::NtPrincipal => {
                 let n: Name = Name::Principal {

@@ -1,3 +1,8 @@
+use super::{
+    AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name,
+    PreauthData, SessionKey, Ticket, TicketGrantRequest, TicketGrantTimeBound,
+    TicketRenewTimeBound,
+};
 use crate::asn1::{
     authorization_data::AuthorizationData,
     constants::{
@@ -21,17 +26,10 @@ use crate::asn1::{
 };
 use crate::constants::PKBDF2_SHA1_ITER;
 use crate::error::KrbError;
+use crate::proto::ms_pac::AdWin2kPac;
 use der::{flagset::FlagSet, Decode, Encode};
-
 use std::time::{Duration, SystemTime};
 use tracing::trace;
-
-use super::{
-    AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name,
-    PreauthData, SessionKey, Ticket, TicketGrantRequest, TicketGrantTimeBound,
-    TicketRenewTimeBound,
-};
-use crate::proto::ms_pac::AdWin2kPac;
 
 #[derive(Debug)]
 pub enum KerberosReply {
@@ -761,7 +759,7 @@ impl TryFrom<KdcKrbError> for KerberosReply {
                 }))
             }
             code => {
-                let error_text = rep.error_text.as_ref().map(|s| s.into());
+                let error_text = rep.error_text.as_ref().map(|s| s.to_string());
 
                 Ok(KerberosReply::ERR(ErrorReply {
                     code,

@@ -1,5 +1,8 @@
 #[derive(Debug)]
 pub enum KrbError {
+    // IMPORTANT: Don't add values to this enum - it's a potential security risk
+    // as you can leak internal state in an error. If you want to debug the error,
+    // then use the error! macro at the error raise site to report relevant information.
     InvalidHmacSha1Key,
     MessageAuthenticationFailed,
     MessageEmpty,
@@ -24,6 +27,7 @@ pub enum KrbError {
     DerDecodeAuthenticator(der::Error),
     DerEncodeApReq(der::Error),
     DerEncodeKdcReqBody(der::Error),
+    DerEncodeKerberosString,
     DerError(der::Error),
     DerEncodeKerberosTime,
 
@@ -45,6 +49,8 @@ pub enum KrbError {
     NameNotPrincipal,
     NameNotServiceHost,
     NameNumberOfComponents,
+    PrincipalNameInvalidComponents,
+    PrincipalNameInvalidType,
 
     CredentialCacheCannotCreate(String),
     UnsupportedCredentialCacheType,
@@ -59,7 +65,6 @@ pub enum KrbError {
     InvalidPvno,
     InvalidEncryptionKey,
     InvalidEnumValue(String, i32),
-    InvalidPrincipalNameType(i32),
 }
 
 impl From<der::Error> for KrbError {

@@ -58,7 +58,7 @@ impl<'a> DecodeValue<'a> for ApReq {
     }
 }
 
-impl<'a> EncodeValue for ApReq {
+impl EncodeValue for ApReq {
     fn value_len(&self) -> der::Result<der::Length> {
         self.0.encoded_len()
     }
@@ -68,9 +68,9 @@ impl<'a> EncodeValue for ApReq {
     }
 }
 
-impl Into<ApReqInner> for ApReq {
-    fn into(self) -> ApReqInner {
-        self.0
+impl From<ApReq> for ApReqInner {
+    fn from(value: ApReq) -> ApReqInner {
+        value.0
     }
 }
 
