@@ -134,7 +134,7 @@ impl KerberosReply {
     ) -> KerberosReplyAuthenticationBuilder {
         let aes256_cts_hmac_sha1_96_iter_count: u32 = PBKDF2_SHA1_ITER;
 
-        let mut flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+        let mut flags = FlagSet::<TicketFlags>::default();
         if time_bounds.renew_until().is_some() {
             flags |= TicketFlags::Renewable;
         }
@@ -196,7 +196,7 @@ impl KerberosReply {
             ticket,
         } = ticket_grant_request;
 
-        let flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
+        let flags = FlagSet::<TicketFlags>::default();
 
         // From is what the client requested.
         // Now is the kdc time.

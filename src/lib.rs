@@ -6,7 +6,7 @@
 // Specific lints to enforce.
 #![deny(clippy::todo)]
 #![deny(clippy::unimplemented)]
-// #![deny(clippy::unwrap_used)]
+#![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 #![deny(clippy::await_holding_lock)]
@@ -86,8 +86,7 @@ impl Decoder for KerberosTcpCodec {
         reader.read_exact(&mut xdr_record_buf)?;
 
         let krb_kdc_rep = KrbKdcRep::from_der(&xdr_record_buf)
-            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
-            .expect("Failed to decode");
+            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))?;
 
         buf.clear();
 
@@ -169,8 +168,7 @@ impl Decoder for KdcTcpCodec {
         reader.read_exact(&mut xdr_record_buf)?;
 
         let krb_kdc_req = KrbKdcReq::from_der(&xdr_record_buf)
-            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))
-            .expect("Failed to decode");
+            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))?;
 
         buf.clear();
 

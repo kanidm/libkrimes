@@ -209,7 +209,7 @@ impl KerberosAuthenticationBuilder {
 
         let preauth = preauth.unwrap_or_default();
 
-        let mut kdc_options = FlagSet::<KerberosFlags>::new(0b0).expect("Failed to build FlagSet");
+        let mut kdc_options = FlagSet::<KerberosFlags>::default();
         kdc_options |= KerberosFlags::Renewable;
 
         KerberosRequest::AS(Box::new(AuthenticationRequest {
@@ -279,7 +279,7 @@ impl TicketGrantRequestBuilder {
         // So far we don't use preauth-here
         // let preauth = preauth.unwrap_or_default();
 
-        let mut kdc_options = FlagSet::<KerberosFlags>::new(0b0).expect("Failed to build FlagSet");
+        let mut kdc_options = FlagSet::<KerberosFlags>::default();
         kdc_options |= KerberosFlags::Renewable;
         kdc_options |= KerberosFlags::Canonicalize;
 
@@ -291,16 +291,18 @@ impl TicketGrantRequestBuilder {
             cname: None,
             realm,
             sname: Some(sname),
-            from: from.map(|t| {
-                KerberosTime::from_system_time(t)
-                    .expect("Failed to build KerberosTime from SystemTime")
-            }),
+            from: from
+                .map(|t| {
+                    KerberosTime::from_system_time(t).map_err(|_| KrbError::DerEncodeKerberosTime)
+                })
+                .transpose()?,
             till: KerberosTime::from_system_time(until)
-                .expect("Failed to build KerberosTime from SystemTime"),
-            rtime: renew.map(|t| {
-                KerberosTime::from_system_time(t)
-                    .expect("Failed to build KerberosTime from SystemTime")
-            }),
+                .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+            rtime: renew
+                .map(|t| {
+                    KerberosTime::from_system_time(t).map_err(|_| KrbError::DerEncodeKerberosTime)
+                })
+                .transpose()?,
             nonce,
             etype: etypes.iter().map(|e| *e as i32).collect(),
             addresses: None,
@@ -351,8 +353,7 @@ impl TicketGrantRequestBuilder {
             }
         };
 
-        let ap_options: ApOptions =
-            FlagSet::<ApFlags>::new(0b0).expect("Failed to create flagset.");
+        let ap_options: ApOptions = FlagSet::<ApFlags>::default();
 
         let ticket: TaggedTicket = ap_req_builder.ticket.try_into()?;
         let ap_req: ApReq = ApReq::new(ap_options, ticket, authenticator);
@@ -660,16 +661,22 @@ impl TryInto<KrbKdcReq> for &KerberosRequest {
                     // krb does, because it's probably wrong, but it's the reference impl.
                     realm,
                     sname: Some(sname),
-                    from: auth_req.from.map(|t| {
-                        KerberosTime::from_system_time(t)
-                            .expect("Failed to build KerberosTime from SystemTime")
-                    }),
+                    from: auth_req
+                        .from
+                        .map(|t| {
+                            KerberosTime::from_system_time(t)
+                                .map_err(|_| KrbError::DerEncodeKerberosTime)
+                        })
+                        .transpose()?,
                     till: KerberosTime::from_system_time(auth_req.until)
-                        .expect("Failed to build KerberosTime from SystemTime"),
-                    rtime: auth_req.renew.map(|t| {
-                        KerberosTime::from_system_time(t)
-                            .expect("Failed to build KerberosTime from SystemTime")
-                    }),
+                        .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+                    rtime: auth_req
+                        .renew
+                        .map(|t| {
+                            KerberosTime::from_system_time(t)
+                                .map_err(|_| KrbError::DerEncodeKerberosTime)
+                        })
+                        .transpose()?,
                     nonce: auth_req.nonce,
                     etype: auth_req.etypes.iter().map(|e| *e as i32).collect(),
                     addresses: None,
