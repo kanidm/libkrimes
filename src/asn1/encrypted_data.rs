@@ -23,7 +23,7 @@ mod tests {
     use crate::asn1::constants::EncryptionType;
     use crate::asn1::encrypted_data::EncryptedData;
     use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
-    use crate::constants::RFC_PKBDF2_SHA1_ITER;
+    use crate::constants::RFC_PBKDF2_SHA1_ITER;
     use crate::crypto::{decrypt_aes256_cts_hmac_sha1_96, derive_key_aes256_cts_hmac_sha1_96};
     use der::{DateTime, Decode};
 
@@ -39,7 +39,7 @@ mod tests {
         let key = derive_key_aes256_cts_hmac_sha1_96(
             "Suse1234".as_bytes(),
             "AFOREST.ADuser1".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
