@@ -31,7 +31,9 @@ use crate::asn1::{
     ticket_flags::TicketFlags,
     Ia5String, OctetString,
 };
-use crate::constants::{AES_256_KEY_LEN, PKBDF2_SHA1_ITER, RFC_PKBDF2_SHA1_ITER};
+use crate::constants::{
+    AES_256_KEY_LEN, PBKDF2_SHA1_ITER, PBKDF2_SHA1_ITER_MINIMUM, RFC_PBKDF2_SHA1_ITER,
+};
 use crate::crypto::{
     checksum_hmac_sha1_96_aes256, decrypt_aes256_cts_hmac_sha1_96,
     derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
@@ -72,13 +74,19 @@ impl DerivedKey {
         }
     }
 
-    pub fn new_aes256_cts_hmac_sha1_96(passphrase: &str, salt: &str) -> Result<Self, KrbError> {
+    pub fn new_aes256_cts_hmac_sha1_96(
+        passphrase: &str,
+        salt: &str,
+        iter_count: Option<u32>,
+    ) -> Result<Self, KrbError> {
         if passphrase.len() < 16 {
             // Due to how the cryptography of KRB works, we need to ensure not only that the password
             // is long, but also that the pkbdf2 rounds is high.
             return Err(KrbError::InsecurePassphrase);
         }
-        let iter_count = PKBDF2_SHA1_ITER;
+        let iter_count = iter_count
+            .unwrap_or(PBKDF2_SHA1_ITER)
+            .clamp(PBKDF2_SHA1_ITER_MINIMUM, u32::MAX);
 
         derive_key_aes256_cts_hmac_sha1_96(passphrase.as_bytes(), salt.as_bytes(), iter_count).map(
             |k| DerivedKey::Aes256CtsHmacSha196 {
@@ -135,7 +143,7 @@ impl DerivedKey {
 
                 let salt = salt.unwrap_or_else(|| format!("{}{}", realm, username));
 
-                let iter_count = iter_count.unwrap_or(RFC_PKBDF2_SHA1_ITER);
+                let iter_count = iter_count.unwrap_or(RFC_PBKDF2_SHA1_ITER);
 
                 derive_key_aes256_cts_hmac_sha1_96(
                     passphrase.as_bytes(),
@@ -177,7 +185,7 @@ impl DerivedKey {
                     u32::from_be_bytes(iter_count)
                 } else {
                     // Assume the insecure default rfc value.
-                    RFC_PKBDF2_SHA1_ITER
+                    RFC_PBKDF2_SHA1_ITER
                 };
 
                 derive_key_aes256_cts_hmac_sha1_96(
@@ -1493,6 +1501,7 @@ pub async fn get_tgt(
 #[cfg(test)]
 mod tests {
     use super::SessionKey;
+    use crate::constants::PBKDF2_SHA1_ITER_MINIMUM;
     use assert_hex::assert_eq_hex;
     use der::{asn1::Any, Decode};
 
@@ -1525,6 +1534,11 @@ mod tests {
         use super::DerivedKey;
 
         let _ = tracing_subscriber::fmt::try_init();
-        let _ = DerivedKey::new_aes256_cts_hmac_sha1_96("a-secure-password", "salt").unwrap();
+        let _ = DerivedKey::new_aes256_cts_hmac_sha1_96(
+            "a-secure-password",
+            "salt",
+            Some(PBKDF2_SHA1_ITER_MINIMUM),
+        )
+        .unwrap();
     }
 }

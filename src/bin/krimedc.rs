@@ -345,7 +345,8 @@ impl From<Config> for ServerState {
             .map(|UserPrincipal { name, password }| {
                 let salt = format!("{}{}", realm, name);
 
-                let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt).unwrap();
+                let base_key =
+                    DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None).unwrap();
 
                 let princ_name = Name::principal(&name, &realm);
 
@@ -369,7 +370,7 @@ impl From<Config> for ServerState {
                     let princ_name = Name::service(&srvname, &hostname, &realm);
 
                     let base_key =
-                        DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt).unwrap();
+                        DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None).unwrap();
 
                     (
                         princ_name,
