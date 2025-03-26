@@ -24,7 +24,7 @@ use crate::asn1::{
     transited_encoding::TransitedEncoding,
     Ia5String, OctetString,
 };
-use crate::constants::PKBDF2_SHA1_ITER;
+use crate::constants::PBKDF2_SHA1_ITER;
 use crate::error::KrbError;
 use crate::proto::ms_pac::AdWin2kPac;
 use der::{flagset::FlagSet, Decode, Encode};
@@ -116,7 +116,7 @@ pub struct KerberosReplyTicketRenewBuilder {
 
 impl KerberosReply {
     pub fn preauth_builder(service: Name, stime: SystemTime) -> KerberosReplyPreauthBuilder {
-        let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;
+        let aes256_cts_hmac_sha1_96_iter_count: u32 = PBKDF2_SHA1_ITER;
         KerberosReplyPreauthBuilder {
             pa_fx_cookie: None,
             aes256_cts_hmac_sha1_96_iter_count,
@@ -132,7 +132,7 @@ impl KerberosReply {
         time_bounds: AuthenticationTimeBound,
         nonce: i32,
     ) -> KerberosReplyAuthenticationBuilder {
-        let aes256_cts_hmac_sha1_96_iter_count: u32 = PKBDF2_SHA1_ITER;
+        let aes256_cts_hmac_sha1_96_iter_count: u32 = PBKDF2_SHA1_ITER;
 
         let mut flags = FlagSet::<TicketFlags>::new(0b0).expect("Failed to build FlagSet");
         if time_bounds.renew_until().is_some() {
@@ -1012,7 +1012,18 @@ impl TryFrom<KdcRep> for KerberosReply {
                 }))
             }
             KrbMessageType::KrbTgsRep => {
-                unimplemented!();
+                let enc_part = EncryptedData::try_from(rep.enc_part)?;
+                trace!(?enc_part);
+
+                let client_name = (rep.cname, rep.crealm).try_into()?;
+
+                let ticket = EncTicket::try_from(rep.ticket)?;
+
+                Ok(KerberosReply::TGS(TicketGrantReply {
+                    client_name,
+                    enc_part,
+                    ticket,
+                }))
             }
             _ => Err(KrbError::InvalidMessageDirection),
         }

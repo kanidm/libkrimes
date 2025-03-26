@@ -459,7 +459,7 @@ pub(crate) fn checksum_hmac_sha1_96_aes256(
 mod tests {
     use super::*;
     use crate::asn1::pa_enc_ts_enc::PaEncTsEnc;
-    use crate::constants::{AES_256_KEY_LEN, RFC_PKBDF2_SHA1_ITER};
+    use crate::constants::{AES_256_KEY_LEN, RFC_PBKDF2_SHA1_ITER};
     use assert_hex::assert_eq_hex;
     use der::Decode;
 
@@ -468,7 +468,7 @@ mod tests {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "Minnie1234".as_bytes(),
             "KINGDOM.HEARTSmickey".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -527,7 +527,7 @@ mod tests {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "admin".as_bytes(),
             "admin1234".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -556,7 +556,7 @@ mod tests {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
             "test1234".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -585,7 +585,7 @@ mod tests {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
             "test1234".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -605,7 +605,7 @@ mod tests {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
             "test1234".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -626,7 +626,7 @@ mod tests {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
             "test1234".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -647,7 +647,7 @@ mod tests {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "test".as_bytes(),
             "test1234".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
@@ -671,7 +671,7 @@ mod tests {
         let out_key = derive_key_aes256_cts_hmac_sha1_96(
             "password".as_bytes(),
             "EXAMPLE.COMtestuser_preauth".as_bytes(),
-            RFC_PKBDF2_SHA1_ITER,
+            RFC_PBKDF2_SHA1_ITER,
         )
         .unwrap();
 
