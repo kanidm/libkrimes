@@ -413,7 +413,8 @@ impl SessionKey {
         match self {
             SessionKey::Aes256CtsHmacSha196 { k } => {
                 let checksum = checksum_hmac_sha1_96_aes256(data, k, key_usage)?;
-                let checksum = OctetString::new(checksum).expect("Failed to create OctetString");
+                let checksum =
+                    OctetString::new(checksum).map_err(|_| KrbError::DerEncodeOctetString)?;
                 let checksum = Checksum {
                     checksum_type: 16, // RFC 3962
                     checksum,
