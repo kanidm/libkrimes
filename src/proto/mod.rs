@@ -1525,6 +1525,6 @@ mod tests {
         use super::DerivedKey;
 
         let _ = tracing_subscriber::fmt::try_init();
-        let _ = DerivedKey::new_aes256_cts_hmac_sha1_96("password", "salt").unwrap();
+        let _ = DerivedKey::new_aes256_cts_hmac_sha1_96("a-secure-password", "salt").unwrap();
     }
 }

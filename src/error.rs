@@ -62,6 +62,7 @@ pub enum KrbError {
     PrincipalNameInvalidComponents,
     PrincipalNameInvalidType,
 
+    CredentialCacheError,
     UnsupportedCredentialCacheType,
     UnsupportedKeytabType,
 
