@@ -228,6 +228,18 @@ impl KerberosReply {
         })
     }
 
+    pub fn error_request_failed_validation(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KrbErrGeneric,
+            service,
+            error_text: Some(
+                "The Kerberos Client sent a request that was cryptographically invalid."
+                    .to_string(),
+            ),
+            stime,
+        })
+    }
+
     pub fn error_no_etypes(service: Name, stime: SystemTime) -> KerberosReply {
         KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KdcErrEtypeNosupp,
@@ -417,17 +429,23 @@ impl KerberosReplyAuthenticationBuilder {
         let session_key = SessionKey::new();
         let session_key: KdcEncryptionKey = session_key.try_into()?;
 
-        let (cname, crealm) = (&self.client).try_into().unwrap();
-        let (server_name, server_realm) = (&self.server).try_into().unwrap();
+        let (cname, crealm) = (&self.client).try_into()?;
+        let (server_name, server_realm) = (&self.server).try_into()?;
 
-        let auth_time = KerberosTime::from_system_time(self.time_bounds.auth_time()).unwrap();
-        let start_time =
-            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
-        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
+        let auth_time = KerberosTime::from_system_time(self.time_bounds.auth_time())
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
+        let start_time = Some(
+            KerberosTime::from_system_time(self.time_bounds.start_time())
+                .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+        );
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time())
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
         let renew_till = self
             .time_bounds
             .renew_until()
-            .map(|t| KerberosTime::from_system_time(t).unwrap());
+            .map(KerberosTime::from_system_time)
+            .transpose()
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
 
         let enc_kdc_rep_part = EncKdcRepPart {
             key: session_key.clone(),
@@ -450,7 +468,7 @@ impl KerberosReplyAuthenticationBuilder {
         let transited = TransitedEncoding {
             tr_type: 1,
             // Since no transit has occured, we record an empty str.
-            contents: OctetString::new(b"").unwrap(),
+            contents: OctetString::new(b"").map_err(|_| KrbError::DerEncodeOctetString)?,
         };
 
         let ticket_inner = EncTicketPart {
@@ -496,13 +514,17 @@ impl KerberosReplyTicketGrantBuilder {
         let service_session_key = SessionKey::new();
         let service_session_key: KdcEncryptionKey = service_session_key.try_into()?;
 
-        let (cname, crealm) = (&self.ticket.client_name).try_into().unwrap();
-        let (server_name, server_realm) = (&self.service_name).try_into().unwrap();
+        let (cname, crealm) = (&self.ticket.client_name).try_into()?;
+        let (server_name, server_realm) = (&self.service_name).try_into()?;
 
-        let auth_time = KerberosTime::from_system_time(self.ticket.auth_time).unwrap();
-        let start_time =
-            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
-        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
+        let auth_time = KerberosTime::from_system_time(self.ticket.auth_time)
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
+        let start_time = Some(
+            KerberosTime::from_system_time(self.time_bounds.start_time())
+                .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+        );
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time())
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
 
         let renew_till = if let Some(renew_until) = self.time_bounds.renew_until() {
             self.flags |= TicketFlags::Renewable;
@@ -574,7 +596,7 @@ impl KerberosReplyTicketGrantBuilder {
         let transited = TransitedEncoding {
             tr_type: 1,
             // Since no transit has occured, we record an empty str.
-            contents: OctetString::new(b"").unwrap(),
+            contents: OctetString::new(b"").map_err(|_| KrbError::DerEncodeOctetString)?,
         };
 
         // EncTicketPart
@@ -614,15 +636,21 @@ impl KerberosReplyTicketGrantBuilder {
 
 impl KerberosReplyTicketRenewBuilder {
     pub fn build(self, primary_key: &KdcPrimaryKey) -> Result<KerberosReply, KrbError> {
-        let (cname, crealm) = (&self.ticket.client_name).try_into().unwrap();
-        let (server_name, server_realm) = (&self.service_name).try_into().unwrap();
+        let (cname, crealm) = (&self.ticket.client_name).try_into()?;
+        let (server_name, server_realm) = (&self.service_name).try_into()?;
 
-        let auth_time = KerberosTime::from_system_time(self.ticket.auth_time).unwrap();
-        let start_time =
-            Some(KerberosTime::from_system_time(self.time_bounds.start_time()).unwrap());
-        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time()).unwrap();
-        let renew_till =
-            Some(KerberosTime::from_system_time(self.time_bounds.renew_until()).unwrap());
+        let auth_time = KerberosTime::from_system_time(self.ticket.auth_time)
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
+        let start_time = Some(
+            KerberosTime::from_system_time(self.time_bounds.start_time())
+                .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+        );
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time())
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
+        let renew_till = Some(
+            KerberosTime::from_system_time(self.time_bounds.renew_until())
+                .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+        );
 
         let session_key: KdcEncryptionKey = self.ticket.session_key.clone().try_into()?;
 
@@ -663,7 +691,7 @@ impl KerberosReplyTicketRenewBuilder {
         let transited = TransitedEncoding {
             tr_type: 1,
             // Since no transit has occured, we record an empty str.
-            contents: OctetString::new(b"").unwrap(),
+            contents: OctetString::new(b"").map_err(|_| KrbError::DerEncodeOctetString)?,
         };
 
         // EncTicketPart
@@ -783,25 +811,30 @@ impl TryInto<KrbKdcRep> for KerberosReply {
             }) => {
                 let pa_data: Option<Vec<PaData>> = match pa_data {
                     Some(data) => {
-                        let etype_padata_vec: Vec<_> = data
+                        let etype_padata_vec = data
                             .etype_info2
                             .iter()
                             .map(|einfo| {
                                 let salt = einfo
                                     .salt
                                     .as_ref()
-                                    .map(|data| KerberosString(Ia5String::new(data).unwrap()));
+                                    .map(Ia5String::new)
+                                    .transpose()
+                                    .map_err(|_| KrbError::DerEncodeKerberosString)?
+                                    .map(KerberosString);
                                 let s2kparams = einfo
                                     .s2kparams
                                     .as_ref()
-                                    .map(|data| OctetString::new(data.to_owned()).unwrap());
-                                KdcETypeInfo2Entry {
+                                    .map(|data| OctetString::new(data.to_owned()))
+                                    .transpose()
+                                    .map_err(|_| KrbError::DerEncodeOctetString)?;
+                                Ok(KdcETypeInfo2Entry {
                                     etype: einfo.etype as i32,
                                     salt,
                                     s2kparams,
-                                }
+                                })
                             })
-                            .collect();
+                            .collect::<Result<Vec<_>, _>>()?;
 
                         let etype_padata_value = etype_padata_vec
                             .to_der()
@@ -861,26 +894,30 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                 let error_code = KrbErrorCode::KdcErrPreauthRequired as i32;
                 // The pre-auth data is stuffed into error_data. Because of course kerberos can't
                 // do nice things.
-                let etype_padata_vec: Vec<_> = pa_data
+                let etype_padata_vec = pa_data
                     .etype_info2
                     .iter()
                     .map(|einfo| {
                         let salt = einfo
                             .salt
                             .as_ref()
-                            .map(|data| KerberosString(Ia5String::new(data).unwrap()));
+                            .map(Ia5String::new)
+                            .transpose()
+                            .map_err(|_| KrbError::DerEncodeKerberosString)?
+                            .map(KerberosString);
                         let s2kparams = einfo
                             .s2kparams
                             .as_ref()
-                            .map(|data| OctetString::new(data.to_owned()).unwrap());
-
-                        KdcETypeInfo2Entry {
+                            .map(|data| OctetString::new(data.to_owned()))
+                            .transpose()
+                            .map_err(|_| KrbError::DerEncodeOctetString)?;
+                        Ok(KdcETypeInfo2Entry {
                             etype: einfo.etype as i32,
                             salt,
                             s2kparams,
-                        }
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 let etype_padata_value = etype_padata_vec
                     .to_der()
@@ -915,7 +952,8 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                     .map(|t| Duration::from_secs(t.as_secs()))
                     .unwrap_or_default();
 
-                let stime = KerberosTime::from_unix_duration(stime).unwrap();
+                let stime = KerberosTime::from_unix_duration(stime)
+                    .map_err(|_| KrbError::DerEncodeKerberosTime)?;
 
                 let (service_name, service_realm) = (&service).try_into()?;
 
@@ -955,7 +993,8 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                     .map(|t| Duration::from_secs(t.as_secs()))
                     .unwrap_or_default();
 
-                let stime = KerberosTime::from_unix_duration(stime).unwrap();
+                let stime = KerberosTime::from_unix_duration(stime)
+                    .map_err(|_| KrbError::DerEncodeKerberosTime)?;
 
                 let (service_name, service_realm) = (&service).try_into()?;
 

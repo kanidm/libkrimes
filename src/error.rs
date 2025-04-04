@@ -33,10 +33,12 @@ pub enum KrbError {
     DerEncodeEncKdcRepPart,
     DerEncodeOctetString,
     DerEncodeEncTicketPart,
+    DerEncodeAny,
     DerEncodeAuthenticator,
     DerDecodeAuthenticator,
     DerEncodeApReq,
     DerEncodeKdcReqBody,
+    DerDecodeKdcReqBody,
     DerEncodeKerberosString,
     DerEncodeKerberosTime,
     DerEncodeKrbErrorCode,
@@ -45,6 +47,9 @@ pub enum KrbError {
     PreauthMissingEtypeInfo2,
     PreauthInvalidUnixTs,
     PreauthInvalidS2KParams,
+
+    RequestTooLarge,
+    RequestIoRead,
 
     TgsMissingPaApReq,
     TgsInvalidPaApReq,

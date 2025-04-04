@@ -18,6 +18,7 @@
 
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
+use libkrime::error::KrbError;
 use libkrime::proto::{
     AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
     KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TicketGrantTimeBound,
@@ -186,9 +187,15 @@ async fn process_ticket_grant(
     tgs_req: &TicketGrantRequestUnverified,
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
+    let stime = SystemTime::now();
+
     let tgs_req_valid = tgs_req
         .validate(&server_state.primary_key, &server_state.realm)
-        .unwrap();
+        .map_err(|err| {
+            error!(?err, "Unable to validate tgs_req");
+            let service_name = Name::service_krbtgt(server_state.realm.as_str());
+            KerberosReply::error_request_failed_validation(service_name, stime)
+        })?;
 
     trace!(?tgs_req_valid);
 
@@ -200,8 +207,6 @@ async fn process_ticket_grant(
         // This is a renewal request for the users TGT
         return process_ticket_renewal(tgs_req_valid, server_state).await;
     }
-
-    let stime = SystemTime::now();
 
     // TODO!!!!!
     // =========
@@ -346,8 +351,10 @@ struct Config {
     service: Vec<ServicePrincipal>,
 }
 
-impl From<Config> for ServerState {
-    fn from(cr: Config) -> ServerState {
+impl TryFrom<Config> for ServerState {
+    type Error = KrbError;
+
+    fn try_from(cr: Config) -> Result<Self, Self::Error> {
         let Config {
             realm,
             address: _,
@@ -356,25 +363,24 @@ impl From<Config> for ServerState {
             service,
         } = cr;
 
-        let primary_key = KdcPrimaryKey::try_from(primary_key.as_slice()).unwrap();
+        let primary_key = KdcPrimaryKey::try_from(primary_key.as_slice())?;
 
         let principals = user
             .into_iter()
             .map(|UserPrincipal { name, password }| {
                 let salt = format!("{}{}", realm, name);
 
-                let base_key =
-                    DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None).unwrap();
+                let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None)?;
 
                 let princ_name = Name::principal(&name, &realm);
 
-                (
+                Ok((
                     princ_name,
                     PrincipalRecord {
                         service: false,
                         base_key,
                     },
-                )
+                ))
             })
             .chain(service.into_iter().map(
                 |ServicePrincipal {
@@ -387,19 +393,18 @@ impl From<Config> for ServerState {
 
                     let princ_name = Name::service(&srvname, &hostname, &realm);
 
-                    let base_key =
-                        DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None).unwrap();
+                    let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None)?;
 
-                    (
+                    Ok((
                         princ_name,
                         PrincipalRecord {
                             service: true,
                             base_key,
                         },
-                    )
+                    ))
                 },
             ))
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         let allowed_clock_skew = Duration::from_secs(300);
 
@@ -426,7 +431,7 @@ impl From<Config> for ServerState {
         // when we expire an account. Thought needed to what this value should be ...
         let service_granting_ticket_lifetime = Duration::from_secs(3600 * 8);
 
-        ServerState {
+        Ok(ServerState {
             realm,
             primary_key,
             principals,
@@ -436,7 +441,7 @@ impl From<Config> for ServerState {
 
             ticket_granting_ticket_lifetime,
             service_granting_ticket_lifetime,
-        }
+        })
     }
 }
 
@@ -466,7 +471,9 @@ async fn main_run(config: Config) -> io::Result<()> {
 
     info!("started krimedc on {}", config.address);
 
-    let server_state = Arc::new(ServerState::from(config));
+    let server_state = ServerState::try_from(config)
+        .map(Arc::new)
+        .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data"))?;
 
     loop {
         let (socket, info) = listener.accept().await?;
@@ -479,7 +486,9 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
     use libkrime::keytab::*;
     use std::fs::File;
 
-    let server_state = Arc::new(ServerState::from(config));
+    let server_state = ServerState::try_from(config)
+        .map(Arc::new)
+        .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data"))?;
 
     let principal_name = if let Some((srv, host)) = name.split_once('/') {
         Name::service(srv, host, server_state.realm.as_str())
@@ -487,9 +496,12 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
         Name::principal(name.as_str(), server_state.realm.as_str())
     };
 
-    let Some(principal_record) = server_state.principals.get(&principal_name) else {
-        todo!();
-    };
+    let principal_record = server_state
+        .principals
+        .get(&principal_name)
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "no matching principal")
+        })?;
 
     let key = principal_record.base_key.clone();
 
@@ -502,7 +514,8 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
 
     let kt = Keytab::File(vec![entry]);
     let mut f = File::create(output)?;
-    kt.write(&mut f).unwrap();
+    kt.write(&mut f)
+        .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "write"))?;
 
     Ok(())
 }

@@ -24,16 +24,14 @@ pub mod error;
 pub mod keytab;
 pub mod proto;
 
+use crate::asn1::{krb_kdc_rep::KrbKdcRep, krb_kdc_req::KrbKdcReq};
+use crate::constants::DEFAULT_IO_MAX_SIZE;
 use bytes::Buf;
 use bytes::BytesMut;
 use der::{Decode, Encode};
 use proto::{KerberosReply, KerberosRequest};
-use std::io::{self, Read};
+use std::io;
 use tokio_util::codec::{Decoder, Encoder};
-
-use crate::asn1::{krb_kdc_rep::KrbKdcRep, krb_kdc_req::KrbKdcReq};
-
-use crate::constants::DEFAULT_IO_MAX_SIZE;
 
 pub struct KdcTcpCodec {
     max_size: usize,
@@ -56,14 +54,6 @@ impl Decoder for KerberosTcpCodec {
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if buf.len() > self.max_size {
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "request limit",
-            ));
-        }
-
-        let mut reader = buf.reader();
         // XDR record marking (RFC1831):
         //   A record is composed of one or more fragments. Each fragment has a 32 bit
         //   header where the leftmost bit is a boolean indicating if this is the last
@@ -72,39 +62,60 @@ impl Decoder for KerberosTcpCodec {
         //   MIT does not set the end-of-record flag, assumes that a KRB PDU fits in a
         //   fragment, i.e, its length is always less that (2**31)-1.
         let mut xdr_hdr: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
-        let nread = reader.read(&mut xdr_hdr)?;
-        if nread == 0 {
-            // Connection closed
+
+        if buf.len() < 4 {
+            // We need exactly 4 bytes to proceed.
             return Ok(None);
         }
 
+        let (buf_xdr_hdr, data) = buf.split_at(4);
+
+        xdr_hdr.copy_from_slice(buf_xdr_hdr);
+
         // Reset end-of-record flag before parsing header into record length
         xdr_hdr[0] &= 0xEF;
+        let xdr_record_len = u32::from_be_bytes(xdr_hdr) as usize;
 
-        let xdr_record_len = u32::from_be_bytes(xdr_hdr);
-        let mut xdr_record_buf = vec![0; xdr_record_len as usize];
-        reader.read_exact(&mut xdr_record_buf)?;
+        if xdr_record_len > self.max_size {
+            // The requested record size is too large, fail. This prevents
+            // denial of service attacks by requesting huge buffers.
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "request limit",
+            ));
+        }
 
-        let krb_kdc_rep = KrbKdcRep::from_der(&xdr_record_buf)
-            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))?;
+        if data.len() < xdr_record_len {
+            // We need more data to proceed, the buffer hasn't filled yet.
+            return Ok(None);
+        }
 
-        buf.clear();
+        let (xdr_record_buf, _remainder) = data.split_at(xdr_record_len);
+
+        let krb_kdc_rep = KrbKdcRep::from_der(xdr_record_buf)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+
+        // Now, finally indicate that the buffer can advance, as we have completed
+        // our reads.
+        buf.advance(4 + xdr_record_len);
 
         KerberosReply::try_from(krb_kdc_rep)
             .map(Some)
-            .map_err(|_err| io::Error::new(io::ErrorKind::InvalidData, "Data"))
+            .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data"))
     }
 }
 
 impl Encoder<KerberosRequest> for KerberosTcpCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, msg: KerberosRequest, buf: &mut BytesMut) -> io::Result<()> {
-        let req: KrbKdcReq = (&msg).try_into().unwrap();
+    fn encode(&mut self, msg: KerberosRequest, buf: &mut BytesMut) -> Result<(), Self::Error> {
+        let req: KrbKdcReq = (&msg)
+            .try_into()
+            .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data"))?;
 
         let der_bytes = req
             .to_der()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
 
         // XDR record marking (RFC1831):
         //   A record is composed of one or more fragments. Each fragment has a 32 bit
@@ -137,15 +148,6 @@ impl Decoder for KdcTcpCodec {
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if buf.len() > self.max_size {
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "request limit",
-            ));
-        }
-
-        let mut reader = buf.reader();
-
         // XDR record marking (RFC1831):
         //   A record is composed of one or more fragments. Each fragment has a 32 bit
         //   header where the leftmost bit is a boolean indicating if this is the last
@@ -154,27 +156,46 @@ impl Decoder for KdcTcpCodec {
         //   MIT does not set the end-of-record flag, assumes that a KRB PDU fits in a
         //   fragment, i.e, its length is always less that (2**31)-1.
         let mut xdr_hdr: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
-        let nread = reader.read(&mut xdr_hdr)?;
-        if nread == 0 {
-            // Connection closed
+
+        if buf.len() < 4 {
+            // We need exactly 4 bytes to proceed.
             return Ok(None);
         }
 
+        let (buf_xdr_hdr, data) = buf.split_at(4);
+
+        xdr_hdr.copy_from_slice(buf_xdr_hdr);
+
         // Reset end-of-record flag before parsing header into record length
         xdr_hdr[0] &= 0xEF;
+        let xdr_record_len = u32::from_be_bytes(xdr_hdr) as usize;
 
-        let xdr_record_len = u32::from_be_bytes(xdr_hdr);
-        let mut xdr_record_buf = vec![0; xdr_record_len as usize];
-        reader.read_exact(&mut xdr_record_buf)?;
+        if xdr_record_len > self.max_size {
+            // The requested record size is too large, fail. This prevents
+            // denial of service attacks by requesting huge buffers.
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "request limit",
+            ));
+        }
 
-        let krb_kdc_req = KrbKdcReq::from_der(&xdr_record_buf)
-            .map_err(|x| io::Error::new(io::ErrorKind::InvalidData, x.to_string()))?;
+        if data.len() < xdr_record_len {
+            // We need more data to proceed, the buffer hasn't filled yet.
+            return Ok(None);
+        }
 
-        buf.clear();
+        let (xdr_record_buf, _remainder) = data.split_at(xdr_record_len);
 
-        KerberosRequest::try_from(krb_kdc_req)
+        let krb_kdc_rep = KrbKdcReq::from_der(xdr_record_buf)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+
+        // Now, finally indicate that the buffer can advance, as we have completed
+        // our reads.
+        buf.advance(4 + xdr_record_len);
+
+        KerberosRequest::try_from(krb_kdc_rep)
             .map(Some)
-            .map_err(|_err| io::Error::new(io::ErrorKind::InvalidData, "Data"))
+            .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data"))
     }
 }
 
@@ -182,10 +203,13 @@ impl Encoder<KerberosReply> for KdcTcpCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: KerberosReply, buf: &mut BytesMut) -> io::Result<()> {
-        let krb_kdc_rep: KrbKdcRep = msg.try_into().unwrap();
+        let krb_kdc_rep: KrbKdcRep = msg
+            .try_into()
+            .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data"))?;
+
         let der_bytes = krb_kdc_rep
             .to_der()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
 
         // XDR record marking (RFC1831):
         //   A record is composed of one or more fragments. Each fragment has a 32 bit
