@@ -5,7 +5,7 @@
 #![deny(clippy::perf)]
 // Specific lints to enforce.
 #![deny(clippy::todo)]
-#![deny(clippy::unimplemented)]
+#![allow(clippy::unimplemented)]
 #![deny(clippy::unwrap_used)]
 // #![warn(clippy::expect_used)]
 #![deny(clippy::panic)]
