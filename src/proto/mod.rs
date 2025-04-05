@@ -1425,32 +1425,16 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
         match name_type {
             PrincipalNameType::NtPrincipal => {
                 // MIT KRB will encode services an NtPrinc, so check the length.
-                match name_string.len() {
-                    1 => {
-                        let name = name_string
-                            .first()
-                            .ok_or(KrbError::NameNumberOfComponents)?
-                            .into();
-
-                        Ok(Name::Principal { name, realm })
-                    }
-                    2 => {
-                        let service = name_string
-                            .first()
-                            .ok_or(KrbError::NameNumberOfComponents)?
-                            .into();
-
-                        let host = name_string
-                            .get(1)
-                            .ok_or(KrbError::NameNumberOfComponents)?
-                            .into();
-
-                        Ok(Name::SrvPrincipal {
-                            service,
-                            host,
-                            realm,
-                        })
-                    }
+                match name_string.as_slice() {
+                    [name] => Ok(Name::Principal {
+                        name: name.to_string(),
+                        realm,
+                    }),
+                    [service, host] => Ok(Name::SrvPrincipal {
+                        service: service.to_string(),
+                        host: host.to_string(),
+                        realm,
+                    }),
                     _ => Err(KrbError::NameNumberOfComponents),
                 }
             }
@@ -1464,22 +1448,14 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                     realm,
                 })
             }
-            PrincipalNameType::NtSrvHst => {
-                let service = name_string
-                    .first()
-                    .ok_or(KrbError::NameNumberOfComponents)?
-                    .into();
-
-                let host = name_string
-                    .get(1)
-                    .ok_or(KrbError::NameNumberOfComponents)?
-                    .into();
-                Ok(Name::SrvHst {
-                    service,
-                    host,
+            PrincipalNameType::NtSrvHst => match name_string.as_slice() {
+                [service, host] => Ok(Name::SrvHst {
+                    service: service.to_string(),
+                    host: host.to_string(),
                     realm,
-                })
-            }
+                }),
+                _ => Err(KrbError::NameNumberOfComponents),
+            },
             _ => Err(KrbError::PrincipalNameInvalidType),
         }
     }

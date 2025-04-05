@@ -296,7 +296,7 @@ mod tests {
                     }
                     _ => {
                         // default_keytab_name from config file
-                        todo!()
+                        todo!("Handle default keytab name from config file")
                     }
                 },
             };
@@ -407,7 +407,7 @@ mod tests {
                     assert!(key_version_u32.is_none());
                 }
                 _ => {
-                    assert!(false);
+                    panic!("This should never happen");
                 }
             }
         }
@@ -435,7 +435,7 @@ mod tests {
                     assert_eq!(key_version_u32.unwrap(), kvs[i]);
                 }
                 _ => {
-                    assert!(false);
+                    panic!("This should never happen");
                 }
             }
         }

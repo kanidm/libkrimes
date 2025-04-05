@@ -371,15 +371,14 @@ mod tests {
         assert!(response.is_ok());
         let response = response.unwrap();
 
-        let (_service, pa_data) = match response {
-            KerberosReply::PA(PreauthReply {
-                service,
-                pa_data,
-                stime: _,
-            }) => (service, pa_data),
-            _ => unreachable!(),
+        let KerberosReply::PA(PreauthReply {
+            service: _service,
+            pa_data,
+            stime: _,
+        }) = response
+        else {
+            unreachable!()
         };
-
         // The PA-ENC-TIMESTAMP method MUST be supported by
         // clients, but whether it is enabled by default MAY be determined on
         // a realm-by-realm basis.
@@ -407,7 +406,9 @@ mod tests {
                 .expect("Failed to derive user key");
 
         let now = SystemTime::now();
-        let seconds_since_epoch = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
+        let seconds_since_epoch = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("Failed to convert value");
 
         let client_name = Name::principal("testuser_preauth", "EXAMPLE.COM");
         let as_req = KerberosRequest::build_as(
@@ -457,7 +458,11 @@ mod tests {
             .await
             .expect("Failed to transmit request");
 
-        let response = krb_stream.next().await.unwrap().unwrap();
+        let response = krb_stream
+            .next()
+            .await
+            .expect("failed to run response")
+            .expect("failed to get response");
 
         trace!(?response);
         assert!(matches!(response, KerberosReply::AS(_)));
