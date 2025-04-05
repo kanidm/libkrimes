@@ -283,8 +283,8 @@ impl TicketGrantRequestBuilder {
         kdc_options |= KerberosFlags::Renewable;
         kdc_options |= KerberosFlags::Canonicalize;
 
-        let (_, realm) = (&service_name).try_into().unwrap();
-        let sname = (&service_name).try_into().unwrap();
+        let (_, realm) = (&service_name).try_into()?;
+        let sname = (&service_name).try_into()?;
 
         let req_body = KdcReqBody {
             kdc_options,
@@ -310,7 +310,7 @@ impl TicketGrantRequestBuilder {
             additional_tickets: None,
         };
 
-        let req_body = Any::encode_from(&req_body).unwrap();
+        let req_body = Any::encode_from(&req_body).map_err(|_| KrbError::DerEncodeAny)?;
 
         //  The checksum in the authenticator is to be computed over the KDC-REQ-BODY encoding.
         let checksum = ap_req_builder
@@ -447,7 +447,9 @@ impl TicketGrantRequestUnverified {
             return Err(KrbError::TgsAuthChecksumFailure);
         }
 
-        let req_body = req_body.decode_as::<KdcReqBody>().unwrap();
+        let req_body = req_body
+            .decode_as::<KdcReqBody>()
+            .map_err(|_| KrbError::DerDecodeKdcReqBody)?;
 
         trace!(?req_body);
 
@@ -648,8 +650,8 @@ impl TryInto<KrbKdcReq> for &KerberosRequest {
                     None
                 };
 
-                let (cname, realm) = (&auth_req.client_name).try_into().unwrap();
-                let sname = (&auth_req.service_name).try_into().unwrap();
+                let (cname, realm) = (&auth_req.client_name).try_into()?;
+                let sname = (&auth_req.service_name).try_into()?;
 
                 let req_body = KdcReqBody {
                     kdc_options: auth_req.kdc_options,
@@ -684,7 +686,7 @@ impl TryInto<KrbKdcReq> for &KerberosRequest {
                     additional_tickets: None,
                 };
 
-                let req_body = Any::encode_from(&req_body).unwrap();
+                let req_body = Any::encode_from(&req_body).map_err(|_| KrbError::DerEncodeAny)?;
 
                 Ok(KrbKdcReq::AsReq(KdcReq {
                     pvno: 5,
@@ -750,7 +752,10 @@ impl TryFrom<KdcReq> for KerberosRequest {
 
         match msg_type {
             KrbMessageType::KrbAsReq => {
-                let req_body = req.req_body.decode_as::<KdcReqBody>().unwrap();
+                let req_body = req
+                    .req_body
+                    .decode_as::<KdcReqBody>()
+                    .map_err(|_| KrbError::DerDecodeKdcReqBody)?;
 
                 // Filter and use only the finest of etypes.
                 let etypes = req_body
@@ -778,7 +783,7 @@ impl TryFrom<KdcReq> for KerberosRequest {
                 let cname = req_body.cname.ok_or(KrbError::MissingClientName)?;
                 let realm = req_body.realm;
 
-                let client_name: Name = (cname, realm).try_into().unwrap();
+                let client_name: Name = (cname, realm).try_into()?;
 
                 // Is realm from .realm? In the service? Who knows! The krb spec is cooked.
                 let service_name: Name = req_body

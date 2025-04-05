@@ -1080,34 +1080,24 @@ impl TryInto<Realm> for &Name {
 
     fn try_into(self) -> Result<Realm, KrbError> {
         match self {
-            Name::Principal { name: _, realm } => {
-                let realm = KerberosString(Ia5String::new(realm).unwrap());
-                Ok(realm)
-            }
-            Name::SrvPrincipal {
+            Name::Principal { name: _, realm }
+            | Name::SrvPrincipal {
                 service: _,
                 host: _,
                 realm,
-            } => {
-                let realm = KerberosString(Ia5String::new(realm).unwrap());
-                Ok(realm)
             }
-            Name::SrvInst {
+            | Name::SrvInst {
                 service: _,
                 instance: _,
                 realm,
-            } => {
-                let realm = KerberosString(Ia5String::new(realm).unwrap());
-                Ok(realm)
             }
-            Name::SrvHst {
+            | Name::SrvHst {
                 service: _,
                 host: _,
                 realm,
-            } => {
-                let realm = KerberosString(Ia5String::new(realm).unwrap());
-                Ok(realm)
-            }
+            } => Ia5String::new(realm)
+                .map(KerberosString)
+                .map_err(|_| KrbError::DerEncodeKerberosString),
         }
     }
 }
@@ -1118,7 +1108,9 @@ impl TryInto<PrincipalName> for &Name {
     fn try_into(self) -> Result<PrincipalName, KrbError> {
         match self {
             Name::Principal { name, realm: _ } => {
-                let name_string = vec![KerberosString(Ia5String::new(name).unwrap())];
+                let name_string = vec![Ia5String::new(name)
+                    .map(KerberosString)
+                    .map_err(|_| KrbError::DerEncodeKerberosString)?];
 
                 Ok(PrincipalName {
                     name_type: PrincipalNameType::NtPrincipal as i32,
@@ -1131,8 +1123,12 @@ impl TryInto<PrincipalName> for &Name {
                 realm: _,
             } => {
                 let name_string = vec![
-                    KerberosString(Ia5String::new(&service).unwrap()),
-                    KerberosString(Ia5String::new(&host).unwrap()),
+                    Ia5String::new(service)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                    Ia5String::new(host)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
                 ];
 
                 Ok(PrincipalName {
@@ -1145,14 +1141,21 @@ impl TryInto<PrincipalName> for &Name {
                 instance,
                 realm: _,
             } => {
-                let primary: Vec<KerberosString> =
-                    vec![KerberosString(Ia5String::new(&service).unwrap())];
-                let instance: Vec<KerberosString> = instance
-                    .iter()
-                    .map(|x| KerberosString(Ia5String::new(x).unwrap()))
-                    .collect();
-                let name_string: Vec<KerberosString> =
-                    vec![primary, instance].into_iter().flatten().collect();
+                let mut name_string = Vec::with_capacity(instance.len() + 1);
+
+                name_string.push(
+                    Ia5String::new(service)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                );
+
+                for item in instance.iter() {
+                    name_string.push(
+                        Ia5String::new(item)
+                            .map(KerberosString)
+                            .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                    );
+                }
 
                 Ok(PrincipalName {
                     name_type: PrincipalNameType::NtSrvInst as i32,
@@ -1165,8 +1168,12 @@ impl TryInto<PrincipalName> for &Name {
                 realm: _,
             } => {
                 let name_string = vec![
-                    KerberosString(Ia5String::new(service).unwrap()),
-                    KerberosString(Ia5String::new(host).unwrap()),
+                    Ia5String::new(service)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                    Ia5String::new(host)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
                 ];
 
                 Ok(PrincipalName {
@@ -1184,8 +1191,13 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
     fn try_into(self) -> Result<(PrincipalName, Realm), KrbError> {
         match self {
             Name::Principal { name, realm } => {
-                let name_string = vec![KerberosString(Ia5String::new(&name).unwrap())];
-                let realm = KerberosString(Ia5String::new(realm).unwrap());
+                let name_string = vec![Ia5String::new(name)
+                    .map(KerberosString)
+                    .map_err(|_| KrbError::DerEncodeKerberosString)?];
+
+                let realm = Ia5String::new(realm)
+                    .map(KerberosString)
+                    .map_err(|_| KrbError::DerEncodeKerberosString)?;
 
                 Ok((
                     PrincipalName {
@@ -1201,10 +1213,17 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
                 realm,
             } => {
                 let name_string = vec![
-                    KerberosString(Ia5String::new(&service).unwrap()),
-                    KerberosString(Ia5String::new(&host).unwrap()),
+                    Ia5String::new(service)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                    Ia5String::new(host)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
                 ];
-                let realm = KerberosString(Ia5String::new(realm).unwrap());
+
+                let realm = Ia5String::new(realm)
+                    .map(KerberosString)
+                    .map_err(|_| KrbError::DerEncodeKerberosString)?;
 
                 Ok((
                     PrincipalName {
@@ -1219,15 +1238,26 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
                 instance,
                 realm,
             } => {
-                let primary: Vec<KerberosString> =
-                    vec![KerberosString(Ia5String::new(&service).unwrap())];
-                let instance: Vec<KerberosString> = instance
-                    .iter()
-                    .map(|x| KerberosString(Ia5String::new(x).unwrap()))
-                    .collect();
-                let name_string: Vec<KerberosString> =
-                    vec![primary, instance].into_iter().flatten().collect();
-                let realm = KerberosString(Ia5String::new(realm).unwrap());
+                let mut name_string = Vec::with_capacity(instance.len() + 1);
+
+                name_string.push(
+                    Ia5String::new(service)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                );
+
+                for item in instance.iter() {
+                    name_string.push(
+                        Ia5String::new(item)
+                            .map(KerberosString)
+                            .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                    );
+                }
+
+                let realm = Ia5String::new(realm)
+                    .map(KerberosString)
+                    .map_err(|_| KrbError::DerEncodeKerberosString)?;
+
                 Ok((
                     PrincipalName {
                         name_type: PrincipalNameType::NtSrvInst as i32,
@@ -1242,10 +1272,17 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
                 realm,
             } => {
                 let name_string = vec![
-                    KerberosString(Ia5String::new(&service).unwrap()),
-                    KerberosString(Ia5String::new(&host).unwrap()),
+                    Ia5String::new(service)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                    Ia5String::new(host)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
                 ];
-                let realm = KerberosString(Ia5String::new(realm).unwrap());
+
+                let realm = Ia5String::new(realm)
+                    .map(KerberosString)
+                    .map_err(|_| KrbError::DerEncodeKerberosString)?;
 
                 Ok((
                     PrincipalName {
@@ -1390,12 +1427,24 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 // MIT KRB will encode services an NtPrinc, so check the length.
                 match name_string.len() {
                     1 => {
-                        let name = name_string.first().unwrap().into();
+                        let name = name_string
+                            .first()
+                            .ok_or(KrbError::NameNumberOfComponents)?
+                            .into();
+
                         Ok(Name::Principal { name, realm })
                     }
                     2 => {
-                        let service = name_string.first().unwrap().into();
-                        let host = name_string.get(1).unwrap().into();
+                        let service = name_string
+                            .first()
+                            .ok_or(KrbError::NameNumberOfComponents)?
+                            .into();
+
+                        let host = name_string
+                            .get(1)
+                            .ok_or(KrbError::NameNumberOfComponents)?
+                            .into();
+
                         Ok(Name::SrvPrincipal {
                             service,
                             host,
@@ -1406,7 +1455,9 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 }
             }
             PrincipalNameType::NtSrvInst => {
-                let (service, instance) = name_string.split_first().unwrap();
+                let (service, instance) = name_string
+                    .split_first()
+                    .ok_or(KrbError::NameNumberOfComponents)?;
                 Ok(Name::SrvInst {
                     service: service.into(),
                     instance: instance.iter().map(|x| x.into()).collect(),
@@ -1414,8 +1465,15 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 })
             }
             PrincipalNameType::NtSrvHst => {
-                let service = name_string.first().unwrap().into();
-                let host = name_string.get(1).unwrap().into();
+                let service = name_string
+                    .first()
+                    .ok_or(KrbError::NameNumberOfComponents)?
+                    .into();
+
+                let host = name_string
+                    .get(1)
+                    .ok_or(KrbError::NameNumberOfComponents)?
+                    .into();
                 Ok(Name::SrvHst {
                     service,
                     host,
