@@ -1439,6 +1439,7 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 }
             }
             PrincipalNameType::NtSrvInst => {
+                #[allow(clippy::expect_used)]
                 let (service, instance) = name_string
                     .split_first()
                     .ok_or(KrbError::NameNumberOfComponents)?;

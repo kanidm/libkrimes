@@ -294,6 +294,7 @@ mod tests {
                         let p = PathBuf::from(p);
                         File::open(p).expect("Unable to open file")
                     }
+                    #[allow(clippy::todo)]
                     _ => {
                         // default_keytab_name from config file
                         todo!("Handle default keytab name from config file")
@@ -315,6 +316,7 @@ mod tests {
                         let p = PathBuf::from(p);
                         File::create(p).expect("Unable to create file")
                     }
+                    #[allow(clippy::todo)]
                     _ => {
                         // default_keytab_name from config file
                         todo!()
@@ -392,9 +394,8 @@ mod tests {
         let kvs_wrap = [1, 255, 0, 250];
         assert_eq!(mit_keytab.records.len(), kvs_wrap.len());
 
-        for i in 0..3 {
-            let e = &mit_keytab.records[i];
-            match e.rdata {
+        for (index, entry) in mit_keytab.records.iter().enumerate().take(3) {
+            match entry.rdata {
                 RecordData::Entry {
                     principal: _,
                     timestamp: _,
@@ -403,7 +404,7 @@ mod tests {
                     key: _,
                     key_version_u32,
                 } => {
-                    assert_eq!(key_version_u8, kvs_wrap[i]);
+                    assert_eq!(key_version_u8, kvs_wrap[index]);
                     assert!(key_version_u32.is_none());
                 }
                 _ => {
