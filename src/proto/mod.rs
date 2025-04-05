@@ -40,7 +40,7 @@ use crate::crypto::{
 };
 use crate::error::KrbError;
 use der::{asn1::Any, flagset::FlagSet, Decode, Encode};
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::cmp::Ordering;
 use std::fmt;
 use std::time::{Duration, SystemTime};
@@ -340,7 +340,7 @@ impl TryFrom<KdcEncryptionKey> for SessionKey {
 impl SessionKey {
     fn new() -> Self {
         let mut k = [0u8; AES_256_KEY_LEN];
-        thread_rng().fill(&mut k);
+        rng().fill(&mut k);
         SessionKey::Aes256CtsHmacSha196 { k }
     }
 

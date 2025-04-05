@@ -17,7 +17,7 @@ use std::env;
 use std::time::Duration;
 use std::time::SystemTime;
 use tracing::error;
-use users::get_current_uid;
+use uzers::get_current_uid;
 
 /* TODO:
  *   - Handle cache conf entries. CredentialCache::new() could take a KV pair collection
