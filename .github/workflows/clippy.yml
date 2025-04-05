@@ -36,5 +36,6 @@ jobs:
           sudo apt-get install -y krb5-user
       - name: "Run tests"
         run: |
+          export
           rustup default stable
           cargo test --all-targets --all-features
