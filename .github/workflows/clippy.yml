@@ -1,0 +1,24 @@
+---
+name: Clippy
+
+# Trigger the workflow on push or pull request
+"on":
+  push:
+  pull_request:
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: "Run clippy"
+        run: cargo clippy --all-targets --all-features
