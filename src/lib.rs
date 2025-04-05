@@ -242,11 +242,17 @@ mod tests {
     use super::KerberosTcpCodec;
     use crate::proto::{AuthenticationReply, DerivedKey, KerberosRequest, Name, PreauthReply};
     use futures::StreamExt;
-    use tracing::trace;
+    use tracing::{trace, warn};
 
     #[tokio::test]
     async fn test_localhost_kdc_no_preauth() {
         let _ = tracing_subscriber::fmt::try_init();
+
+        if std::env::var("CI") == Ok("1".to_string()) {
+            // Skip this test in CI, as it requires a KDC running on localhost
+            warn!("Skipping test_localhost_kdc_no_preauth in CI");
+            return;
+        }
 
         let stream = TcpStream::connect("127.0.0.1:55000")
             .await
@@ -339,6 +345,12 @@ mod tests {
     #[tokio::test]
     async fn test_localhost_kdc_preauth() {
         let _ = tracing_subscriber::fmt::try_init();
+
+        if std::env::var("CI") == Ok("1".to_string()) {
+            // Skip this test in CI, as it requires a KDC running on localhost
+            warn!("Skipping test_localhost_kdc_preauth in CI");
+            return;
+        }
 
         let stream = TcpStream::connect("127.0.0.1:55000")
             .await

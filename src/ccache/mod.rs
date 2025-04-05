@@ -368,6 +368,8 @@ pub fn destroy(ccache_name: Option<&str>) -> Result<(), KrbError> {
 
 #[cfg(test)]
 mod tests {
+    use tracing::warn;
+
     use super::*;
     use std::process::Command;
     #[cfg(feature = "keyring")]
@@ -375,6 +377,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_ccache_file_store() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+        if std::env::var("CI") == Ok("1".to_string()) {
+            // Skip this test in CI, as it requires a KDC running on localhost
+            warn!("Skipping test_ccache_file_store in CI");
+            return Ok(());
+        }
+
         let (name, ticket, kdc_reply_part) =
             crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
 

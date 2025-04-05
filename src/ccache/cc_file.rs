@@ -171,6 +171,7 @@ mod tests {
     use binrw::BinReaderExt;
     use binrw::BinWrite;
     use std::time::Duration;
+    use tracing::warn;
 
     impl FileCredentialCache {
         pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
@@ -202,6 +203,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_ccache_file_write() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+        if std::env::var("CI") == Ok("1".to_string()) {
+            // Skip this test in CI, as it requires a KDC running on localhost
+            warn!("Skipping test_ccache_file_write in CI");
+            return Ok(());
+        }
+
         let (name, ticket, kdc_reply) =
             crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
 
