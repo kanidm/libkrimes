@@ -501,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ccache_keyring() -> Result<(), KrbError> {
-        if std::env::var("CI") == Ok("1".to_string()) {
+        if std::env::var("CI").is_ok() {
             // Skip this test in CI, as it requires a KDC running on localhost
             tracing::warn!("Skipping test_ccache_keyring in CI");
             return Ok(());

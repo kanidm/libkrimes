@@ -248,7 +248,7 @@ mod tests {
     async fn test_localhost_kdc_no_preauth() {
         let _ = tracing_subscriber::fmt::try_init();
 
-        if std::env::var("CI") == Ok("1".to_string()) {
+        if std::env::var("CI").is_ok() {
             // Skip this test in CI, as it requires a KDC running on localhost
             warn!("Skipping test_localhost_kdc_no_preauth in CI");
             return;
@@ -346,7 +346,7 @@ mod tests {
     async fn test_localhost_kdc_preauth() {
         let _ = tracing_subscriber::fmt::try_init();
 
-        if std::env::var("CI") == Ok("1".to_string()) {
+        if std::env::var("CI").is_ok() {
             // Skip this test in CI, as it requires a KDC running on localhost
             warn!("Skipping test_localhost_kdc_preauth in CI");
             return;

@@ -378,7 +378,7 @@ mod tests {
     #[tokio::test]
     async fn test_ccache_file_store() -> Result<(), KrbError> {
         let _ = tracing_subscriber::fmt::try_init();
-        if std::env::var("CI") == Ok("1".to_string()) {
+        if std::env::var("CI").is_ok() {
             // Skip this test in CI, as it requires a KDC running on localhost
             warn!("Skipping test_ccache_file_store in CI");
             return Ok(());
@@ -420,7 +420,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "keyring")]
     async fn test_ccache_keyring_store() -> Result<(), KrbError> {
-        if std::env::var("CI") == Ok("1".to_string()) {
+        if std::env::var("CI").is_ok() {
             // Skip this test in CI, as it requires a KDC running on localhost
             warn!("Skipping get_tgt in CI");
             return Ok(());

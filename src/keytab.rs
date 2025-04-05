@@ -456,7 +456,7 @@ mod tests {
         let path = path.to_str().expect("Failed to convert path to string");
         keytab.store(Some(PathBuf::from(path)));
 
-        if std::env::var("CI") != Ok("1".to_string()) {
+        if std::env::var("CI").is_ok() {
             // Skip klist check on CI
 
             if which::which("klist").is_err() {
