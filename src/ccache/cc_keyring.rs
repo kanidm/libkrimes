@@ -82,7 +82,7 @@ use keyutils::keytypes::user::User;
 use keyutils::SpecialKeyring;
 use keyutils::{Key, Keyring};
 use libc;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, Rng};
 use std::time::Duration;
 use tracing::error;
 
