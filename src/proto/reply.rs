@@ -834,7 +834,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                                     s2kparams,
                                 })
                             })
-                            .collect::<Result<Vec<_>, _>>()?;
+                            .collect::<Result<Vec<_>, KrbError>>()?;
 
                         let etype_padata_value = etype_padata_vec
                             .to_der()
@@ -905,6 +905,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                             .transpose()
                             .map_err(|_| KrbError::DerEncodeKerberosString)?
                             .map(KerberosString);
+
                         let s2kparams = einfo
                             .s2kparams
                             .as_ref()
@@ -917,7 +918,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                             s2kparams,
                         })
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<KdcETypeInfo2Entry>, KrbError>>()?;
 
                 let etype_padata_value = etype_padata_vec
                     .to_der()

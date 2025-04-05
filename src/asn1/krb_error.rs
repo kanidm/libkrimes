@@ -123,7 +123,7 @@ mod tests {
         assert_eq!(
             e.0.stime,
             KerberosTime::from_date_time(
-                DateTime::new(2024, 06, 12, 11, 48, 05).expect("Failed to build datetime")
+                DateTime::new(2024, 6, 12, 11, 48, 5).expect("Failed to build datetime")
             )
         );
         assert_eq!(e.0.susec, 121958);
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(
             e.0.stime,
             KerberosTime::from_date_time(
-                DateTime::new(2024, 06, 12, 11, 48, 05).expect("Failed to build datetime")
+                DateTime::new(2024, 6, 12, 11, 48, 5).expect("Failed to build datetime")
             )
         );
         assert_eq!(e.0.susec, 121958);

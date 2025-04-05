@@ -54,7 +54,9 @@ mod tests {
 
         match message {
             KrbKdcRep::AsRep(asrep) => trace!(?asrep),
-            KrbKdcRep::TgsRep(_) | KrbKdcRep::ErrRep(_) => todo!(),
+            KrbKdcRep::TgsRep(_) | KrbKdcRep::ErrRep(_) => {
+                unimplemented!("TGS and Err not implemented")
+            }
         }
     }
 }
