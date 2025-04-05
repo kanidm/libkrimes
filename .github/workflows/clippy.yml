@@ -21,4 +21,20 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
       - name: "Run clippy"
-        run: cargo clippy --all-targets --all-features
+        run: |
+          rustup default stable
+          cargo clippy --all-targets --all-features
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Install klist for testint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y krb5-user
+      - name: "Run tests"
+        run: |
+          rustup default stable
+          cargo test --all-targets --all-features

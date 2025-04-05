@@ -199,7 +199,7 @@ fn subsidiary_exists(collection: &Keyring, name: &str) -> Result<Option<Keyring>
 /// Generates a valid random subsidiary name.
 fn get_random_subsidiary_name(collection: &mut Keyring) -> Result<String, KrbError> {
     for _ in 1..10 {
-        let s: String = rand::thread_rng()
+        let s: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(7)
             .map(char::from)
@@ -501,6 +501,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_ccache_keyring() -> Result<(), KrbError> {
+        if std::env::var("CI") == Ok("1".to_string()) {
+            // Skip this test in CI, as it requires a KDC running on localhost
+            tracing::warn!("Skipping test_ccache_keyring in CI");
+            return Ok(());
+        }
+
         let (name, ticket, kdc_reply_part) =
             crate::proto::get_tgt("testuser1", "EXAMPLE.COM", "password").await?;
         super::store(

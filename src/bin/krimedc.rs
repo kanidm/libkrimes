@@ -404,7 +404,7 @@ impl TryFrom<Config> for ServerState {
                     ))
                 },
             ))
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<_, KrbError>>()?;
 
         let allowed_clock_skew = Duration::from_secs(300);
 
