@@ -1296,18 +1296,10 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
     }
 }
 
-impl TryFrom<PrincipalName> for Name {
+impl TryFrom<(&PrincipalName, &Realm)> for Name {
     type Error = KrbError;
 
-    fn try_from(princ: PrincipalName) -> Result<Self, Self::Error> {
-        Self::try_from(&princ)
-    }
-}
-
-impl TryFrom<&PrincipalName> for Name {
-    type Error = KrbError;
-
-    fn try_from(princ: &PrincipalName) -> Result<Self, Self::Error> {
+    fn try_from((princ, realm): (&PrincipalName, &Realm)) -> Result<Self, Self::Error> {
         let PrincipalName {
             name_type,
             name_string,
@@ -1319,100 +1311,6 @@ impl TryFrom<&PrincipalName> for Name {
         })?;
 
         trace!(?name_type, ?name_string);
-
-        match name_type {
-            PrincipalNameType::NtPrincipal => match name_string.len() {
-                2 => {
-                    let name = name_string
-                        .first()
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-
-                    let realm = name_string
-                        .get(1)
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-                    Ok(Name::Principal { name, realm })
-                }
-                3 => {
-                    let service = name_string
-                        .first()
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-
-                    let host = name_string
-                        .get(1)
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-
-                    let realm = name_string
-                        .get(2)
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-
-                    Ok(Name::SrvPrincipal {
-                        service,
-                        host,
-                        realm,
-                    })
-                }
-                _ => Err(KrbError::NameNumberOfComponents),
-            },
-            PrincipalNameType::NtSrvInst => {
-                let (service, instance) = name_string
-                    .split_first()
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)?;
-                let service: String = service.into();
-                let mut instance: Vec<String> = instance.iter().map(|x| x.into()).collect();
-                let realm: String = instance
-                    .pop()
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)?;
-                Ok(Name::SrvInst {
-                    service,
-                    instance,
-                    realm,
-                })
-            }
-            PrincipalNameType::NtSrvHst => {
-                let service = name_string
-                    .first()
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)
-                    .map(|krb_string| krb_string.to_string())?;
-
-                let host = name_string
-                    .get(1)
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)
-                    .map(|krb_string| krb_string.to_string())?;
-
-                let realm = name_string
-                    .get(2)
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)
-                    .map(|krb_string| krb_string.to_string())?;
-                Ok(Name::SrvHst {
-                    service,
-                    host,
-                    realm,
-                })
-            }
-            _ => Err(KrbError::PrincipalNameInvalidType),
-        }
-    }
-}
-
-impl TryFrom<(PrincipalName, Realm)> for Name {
-    type Error = KrbError;
-
-    fn try_from((princ, realm): (PrincipalName, Realm)) -> Result<Self, Self::Error> {
-        let PrincipalName {
-            name_type,
-            name_string,
-        } = princ;
-
-        let realm = String::from(&realm);
-        let name_type: PrincipalNameType = name_type.try_into().map_err(|err| {
-            error!(?err, ?name_type, "invalid principal name type");
-            KrbError::PrincipalNameInvalidType
-        })?;
 
         // IMPORTANT!!!!!
         // MIT KRB5 has a bug in it's KVNO tool that causes it to send NtSrvHst as
@@ -1428,12 +1326,12 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 match name_string.as_slice() {
                     [name] => Ok(Name::Principal {
                         name: name.to_string(),
-                        realm,
+                        realm: realm.into(),
                     }),
                     [service, host] => Ok(Name::SrvPrincipal {
                         service: service.to_string(),
                         host: host.to_string(),
-                        realm,
+                        realm: realm.into(),
                     }),
                     _ => Err(KrbError::NameNumberOfComponents),
                 }
@@ -1446,19 +1344,27 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 Ok(Name::SrvInst {
                     service: service.into(),
                     instance: instance.iter().map(|x| x.into()).collect(),
-                    realm,
+                    realm: realm.into(),
                 })
             }
             PrincipalNameType::NtSrvHst => match name_string.as_slice() {
                 [service, host] => Ok(Name::SrvHst {
                     service: service.to_string(),
                     host: host.to_string(),
-                    realm,
+                    realm: realm.into(),
                 }),
                 _ => Err(KrbError::NameNumberOfComponents),
             },
             _ => Err(KrbError::PrincipalNameInvalidType),
         }
+    }
+}
+
+impl TryFrom<(PrincipalName, Realm)> for Name {
+    type Error = KrbError;
+
+    fn try_from((princ, realm): (PrincipalName, Realm)) -> Result<Self, Self::Error> {
+        Self::try_from((&princ, &realm))
     }
 }
 
