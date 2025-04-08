@@ -20,7 +20,7 @@ use crate::asn1::{
 };
 use crate::error::KrbError;
 use der::{asn1::Any, flagset::FlagSet, Encode};
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use std::time::{Duration, SystemTime};
 use tracing::trace;
@@ -204,7 +204,7 @@ impl KerberosAuthenticationBuilder {
         // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
         // Heimdal for whatever reason will happily send negative values, so no idea
         // how they get away with it when we don't ....
-        let nonce: i32 = thread_rng().gen();
+        let nonce: i32 = rng().random();
         let nonce = nonce.abs();
 
         let preauth = preauth.unwrap_or_default();
@@ -273,7 +273,7 @@ impl TicketGrantRequestBuilder {
         // Jun 28 03:47:41 3e79497ab6b5 krb5kdc[1](Error): ASN.1 value too large - while dispatching (tcp)
         // Heimdal for whatever reason will happily send negative values, so no idea
         // how they get away with it when we don't ....
-        let nonce: i32 = thread_rng().gen();
+        let nonce: i32 = rng().random();
         let nonce = nonce.abs();
 
         // So far we don't use preauth-here

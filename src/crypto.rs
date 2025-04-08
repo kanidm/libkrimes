@@ -6,7 +6,7 @@ use aes::cipher::{BlockDecryptMut, BlockEncryptMut};
 use aes::Aes256;
 use hmac::{digest::FixedOutput, Hmac, Mac};
 use pbkdf2::pbkdf2_hmac;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use sha1::Sha1;
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
@@ -109,7 +109,7 @@ pub(crate) fn encrypt_aes256_cts_hmac_sha1_96(
     let (ki, ke) = dk_ki_ke_aes_256(key, key_usage);
 
     let mut confuzzler = [0u8; AES_BLOCK_SIZE];
-    thread_rng().fill(&mut confuzzler);
+    rng().fill(&mut confuzzler);
 
     // let mut mac = HmacSha1::new(ki.into());
     let mut mac = HmacSha1::new_from_slice(&ki).map_err(|_| KrbError::InvalidHmacSha1Key)?;
@@ -470,7 +470,7 @@ mod tests {
             "KINGDOM.HEARTSmickey".as_bytes(),
             RFC_PBKDF2_SHA1_ITER,
         )
-        .unwrap();
+        .expect("Failed to derive key for test_hmac_sha1_96_kerbeiros");
 
         assert_eq!(
             [

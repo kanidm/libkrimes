@@ -17,7 +17,7 @@ use std::env;
 use std::time::Duration;
 use std::time::SystemTime;
 use tracing::error;
-use users::get_current_uid;
+use uzers::get_current_uid;
 
 /* TODO:
  *   - Handle cache conf entries. CredentialCache::new() could take a KV pair collection
@@ -368,6 +368,8 @@ pub fn destroy(ccache_name: Option<&str>) -> Result<(), KrbError> {
 
 #[cfg(test)]
 mod tests {
+    use tracing::warn;
+
     use super::*;
     use std::process::Command;
     #[cfg(feature = "keyring")]
@@ -375,6 +377,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_ccache_file_store() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+        if std::env::var("CI").is_ok() {
+            // Skip this test in CI, as it requires a KDC running on localhost
+            warn!("Skipping test_ccache_file_store in CI");
+            return Ok(());
+        }
+
         let (name, ticket, kdc_reply_part) =
             crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
 
@@ -411,8 +420,13 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "keyring")]
     async fn test_ccache_keyring_store() -> Result<(), KrbError> {
-        let ccache_name = "KEYRING:session:abc";
+        if std::env::var("CI").is_ok() {
+            // Skip this test in CI, as it requires a KDC running on localhost
+            warn!("Skipping get_tgt in CI");
+            return Ok(());
+        }
 
+        let ccache_name = "KEYRING:session:abc";
         let (name, ticket, kdc_reply_part) =
             crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
         super::store(&name, &ticket, &kdc_reply_part, None, Some(ccache_name))?;

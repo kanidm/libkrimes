@@ -1,0 +1,41 @@
+---
+name: Clippy
+
+# Trigger the workflow on push or pull request
+"on":
+  push:
+  pull_request:
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: "Run clippy"
+        run: |
+          rustup default stable
+          cargo clippy --all-targets --all-features
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Install klist for testint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y krb5-user
+      - name: "Run tests"
+        run: |
+          export
+          rustup default stable
+          cargo test --all-targets --all-features

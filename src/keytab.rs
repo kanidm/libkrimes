@@ -275,6 +275,7 @@ mod tests {
     use std::io::Read;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
+    use tracing::warn;
 
     impl FileKeytab {
         pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
@@ -294,9 +295,10 @@ mod tests {
                         let p = PathBuf::from(p);
                         File::open(p).expect("Unable to open file")
                     }
+                    #[allow(clippy::todo)]
                     _ => {
                         // default_keytab_name from config file
-                        todo!()
+                        todo!("Handle default keytab name from config file")
                     }
                 },
             };
@@ -315,6 +317,7 @@ mod tests {
                         let p = PathBuf::from(p);
                         File::create(p).expect("Unable to create file")
                     }
+                    #[allow(clippy::todo)]
                     _ => {
                         // default_keytab_name from config file
                         todo!()
@@ -392,9 +395,8 @@ mod tests {
         let kvs_wrap = [1, 255, 0, 250];
         assert_eq!(mit_keytab.records.len(), kvs_wrap.len());
 
-        for i in 0..3 {
-            let e = &mit_keytab.records[i];
-            match e.rdata {
+        for (index, entry) in mit_keytab.records.iter().enumerate().take(3) {
+            match entry.rdata {
                 RecordData::Entry {
                     principal: _,
                     timestamp: _,
@@ -403,11 +405,11 @@ mod tests {
                     key: _,
                     key_version_u32,
                 } => {
-                    assert_eq!(key_version_u8, kvs_wrap[i]);
+                    assert_eq!(key_version_u8, kvs_wrap[index]);
                     assert!(key_version_u32.is_none());
                 }
                 _ => {
-                    assert!(false);
+                    panic!("This should never happen");
                 }
             }
         }
@@ -435,7 +437,7 @@ mod tests {
                     assert_eq!(key_version_u32.unwrap(), kvs[i]);
                 }
                 _ => {
-                    assert!(false);
+                    panic!("This should never happen");
                 }
             }
         }
@@ -443,12 +445,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_keytab_store_load() {
+        let _ = tracing_subscriber::fmt::try_init();
         let buf = "05020000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeff010012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000010000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeffff0012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000ff0000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeff000012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000001000000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeffd20012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b499602d2";
         let buf = hex::decode(buf).expect("Failed to decode sample");
         let keytab = FileKeytab::read(&buf).expect("Failed to read from buffer");
 
-        let path = "/tmp/krime.keytab";
+        let path = tempfile::NamedTempFile::new()
+            .expect("Failed to create temporary file")
+            .into_temp_path();
+        let path = path.to_str().expect("Failed to convert path to string");
         keytab.store(Some(PathBuf::from(path)));
+
+        if std::env::var("CI").is_ok() {
+            // Skip klist check on CI
+
+            if which::which("klist").is_err() {
+                panic!("klist not found, can't continue test");
+            }
+        } else if which::which("klist").is_err() {
+            warn!("Skipping klist check on CI as it's not installed");
+            return;
+        }
 
         let status = Command::new("klist")
             .stdout(Stdio::null())

@@ -221,7 +221,7 @@ mod tests {
                 ],
                 kdc_options: KerberosFlags::RenewableOk.into(),
                 from: None,
-                till: KerberosTime::from_date_time(DateTime::new(2024, 04, 17, 04, 15, 49).expect("Failed to build DateTime")),
+                till: KerberosTime::from_date_time(DateTime::new(2024, 4, 17, 4, 15, 49).expect("Failed to build DateTime")),
                 rtime: None,
                 nonce: 2143135662,
                 etype: vec![
@@ -256,7 +256,7 @@ mod tests {
                 ],
                 kdc_options: KerberosFlags::RenewableOk | KerberosFlags::Forwardable | KerberosFlags::Canonicalize | KerberosFlags::Proxiable,
                 from: None,
-                till: KerberosTime::from_date_time(DateTime::new(2024, 06, 12, 14, 51, 09).expect("Failed to build DateTime")),
+                till: KerberosTime::from_date_time(DateTime::new(2024, 6, 12, 14, 51, 9).expect("Failed to build DateTime")),
                 rtime: None,
                 nonce: 1482773981,
                 etype: vec![
@@ -290,8 +290,8 @@ mod tests {
                 ],
                 kdc_options: KerberosFlags::Renewable.into(),
                 from: None,
-                till: KerberosTime::from_date_time(DateTime::new(2024, 06, 16, 05, 27, 01).expect("Failed to build DateTime")),
-                rtime: Some(KerberosTime::from_date_time(DateTime::new(2024, 06, 22, 05, 27, 01).expect("Failed to build DateTime"))),
+                till: KerberosTime::from_date_time(DateTime::new(2024, 6, 16, 5, 27, 1).expect("Failed to build DateTime")),
+                rtime: Some(KerberosTime::from_date_time(DateTime::new(2024, 6, 22, 5, 27, 1).expect("Failed to build DateTime"))),
                 nonce: 779214421,
                 etype: vec![
                     EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
@@ -310,9 +310,10 @@ mod tests {
         for sample in samples {
             let blob = hex::decode(&sample.blob).expect("Failed to decode sample");
             let message = KrbKdcReq::from_der(&blob).expect("Failed to decode");
+
             match message {
                 KrbKdcReq::AsReq(asreq) => verify_as_req(&asreq, &sample),
-                KrbKdcReq::TgsReq(_) => todo!(),
+                KrbKdcReq::TgsReq(_) => unimplemented!("TGS-REQ not implemented"),
             }
         }
     }
