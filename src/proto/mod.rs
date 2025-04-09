@@ -463,7 +463,7 @@ impl KdcPrimaryKey {
             .to_der()
             .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
 
-        let key_usage = 3;
+        let key_usage = 2;
 
         match self {
             KdcPrimaryKey::Aes256 { k } => {
@@ -758,7 +758,7 @@ impl EncryptedData {
         &self,
         primary_key: &KdcPrimaryKey,
     ) -> Result<EncTicketPart, KrbError> {
-        let key_usage = 3;
+        let key_usage = 2;
 
         let data = match (self, primary_key) {
             (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, KdcPrimaryKey::Aes256 { k }) => {
