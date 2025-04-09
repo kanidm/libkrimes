@@ -841,17 +841,10 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                             .and_then(OctetString::new)
                             .map_err(|_| KrbError::DerEncodeOctetString)?;
 
-                        let pavec = vec![
-                            PaData {
-                                padata_type: PaDataType::PaEncTimestamp as u32,
-                                padata_value: OctetString::new([])
-                                    .map_err(|_| KrbError::DerEncodeOctetString)?,
-                            },
-                            PaData {
-                                padata_type: PaDataType::PaEtypeInfo2 as u32,
-                                padata_value: etype_padata_value,
-                            },
-                        ];
+                        let pavec = vec![PaData {
+                            padata_type: PaDataType::PaEtypeInfo2 as u32,
+                            padata_value: etype_padata_value,
+                        }];
                         Some(pavec)
                     }
                     None => None,
