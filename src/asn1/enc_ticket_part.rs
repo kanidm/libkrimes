@@ -67,11 +67,13 @@ impl TaggedEncTicketPart {
 impl FixedTag for TaggedEncTicketPart {
     const TAG: Tag = Tag::Application {
         constructed: true,
-        number: TagNumber::N3,
+        number: TagNumber(3),
     };
 }
 
 impl<'a> DecodeValue<'a> for TaggedEncTicketPart {
+    type Error = der::Error;
+
     fn decode_value<R: der::Reader<'a>>(reader: &mut R, _header: der::Header) -> der::Result<Self> {
         let t: EncTicketPart = EncTicketPart::decode(reader)?;
         Ok(Self(t))

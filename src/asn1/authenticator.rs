@@ -125,11 +125,13 @@ impl Authenticator {
 impl FixedTag for Authenticator {
     const TAG: Tag = Tag::Application {
         constructed: true,
-        number: TagNumber::N2,
+        number: TagNumber(2),
     };
 }
 
 impl<'a> DecodeValue<'a> for Authenticator {
+    type Error = der::Error;
+
     fn decode_value<R: der::Reader<'a>>(reader: &mut R, _header: der::Header) -> der::Result<Self> {
         let inner: AuthenticatorInner = AuthenticatorInner::decode(reader)?;
         Ok(Self(inner))

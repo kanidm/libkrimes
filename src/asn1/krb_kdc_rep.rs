@@ -18,6 +18,8 @@ pub(crate) enum KrbKdcRep {
 }
 
 impl<'a> ::der::Decode<'a> for KrbKdcRep {
+    type Error = der::Error;
+
     fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
         let tag: der::Tag = decoder.decode()?;
         let _len: der::Length = decoder.decode()?;
@@ -25,21 +27,21 @@ impl<'a> ::der::Decode<'a> for KrbKdcRep {
         match tag {
             Tag::Application {
                 constructed: true,
-                number: TagNumber::N11,
+                number: TagNumber(11),
             } => {
                 let kdc_rep: KdcRep = decoder.decode()?;
                 Ok(KrbKdcRep::AsRep(kdc_rep))
             }
             Tag::Application {
                 constructed: true,
-                number: TagNumber::N13,
+                number: TagNumber(13),
             } => {
                 let kdc_rep: KdcRep = decoder.decode()?;
                 Ok(KrbKdcRep::TgsRep(kdc_rep))
             }
             Tag::Application {
                 constructed: true,
-                number: TagNumber::N30,
+                number: TagNumber(30),
             } => {
                 let err_rep: KrbError = decoder.decode()?;
                 Ok(KrbKdcRep::ErrRep(err_rep))
@@ -58,7 +60,7 @@ impl ::der::Encode for KrbKdcRep {
             KrbKdcRep::AsRep(asrep) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N11,
+                    number: TagNumber(11),
                 }
                 .encoded_len()?
                     + asrep.encoded_len()?
@@ -67,7 +69,7 @@ impl ::der::Encode for KrbKdcRep {
             KrbKdcRep::TgsRep(tgsrep) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N13,
+                    number: TagNumber(13),
                 }
                 .encoded_len()?
                     + tgsrep.encoded_len()?
@@ -76,7 +78,7 @@ impl ::der::Encode for KrbKdcRep {
             KrbKdcRep::ErrRep(err_rep) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N30,
+                    number: TagNumber(30),
                 }
                 .encoded_len()?
                     + err_rep.encoded_len()?
@@ -91,7 +93,7 @@ impl ::der::Encode for KrbKdcRep {
             KrbKdcRep::AsRep(asrep) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N11,
+                    number: TagNumber(11),
                 }
                 .encode(writer)?;
                 asrep.encoded_len()?.encode(writer)?;
@@ -100,7 +102,7 @@ impl ::der::Encode for KrbKdcRep {
             KrbKdcRep::TgsRep(tgsrep) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N13,
+                    number: TagNumber(13),
                 }
                 .encode(writer)?;
                 tgsrep.encoded_len()?.encode(writer)?;
@@ -109,7 +111,7 @@ impl ::der::Encode for KrbKdcRep {
             KrbKdcRep::ErrRep(err_rep) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N30,
+                    number: TagNumber(30),
                 }
                 .encode(writer)?;
                 err_rep.encoded_len()?.encode(writer)?;

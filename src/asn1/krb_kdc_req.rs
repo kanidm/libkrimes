@@ -12,6 +12,8 @@ pub(crate) enum KrbKdcReq {
 }
 
 impl<'a> ::der::Decode<'a> for KrbKdcReq {
+    type Error = der::Error;
+
     fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
         let tag: der::Tag = decoder.decode()?;
         let _len: der::Length = decoder.decode()?;
@@ -19,14 +21,14 @@ impl<'a> ::der::Decode<'a> for KrbKdcReq {
         match tag {
             Tag::Application {
                 constructed: true,
-                number: TagNumber::N10,
+                number: TagNumber(10),
             } => {
                 let kdc_req: KdcReq = decoder.decode()?;
                 Ok(KrbKdcReq::AsReq(kdc_req))
             }
             Tag::Application {
                 constructed: true,
-                number: TagNumber::N12,
+                number: TagNumber(12),
             } => {
                 let kdc_req: KdcReq = decoder.decode()?;
                 Ok(KrbKdcReq::TgsReq(kdc_req))
@@ -46,7 +48,7 @@ impl ::der::Encode for KrbKdcReq {
             KrbKdcReq::AsReq(asreq) => {
                 let tag_len = Tag::Application {
                     constructed: true,
-                    number: TagNumber::N10,
+                    number: TagNumber(10),
                 }
                 .encoded_len()?;
 
@@ -60,7 +62,7 @@ impl ::der::Encode for KrbKdcReq {
             KrbKdcReq::TgsReq(tgsreq) => {
                 let tag_len = Tag::Application {
                     constructed: true,
-                    number: TagNumber::N12,
+                    number: TagNumber(12),
                 }
                 .encoded_len()?;
 
@@ -80,7 +82,7 @@ impl ::der::Encode for KrbKdcReq {
             KrbKdcReq::AsReq(asreq) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N10,
+                    number: TagNumber(10),
                 }
                 .encode(writer)?;
                 asreq.encoded_len()?.encode(writer)?;
@@ -89,7 +91,7 @@ impl ::der::Encode for KrbKdcReq {
             KrbKdcReq::TgsReq(tgsreq) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N12,
+                    number: TagNumber(12),
                 }
                 .encode(writer)?;
                 tgsreq.encoded_len()?.encode(writer)?;
