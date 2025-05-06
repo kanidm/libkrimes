@@ -16,7 +16,7 @@ use crate::asn1::checksum::Checksum;
 use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
-    enc_kdc_rep_part::EncKdcRepPart,
+    enc_kdc_rep_part::EncKdcRepPart as Asn1EncKdcRepPart,
     enc_ticket_part::{EncTicketPart, TaggedEncTicketPart},
     encrypted_data::EncryptedData as KdcEncryptedData,
     encryption_key::EncryptionKey as KdcEncryptionKey,
@@ -224,7 +224,7 @@ impl DerivedKey {
 
     pub(crate) fn encrypt_as_rep_part(
         &self,
-        enc_kdc_rep_part: EncKdcRepPart,
+        enc_kdc_rep_part: Asn1EncKdcRepPart,
     ) -> Result<(EtypeInfo2, EncryptedData), KrbError> {
         let data = TaggedEncKdcRepPart::EncAsRepPart(enc_kdc_rep_part)
             .to_der()
@@ -362,7 +362,7 @@ impl SessionKey {
 
     pub(crate) fn encrypt_tgs_rep_part(
         &self,
-        enc_kdc_rep_part: EncKdcRepPart,
+        enc_kdc_rep_part: Asn1EncKdcRepPart,
         is_sub_session_key: bool,
     ) -> Result<EncryptedData, KrbError> {
         let data = TaggedEncKdcRepPart::EncTgsRepPart(enc_kdc_rep_part)
@@ -909,10 +909,10 @@ impl Ticket {
     }
 }
 
-impl TryFrom<EncKdcRepPart> for KdcReplyPart {
+impl TryFrom<Asn1EncKdcRepPart> for KdcReplyPart {
     type Error = KrbError;
 
-    fn try_from(enc_kdc_rep_part: EncKdcRepPart) -> Result<Self, Self::Error> {
+    fn try_from(enc_kdc_rep_part: Asn1EncKdcRepPart) -> Result<Self, Self::Error> {
         trace!(?enc_kdc_rep_part);
 
         let key = SessionKey::try_from(enc_kdc_rep_part.key)?;
