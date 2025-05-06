@@ -133,4 +133,19 @@ $ KRB5_TRACE=/dev/stdout KRB5_CONFIG=$(pwd)/kdc_test/krb5.conf kvno HOST/localho
 * MacOS will only use kerberos to an SMB share, if the SMB share is discovered via avahi/bonjour.
 
 
+## Run samba krb5 testsuite
+
+Run the KrimeDC:
+
+```
+$ cargo run --bin krimedc run $(pwd)/examples/krime.conf
+```
+
+Run the samba tests:
+
+```
+```
+SERVER="127.0.0.1:55000" DC_SERVER="127.0.0.1:55000" DOMAIN="EXAMPLE" REALM="EXAMPLE.COM" CLIENT_USERNAME="testuser" CLIENT_PASSWORD="a-secure-password" SERVICE_USERNAME="cifs" SERVICE_PASSWORD="a-secure-password" KRBTGT_KVNO=1 KRBTGT_AES256_KEY_HEX="db8bcc6e7a9ae76d720fda34ce1c7f222529f8550df7176eda2c22ffcfa6e478" ADMIN_USERNAME="administrator" ADMIN_PASSWORD="a-secure-password" SMB_CONF_PATH="/etc/samba/smb.conf" python3 python/samba/tests/krb5/kdc_tgt_tests.py
+```
+```
 
