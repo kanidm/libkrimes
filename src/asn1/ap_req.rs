@@ -47,11 +47,13 @@ impl ApReq {
 impl FixedTag for ApReq {
     const TAG: Tag = Tag::Application {
         constructed: true,
-        number: TagNumber::N14,
+        number: TagNumber(14),
     };
 }
 
 impl<'a> DecodeValue<'a> for ApReq {
+    type Error = der::Error;
+
     fn decode_value<R: der::Reader<'a>>(reader: &mut R, _header: der::Header) -> der::Result<Self> {
         let inner: ApReqInner = ApReqInner::decode(reader)?;
         Ok(Self(inner))

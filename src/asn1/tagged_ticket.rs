@@ -35,11 +35,13 @@ impl TaggedTicket {
 impl FixedTag for TaggedTicket {
     const TAG: Tag = Tag::Application {
         constructed: true,
-        number: TagNumber::N1,
+        number: TagNumber(1),
     };
 }
 
 impl<'a> DecodeValue<'a> for TaggedTicket {
+    type Error = der::Error;
+
     fn decode_value<R: der::Reader<'a>>(reader: &mut R, _header: der::Header) -> der::Result<Self> {
         let t: Ticket = Ticket::decode(reader)?;
         Ok(Self(t))

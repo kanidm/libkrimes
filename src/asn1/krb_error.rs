@@ -60,11 +60,13 @@ struct TaggedKrbError(KrbError);
 impl FixedTag for TaggedKrbError {
     const TAG: Tag = Tag::Application {
         constructed: true,
-        number: TagNumber::N30,
+        number: TagNumber(30),
     };
 }
 
 impl<'a> DecodeValue<'a> for TaggedKrbError {
+    type Error = der::Error;
+
     fn decode_value<R: der::Reader<'a>>(reader: &mut R, _header: der::Header) -> der::Result<Self> {
         let e: KrbError = KrbError::decode(reader)?;
         Ok(Self(e))

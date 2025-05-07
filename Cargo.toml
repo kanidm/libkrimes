@@ -27,7 +27,7 @@ tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
 
 # der = { version = "0.7.9", features = ["alloc", "derive"] }
-der = { git = "https://github.com/scabrero/formats.git", branch = "der-tag-generalstring", features = [
+der = { version = "0.8.0-rc.2", features = [
     "alloc",
     "derive",
     "flagset",

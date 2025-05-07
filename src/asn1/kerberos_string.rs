@@ -18,6 +18,8 @@ impl FixedTag for KerberosString {
 }
 
 impl<'a> DecodeValue<'a> for KerberosString {
+    type Error = der::Error;
+
     fn decode_value<R: der::Reader<'a>>(reader: &mut R, header: der::Header) -> der::Result<Self> {
         let r: Ia5String = der::asn1::Ia5String::decode_value(reader, header)?;
         Ok(Self(r))

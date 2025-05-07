@@ -12,6 +12,8 @@ pub(crate) enum TaggedEncKdcRepPart {
 }
 
 impl<'a> ::der::Decode<'a> for TaggedEncKdcRepPart {
+    type Error = der::Error;
+
     fn decode<R: der::Reader<'a>>(decoder: &mut R) -> der::Result<Self> {
         let tag: der::Tag = decoder.decode()?;
         let _len: der::Length = decoder.decode()?;
@@ -19,14 +21,14 @@ impl<'a> ::der::Decode<'a> for TaggedEncKdcRepPart {
         match tag {
             Tag::Application {
                 constructed: true,
-                number: TagNumber::N25,
+                number: TagNumber(25),
             } => {
                 let enc_kdc_rep_part: EncKdcRepPart = decoder.decode()?;
                 Ok(TaggedEncKdcRepPart::EncAsRepPart(enc_kdc_rep_part))
             }
             Tag::Application {
                 constructed: true,
-                number: TagNumber::N26,
+                number: TagNumber(26),
             } => {
                 let enc_kdc_rep_part: EncKdcRepPart = decoder.decode()?;
                 Ok(TaggedEncKdcRepPart::EncTgsRepPart(enc_kdc_rep_part))
@@ -45,7 +47,7 @@ impl ::der::Encode for TaggedEncKdcRepPart {
             TaggedEncKdcRepPart::EncAsRepPart(enc_as_rep_part) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N25,
+                    number: TagNumber(25),
                 }
                 .encoded_len()?
                     + enc_as_rep_part.encoded_len()?
@@ -54,7 +56,7 @@ impl ::der::Encode for TaggedEncKdcRepPart {
             TaggedEncKdcRepPart::EncTgsRepPart(enc_tgs_rep_part) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N26,
+                    number: TagNumber(26),
                 }
                 .encoded_len()?
                     + enc_tgs_rep_part.encoded_len()?
@@ -69,7 +71,7 @@ impl ::der::Encode for TaggedEncKdcRepPart {
             TaggedEncKdcRepPart::EncAsRepPart(enc_as_rep_part) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N25,
+                    number: TagNumber(25),
                 }
                 .encode(writer)?;
                 enc_as_rep_part.encoded_len()?.encode(writer)?;
@@ -78,7 +80,7 @@ impl ::der::Encode for TaggedEncKdcRepPart {
             TaggedEncKdcRepPart::EncTgsRepPart(enc_tgs_rep_part) => {
                 Tag::Application {
                     constructed: true,
-                    number: TagNumber::N26,
+                    number: TagNumber(26),
                 }
                 .encode(writer)?;
                 enc_tgs_rep_part.encoded_len()?.encode(writer)?;
