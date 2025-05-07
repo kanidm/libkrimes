@@ -1,10 +1,17 @@
 use crate::asn1::constants::encryption_types::EncryptionType;
+use crate::asn1::constants::PrincipalNameType;
 use crate::error::KrbError;
+use crate::keytab::{Keytab, KeytabEntry};
 use crate::proto::{DerivedKey, Name};
 use binrw::helpers::until_eof;
-use binrw::io::TakeSeekExt;
-use binrw::io::{Seek, SeekFrom, Write};
+use binrw::io::{SeekFrom, TakeSeekExt};
+//use binrw::io::{Seek, SeekFrom, Write};
+use binrw::BinReaderExt;
 use binrw::{binread, binwrite, BinWrite};
+//use std::env;
+use std::fs::File;
+use std::io::Read;
+//use std::path::PathBuf;
 use std::fmt;
 use tracing::error;
 
@@ -52,6 +59,140 @@ impl fmt::Debug for Principal {
     }
 }
 
+impl From<Name> for Principal {
+    fn from(value: Name) -> Self {
+        match value {
+            Name::Principal { name, realm } => Principal {
+                realm: Data {
+                    value: realm.as_bytes().to_vec(),
+                },
+                components: vec![Data {
+                    value: name.as_bytes().to_vec(),
+                }],
+                name_type: Some(PrincipalNameType::NtPrincipal as u32),
+            },
+            Name::SrvPrincipal {
+                service,
+                host,
+                realm,
+            } => Principal {
+                realm: Data {
+                    value: realm.as_bytes().to_vec(),
+                },
+                components: vec![
+                    Data {
+                        value: service.as_bytes().to_vec(),
+                    },
+                    Data {
+                        value: host.as_bytes().to_vec(),
+                    },
+                ],
+                name_type: Some(PrincipalNameType::NtSrvInst as u32),
+            },
+            Name::SrvInst {
+                service,
+                instance,
+                realm,
+            } => {
+                let mut c: Vec<Data> = vec![Data {
+                    value: service.as_bytes().to_vec(),
+                }];
+                c.extend(instance.iter().map(|x| Data {
+                    value: x.as_bytes().to_vec(),
+                }));
+                Principal {
+                    realm: Data {
+                        value: realm.as_bytes().to_vec(),
+                    },
+                    components: c,
+                    name_type: Some(PrincipalNameType::NtSrvInst as u32),
+                }
+            }
+            Name::SrvHst {
+                service,
+                host,
+                realm,
+            } => Principal {
+                realm: Data {
+                    value: realm.as_bytes().to_vec(),
+                },
+                components: vec![
+                    Data {
+                        value: service.as_bytes().to_vec(),
+                    },
+                    Data {
+                        value: host.as_bytes().to_vec(),
+                    },
+                ],
+                name_type: Some(PrincipalNameType::NtSrvHst as u32),
+            },
+        }
+    }
+}
+
+impl TryFrom<&Principal> for Name {
+    type Error = KrbError;
+
+    fn try_from(value: &Principal) -> Result<Self, Self::Error> {
+        match value.name_type {
+            Some(1 /* PrincipalNameType::NtPrincipal */) => {
+                let realm = String::from_utf8_lossy(&value.realm.value).to_string();
+                let name = &value
+                    .components
+                    .first()
+                    .ok_or(KrbError::PrincipalNameInvalidType)?
+                    .value;
+                let name = String::from_utf8_lossy(name).to_string();
+                Ok(Name::Principal { name, realm })
+            }
+            Some(2 /* PrincipalNameType::NtSrvInst */) => {
+                let realm = String::from_utf8_lossy(&value.realm.value).to_string();
+                let service = &value
+                    .components
+                    .first()
+                    .ok_or(KrbError::PrincipalNameInvalidType)?
+                    .value;
+                let service = String::from_utf8_lossy(service).to_string();
+
+                let host = &value
+                    .components
+                    .get(1)
+                    .ok_or(KrbError::PrincipalNameInvalidType)?
+                    .value;
+                let host = String::from_utf8_lossy(host).to_string();
+
+                Ok(Name::SrvPrincipal {
+                    service,
+                    host,
+                    realm,
+                })
+            }
+            Some(3 /* PrincipalNameType::NtSrvHst */) => {
+                let realm = String::from_utf8_lossy(&value.realm.value).to_string();
+                let service = &value
+                    .components
+                    .first()
+                    .ok_or(KrbError::PrincipalNameInvalidType)?
+                    .value;
+                let service = String::from_utf8_lossy(service).to_string();
+
+                let host = &value
+                    .components
+                    .get(1)
+                    .ok_or(KrbError::PrincipalNameInvalidType)?
+                    .value;
+                let host = String::from_utf8_lossy(host).to_string();
+
+                Ok(Name::SrvHst {
+                    service,
+                    host,
+                    realm,
+                })
+            }
+            _ => Err(KrbError::PrincipalNameInvalidType),
+        }
+    }
+}
 #[binread]
 #[binwrite]
 #[brw(big)]
@@ -77,6 +218,66 @@ enum RecordData {
         #[br(count = rlen.abs())]
         pad: Vec<u8>,
     },
+}
+
+impl From<&KeytabEntry> for RecordData {
+    fn from(value: &KeytabEntry) -> Self {
+        RecordData::Entry {
+            principal: value.principal.clone().into(),
+            // I think this is NOT 2038 safe and requires a version change ...
+            // indicates when the key was emitted to the keytab.
+            timestamp: value.timestamp,
+            // Needs to be 2, nfi why.
+            key_version_u8: value.kvno as u8,
+            enctype: match value.key {
+                DerivedKey::Aes256CtsHmacSha196 { k: _, i: _, s: _ } => {
+                    EncryptionType::AES256_CTS_HMAC_SHA1_96 as _
+                }
+            },
+            key: Data {
+                value: value.key.k(),
+            },
+            // Needs to be set?
+            key_version_u32: Some(value.kvno),
+        }
+    }
+}
+
+impl TryFrom<&RecordData> for Option<KeytabEntry> {
+    type Error = KrbError;
+
+    fn try_from(value: &RecordData) -> Result<Self, Self::Error> {
+        match value {
+            RecordData::Hole { pad: _ } => Ok(None),
+            RecordData::Entry {
+                principal,
+                timestamp,
+                key_version_u8,
+                enctype: _,
+                key,
+                key_version_u32,
+            } => {
+                let e = KeytabEntry {
+                    principal: principal.try_into()?,
+                    timestamp: *timestamp,
+                    key: DerivedKey::Aes256CtsHmacSha196 {
+                        k: key
+                            .value
+                            .as_slice()
+                            .try_into()
+                            .map_err(|_| KrbError::InvalidEncryptionKey)?,
+                        i: 0,
+                        s: String::new(),
+                    },
+                    kvno: match key_version_u32 {
+                        Some(v) => *v,
+                        None => (*key_version_u8) as u32,
+                    },
+                };
+                Ok(Some(e))
+            }
+        }
+    }
 }
 
 // Custom writer to seek back to fill the record length
@@ -126,207 +327,96 @@ enum FileKeytab {
     V2(FileKeytabV2),
 }
 
-/** External API **/
-pub struct KeytabEntry {
-    pub principal: Name,
-    pub key: DerivedKey,
-    pub timestamp: u32,
-    pub kvno: u32,
-}
-
-pub enum Keytab {
-    File(Vec<KeytabEntry>),
-}
-
-impl From<&KeytabEntry> for RecordData {
-    fn from(value: &KeytabEntry) -> Self {
-        RecordData::Entry {
-            principal: value.principal.clone().into(),
-            // I think this is NOT 2038 safe and requires a version change ...
-            // indicates when the key was emitted to the keytab.
-            timestamp: value.timestamp,
-            // Needs to be 2, nfi why.
-            key_version_u8: 0,
-            enctype: match value.key {
-                DerivedKey::Aes256CtsHmacSha196 { k: _, i: _, s: _ } => {
-                    EncryptionType::AES256_CTS_HMAC_SHA1_96 as _
-                }
-            },
-            key: Data {
-                value: value.key.k(),
-            },
-            // Needs to be set?
-            key_version_u32: Some(value.kvno),
-        }
-    }
-}
-
-impl From<Name> for Principal {
-    fn from(value: Name) -> Self {
-        match value {
-            Name::Principal { name, realm } => Principal {
-                realm: Data {
-                    value: realm.as_bytes().to_vec(),
-                },
-                components: vec![Data {
-                    value: name.as_bytes().to_vec(),
-                }],
-                name_type: Some(1),
-            },
-            Name::SrvPrincipal {
-                service,
-                host,
-                realm,
-            } => Principal {
-                realm: Data {
-                    value: realm.as_bytes().to_vec(),
-                },
-                components: vec![
-                    Data {
-                        value: service.as_bytes().to_vec(),
-                    },
-                    Data {
-                        value: host.as_bytes().to_vec(),
-                    },
-                ],
-                name_type: Some(1),
-            },
-            Name::SrvInst {
-                service,
-                instance,
-                realm,
-            } => {
-                let mut c: Vec<Data> = vec![Data {
-                    value: service.as_bytes().to_vec(),
-                }];
-                c.extend(instance.iter().map(|x| Data {
-                    value: x.as_bytes().to_vec(),
-                }));
-                Principal {
-                    realm: Data {
-                        value: realm.as_bytes().to_vec(),
-                    },
-                    components: c,
-                    name_type: Some(2),
-                }
-            }
-            Name::SrvHst {
-                service,
-                host,
-                realm,
-            } => Principal {
-                realm: Data {
-                    value: realm.as_bytes().to_vec(),
-                },
-                components: vec![
-                    Data {
-                        value: service.as_bytes().to_vec(),
-                    },
-                    Data {
-                        value: host.as_bytes().to_vec(),
-                    },
-                ],
-                name_type: Some(3),
-            },
-        }
-    }
-}
-
-impl Keytab {
-    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> Result<(), KrbError> {
-        match self {
-            Keytab::File(_) => {
-                let fk: FileKeytab = self.into();
-                fk.write(writer).map_err(|binrw_err| {
-                    error!(?binrw_err, "Unable to write binary data.");
-                    KrbError::BinRWError
-                })
-            }
-        }
-    }
-}
-
 impl From<&Keytab> for FileKeytab {
     fn from(value: &Keytab) -> Self {
+        let records: Vec<Record> = value
+            .iter()
+            .map(|x| {
+                let rdata: RecordData = x.into();
+                Record { rdata }
+            })
+            .collect();
+        let fk2: FileKeytabV2 = FileKeytabV2 { records };
+        FileKeytab::V2(fk2)
+    }
+}
+
+impl TryFrom<&FileKeytab> for Keytab {
+    type Error = KrbError;
+
+    fn try_from(value: &FileKeytab) -> Result<Self, Self::Error> {
         match value {
-            Keytab::File(entries) => {
-                let records: Vec<Record> = entries
-                    .iter()
-                    .map(|x| {
-                        let rdata: RecordData = x.into();
-                        Record { rdata }
-                    })
-                    .collect();
-                let fk2: FileKeytabV2 = FileKeytabV2 { records };
-                let fk: FileKeytab = FileKeytab::V2(fk2);
-                fk
+            FileKeytab::V2(v2) => {
+                let mut entries: Vec<KeytabEntry> = Vec::with_capacity(0);
+                for record in &v2.records {
+                    let rdata = &record.rdata;
+                    let entry: Option<KeytabEntry> = rdata.try_into()?;
+                    if let Some(e) = entry {
+                        entries.push(e);
+                    }
+                }
+                Ok(entries)
             }
         }
     }
+}
+
+fn read(buffer: &Vec<u8>) -> Result<FileKeytab, KrbError> {
+    let mut reader = binrw::io::Cursor::new(buffer);
+    let keytab: FileKeytab = reader.read_type(binrw::Endian::Big).map_err(|err| {
+        error!(?err, "Failed to unmarshall keytab buffer");
+        KrbError::BinRWError
+    })?;
+    Ok(keytab)
+}
+
+pub fn store(kt_name: &str, kt: &Keytab) -> Result<(), KrbError> {
+    let path = kt_name
+        .strip_prefix("FILE:")
+        .ok_or(KrbError::UnsupportedKeytabType)?;
+
+    let mut f = File::create(path).map_err(|io_err| {
+        error!(?io_err, "Unable to create file at {}", path);
+        KrbError::IoError
+    })?;
+
+    let kt: FileKeytab = kt.into();
+    kt.write(&mut f).map_err(|binrw_err| {
+        error!(?binrw_err, "Unable to write binary data.");
+        KrbError::BinRWError
+    })?;
+
+    Ok(())
+}
+
+pub fn load(kt_name: &str) -> Result<Keytab, KrbError> {
+    let path = kt_name
+        .strip_prefix("FILE:")
+        .ok_or(KrbError::UnsupportedKeytabType)?;
+
+    let mut f = File::open(path).map_err(|io_err| {
+        error!(?io_err, "Unable to create file at {}", path);
+        KrbError::IoError
+    })?;
+
+    let mut buffer = Vec::new();
+    f.read_to_end(&mut buffer).map_err(|io_err| {
+        error!(?io_err, "Unable to read file at {}", path);
+        KrbError::IoError
+    })?;
+
+    let fk: FileKeytab = read(&buffer)?;
+    let k: Keytab = (&fk).try_into()?;
+    Ok(k)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use binrw::{BinReaderExt, BinWrite};
-    use std::env;
+    use binrw::BinWrite;
     use std::fs;
-    use std::fs::File;
-    use std::io::Read;
-    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use tracing::warn;
-
-    impl FileKeytab {
-        pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
-            let mut reader = binrw::io::Cursor::new(inner);
-            let keytab: FileKeytab = reader
-                .read_type(binrw::Endian::Big)
-                .expect("Unable to create reader");
-            Ok(keytab)
-        }
-
-        pub fn load(path: Option<PathBuf>) -> FileKeytab {
-            let mut f: File = match path {
-                Some(p) => File::open(p).expect("Unable to open file"),
-                None => match env::var("KRB5_KTNAME") {
-                    Ok(val) => {
-                        let p = val.strip_prefix("FILE:").expect("Failed to strip prefix");
-                        let p = PathBuf::from(p);
-                        File::open(p).expect("Unable to open file")
-                    }
-                    #[allow(clippy::todo)]
-                    _ => {
-                        // default_keytab_name from config file
-                        todo!("Handle default keytab name from config file")
-                    }
-                },
-            };
-            let mut buffer = Vec::new();
-            f.read_to_end(&mut buffer)
-                .expect("Unable to read to end of file");
-            FileKeytab::read(&buffer).expect("Unable to read keytab from buffer")
-        }
-
-        pub fn store(&self, path: Option<PathBuf>) {
-            let mut f: File = match path {
-                Some(p) => File::create(p).expect("Unable to create file"),
-                None => match env::var("KRB5_KTNAME") {
-                    Ok(val) => {
-                        let p = val.strip_prefix("FILE:").expect("Failed to strip prefix");
-                        let p = PathBuf::from(p);
-                        File::create(p).expect("Unable to create file")
-                    }
-                    #[allow(clippy::todo)]
-                    _ => {
-                        // default_keytab_name from config file
-                        todo!()
-                    }
-                },
-            };
-            self.write(&mut f).expect("Unable to write to file")
-        }
-    }
 
     #[tokio::test]
     async fn test_keytab_read_write() {
@@ -337,7 +427,7 @@ mod tests {
 
         let mit_buf = "0502000000370001000a41464f524553542e41440006414e45544f240000000166ffb9ce0200110010cf8ea47a88cf230810f8ecbc9a1d4ea900000002000000470001000a41464f524553542e41440006414e45544f240000000166ffb9ce0200120020ed373e70378deac2b312e0ef95c5675091273661a2d7d001fb5dd28fb7ee007f000000020000003c0002000a41464f524553542e41440004686f73740005414e45544f0000000166ffb9ce0200110010cf8ea47a88cf230810f8ecbc9a1d4ea9000000020000004c0002000a41464f524553542e41440004686f73740005414e45544f0000000166ffb9ce0200120020ed373e70378deac2b312e0ef95c5675091273661a2d7d001fb5dd28fb7ee007f00000002000000490002000a41464f524553542e41440011526573747269637465644b7262486f73740005414e45544f0000000166ffb9ce0200110010cf8ea47a88cf230810f8ecbc9a1d4ea900000002000000590002000a41464f524553542e41440011526573747269637465644b7262486f73740005414e45544f0000000166ffb9ce0200120020ed373e70378deac2b312e0ef95c5675091273661a2d7d001fb5dd28fb7ee007f00000002";
         let mit_buf = hex::decode(mit_buf).expect("Failed to decode sample");
-        let krime_keytab = FileKeytab::read(&mit_buf).expect("Failed to read from buffer");
+        let krime_keytab = super::read(&mit_buf).expect("Failed to read from buffer");
 
         let mut c = std::io::Cursor::new(Vec::new());
         krime_keytab.write(&mut c).expect("Failed to write");
@@ -350,7 +440,7 @@ mod tests {
     async fn test_keytab_read_write_with_holes() {
         let mit_buf = "0502000000370001000a41464f524553542e41440006414e45544f240000000166ffb9ce0200110010cf8ea47a88cf230810f8ecbc9a1d4ea900000002ffffffb90001000a41464f524553542e41440006414e45544f240000000166ffb9ce0200120020ed373e70378deac2b312e0ef95c5675091273661a2d7d001fb5dd28fb7ee007f000000020000003c0002000a41464f524553542e41440004686f73740005414e45544f0000000166ffb9ce0200110010cf8ea47a88cf230810f8ecbc9a1d4ea9000000020000004c0002000a41464f524553542e41440004686f73740005414e45544f0000000166ffb9ce0200120020ed373e70378deac2b312e0ef95c5675091273661a2d7d001fb5dd28fb7ee007f00000002ffffffb70002000a41464f524553542e41440011526573747269637465644b7262486f73740005414e45544f0000000166ffb9ce0200110010cf8ea47a88cf230810f8ecbc9a1d4ea900000002000000590002000a41464f524553542e41440011526573747269637465644b7262486f73740005414e45544f0000000166ffb9ce0200120020ed373e70378deac2b312e0ef95c5675091273661a2d7d001fb5dd28fb7ee007f00000002";
         let mit_buf = hex::decode(mit_buf).expect("Failed to decode sample");
-        let krime_keytab = FileKeytab::read(&mit_buf).expect("Failed to read from buffer");
+        let krime_keytab = super::read(&mit_buf).expect("Failed to read from buffer");
 
         let FileKeytab::V2(k) = &krime_keytab;
         assert_eq!(k.records.len(), 6);
@@ -369,13 +459,13 @@ mod tests {
         }
 
         let mut c = std::io::Cursor::new(Vec::new());
-        let krime_keytab = FileKeytab::read(&mit_buf).expect("Failed to read from buffer");
+        let krime_keytab = super::read(&mit_buf).expect("Failed to read from buffer");
         krime_keytab.write(&mut c).expect("Failed to write");
         let krime_buf = c.into_inner();
 
         assert_eq!(mit_buf.len() - holes_len, krime_buf.len());
 
-        let krime_keytab2 = FileKeytab::read(&krime_buf).expect("Failed to read from buffer");
+        let krime_keytab2 = super::read(&krime_buf).expect("Failed to read from buffer");
         let FileKeytab::V2(k2) = &krime_keytab2;
         assert_eq!(k2.records.len(), 4);
 
@@ -389,7 +479,7 @@ mod tests {
     async fn test_keytab_read_pre_1_14() {
         let mit_buf = "0502000000460001000b4558414d504c452e4f524700087465737475736572000000016703af2e010012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000460001000b4558414d504c452e4f524700087465737475736572000000016703af2fff0012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000460001000b4558414d504c452e4f524700087465737475736572000000016703af2f000012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000460001000b4558414d504c452e4f524700087465737475736572000000016703af2fd20012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b";
         let mit_buf = hex::decode(mit_buf).expect("Failed to decode sample");
-        let mit_keytab = FileKeytab::read(&mit_buf).expect("Failed to read from buffer");
+        let mit_keytab = super::read(&mit_buf).expect("Failed to read from buffer");
         let FileKeytab::V2(mit_keytab) = &mit_keytab;
 
         let kvs_wrap = [1, 255, 0, 250];
@@ -416,7 +506,7 @@ mod tests {
 
         let mit_buf = "05020000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeff010012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000010000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeffff0012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000ff0000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeff000012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000001000000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeffd20012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b499602d2";
         let mit_buf = hex::decode(mit_buf).expect("Failed to decode sample");
-        let mit_keytab = FileKeytab::read(&mit_buf).expect("Failed to read from buffer");
+        let mit_keytab = super::read(&mit_buf).expect("Failed to read from buffer");
         let FileKeytab::V2(mit_keytab) = &mit_keytab;
 
         let kvs: [u32; 4] = [1, 255, 256, 1234567890];
@@ -446,15 +536,21 @@ mod tests {
     #[tokio::test]
     async fn test_keytab_store_load() {
         let _ = tracing_subscriber::fmt::try_init();
-        let buf = "05020000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeff010012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000010000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeffff0012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000ff0000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeff000012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000001000000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeffd20012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b499602d2";
-        let buf = hex::decode(buf).expect("Failed to decode sample");
-        let keytab = FileKeytab::read(&buf).expect("Failed to read from buffer");
 
         let path = tempfile::NamedTempFile::new()
             .expect("Failed to create temporary file")
-            .into_temp_path();
-        let path = path.to_str().expect("Failed to convert path to string");
-        keytab.store(Some(PathBuf::from(path)));
+            .into_temp_path()
+            .to_string_lossy()
+            .to_string();
+        let ktname = "FILE:".to_owned() + path.as_str();
+
+        let buf = "05020000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeff010012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000010000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeffff0012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000000ff0000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeff000012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b000001000000004a0001000b4558414d504c452e4f524700087465737475736572000000016703aeffd20012002012041af3423a7ec2002784c14dfd9c6df58b49498238a250249940b5f36f430b499602d2";
+        let buf = hex::decode(buf).expect("Failed to decode sample");
+        let fk1 = super::read(&buf).expect("Failed to read from buffer");
+        let k1: Keytab = (&fk1)
+            .try_into()
+            .expect("Failed to turn FileKeytab into Keytab");
+        super::store(ktname.as_str(), &k1).expect("Failed to store keytab");
 
         if std::env::var("CI").is_ok() {
             // Skip klist check on CI
@@ -471,14 +567,17 @@ mod tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .arg("-k")
-            .arg(path)
+            .arg(path.as_str())
             .status()
             .expect("Failed to klist");
 
-        let keytab2 = FileKeytab::load(Some(PathBuf::from(path)));
-        assert_eq!(keytab, keytab2);
+        let k2: Keytab = super::load(ktname.as_str()).expect("Failed to load keytab file");
+        let fk2: FileKeytab = (&k2).into();
 
-        fs::remove_file(path).expect("Failed to rm ccache file");
+        assert_eq!(fk1, fk2);
+        assert_eq!(k1, k2);
+
+        fs::remove_file(path).expect("Failed to rm keytab file");
         assert!(status.success());
     }
 }
