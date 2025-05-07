@@ -322,7 +322,7 @@ enum Opt {
     Keytab {
         config: PathBuf,
         name: String,
-        output: PathBuf,
+        output: String,
     },
 }
 
@@ -482,9 +482,8 @@ async fn main_run(config: Config) -> io::Result<()> {
     }
 }
 
-async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
-    use libkrime::keytab::*;
-    use std::fs::File;
+async fn keytab_extract_run(name: String, output: &str, config: Config) -> io::Result<()> {
+    use libkrime::keytab::{Keytab, KeytabEntry};
 
     let server_state = ServerState::try_from(config)
         .map(Arc::new)
@@ -496,25 +495,35 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
         Name::principal(name.as_str(), server_state.realm.as_str())
     };
 
-    let principal_record = server_state
-        .principals
-        .get(&principal_name)
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "no matching principal")
-        })?;
+    let key: DerivedKey = if principal_name.is_service_krbtgt(&server_state.realm) {
+        let k = match server_state.primary_key {
+            KdcPrimaryKey::Aes256 { k } => k,
+        };
 
-    let key = principal_record.base_key.clone();
+        DerivedKey::Aes256CtsHmacSha196 {
+            k,
+            i: 0,
+            s: String::new(),
+        }
+    } else {
+        let principal_record = server_state
+            .principals
+            .get(&principal_name)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "no matching principal")
+            })?;
+        principal_record.base_key.clone()
+    };
 
-    let entry = KeytabEntry {
+    let entry = vec![KeytabEntry {
         principal: principal_name,
         timestamp: 0,
         key,
         kvno: 0,
-    };
+    }];
+    let k: Keytab = entry;
 
-    let kt = Keytab::File(vec![entry]);
-    let mut f = File::create(output)?;
-    kt.write(&mut f)
+    libkrime::keytab::store(Some(output), &k)
         .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "write"))?;
 
     Ok(())
@@ -548,7 +557,7 @@ async fn main() -> io::Result<()> {
             config,
         } => {
             let cfg = parse_config(&config)?;
-            keytab_extract_run(name, output, cfg).await
+            keytab_extract_run(name, &output, cfg).await
         }
     }
 }

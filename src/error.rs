@@ -70,6 +70,7 @@ pub enum KrbError {
     CredentialCacheError,
     UnsupportedCredentialCacheType,
     UnsupportedKeytabType,
+    KeytabFileError,
 
     IoError,
     BinRWError,
