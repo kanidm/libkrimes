@@ -322,7 +322,7 @@ enum Opt {
     Keytab {
         config: PathBuf,
         name: String,
-        output: String,
+        output: PathBuf,
     },
 }
 
@@ -482,7 +482,7 @@ async fn main_run(config: Config) -> io::Result<()> {
     }
 }
 
-async fn keytab_extract_run(name: String, output: &str, config: Config) -> io::Result<()> {
+async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
     use libkrime::keytab::{Keytab, KeytabEntry};
 
     let server_state = ServerState::try_from(config)
@@ -515,15 +515,26 @@ async fn keytab_extract_run(name: String, output: &str, config: Config) -> io::R
         principal_record.base_key.clone()
     };
 
-    let entry = vec![KeytabEntry {
+    let entry = KeytabEntry {
         principal: principal_name,
         timestamp: 0,
         key,
         kvno: 0,
-    }];
-    let k: Keytab = entry;
+    };
 
-    libkrime::keytab::store(Some(output), &k)
+    let ktname = "FILE:".to_owned() + output.to_string_lossy().to_string().as_str();
+    let k: Keytab = if output.exists() {
+        let mut keytab = libkrime::keytab::load(Some(&ktname)).map_err(|err| {
+            error!(?err, "Failed to load keytab file at {}", ktname);
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "keytab")
+        })?;
+        keytab.push(entry);
+        keytab
+    } else {
+        vec![entry]
+    };
+
+    libkrime::keytab::store(Some(&ktname), &k)
         .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "write"))?;
 
     Ok(())
@@ -557,7 +568,7 @@ async fn main() -> io::Result<()> {
             config,
         } => {
             let cfg = parse_config(&config)?;
-            keytab_extract_run(name, &output, cfg).await
+            keytab_extract_run(name, output, cfg).await
         }
     }
 }
