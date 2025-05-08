@@ -196,7 +196,10 @@ impl KerberosReply {
             ticket,
         } = ticket_grant_request;
 
-        let flags = FlagSet::<TicketFlags>::default();
+        let mut flags = FlagSet::<TicketFlags>::default();
+        if time_bounds.renew_until().is_some() {
+            flags |= TicketFlags::Renewable;
+        }
 
         // From is what the client requested.
         // Now is the kdc time.
