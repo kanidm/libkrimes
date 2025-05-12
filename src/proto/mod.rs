@@ -22,6 +22,8 @@ use crate::asn1::{
     encryption_key::EncryptionKey as KdcEncryptionKey,
     etype_info2::ETypeInfo2 as KdcETypeInfo2,
     kerberos_string::KerberosString,
+    kerberos_time::KerberosTime,
+    last_req::LastReqItem as KdcLastReqItem,
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
     principal_name::PrincipalName,
@@ -513,15 +515,90 @@ pub struct EncTicket {
     pub enc_part: EncryptedData,
 }
 
-// pub struct LastRequest
+#[derive(Debug)]
+pub enum LastRequestItem {
+    None(SystemTime),
+    LastInitialTgt(SystemTime),
+    LastInitial(SystemTime),
+    TgtIssued(SystemTime),
+    LastRenewal(SystemTime),
+    LastRequest(SystemTime),
+    PasswordExpire(SystemTime),
+    AccountExpire(SystemTime),
+}
+
+impl TryFrom<KdcLastReqItem> for LastRequestItem {
+    type Error = KrbError;
+
+    fn try_from(last_req_item: KdcLastReqItem) -> Result<Self, Self::Error> {
+        (&last_req_item).try_into()
+    }
+}
+
+impl TryFrom<&KdcLastReqItem> for LastRequestItem {
+    type Error = KrbError;
+
+    fn try_from(last_req_item: &KdcLastReqItem) -> Result<Self, Self::Error> {
+        trace!(?last_req_item);
+
+        match last_req_item.lr_type {
+            0 => Ok(LastRequestItem::None(last_req_item.lr_value.into())),
+            1 => Ok(LastRequestItem::LastInitialTgt(
+                last_req_item.lr_value.into(),
+            )),
+            2 => Ok(LastRequestItem::LastInitial(last_req_item.lr_value.into())),
+            3 => Ok(LastRequestItem::TgtIssued(last_req_item.lr_value.into())),
+            4 => Ok(LastRequestItem::LastRenewal(last_req_item.lr_value.into())),
+            5 => Ok(LastRequestItem::LastRequest(last_req_item.lr_value.into())),
+            6 => Ok(LastRequestItem::PasswordExpire(
+                last_req_item.lr_value.into(),
+            )),
+            7 => Ok(LastRequestItem::AccountExpire(
+                last_req_item.lr_value.into(),
+            )),
+            _ => Err(KrbError::LastRequestInvalidType),
+        }
+    }
+}
+
+impl TryFrom<LastRequestItem> for KdcLastReqItem {
+    type Error = KrbError;
+    fn try_from(value: LastRequestItem) -> Result<Self, Self::Error> {
+        (&value).try_into()
+    }
+}
+
+impl TryFrom<&LastRequestItem> for KdcLastReqItem {
+    type Error = KrbError;
+
+    fn try_from(value: &LastRequestItem) -> Result<Self, Self::Error> {
+        let (lr_type, lr_value) = match *value {
+            LastRequestItem::None(t) => (0, t),
+            LastRequestItem::LastInitialTgt(t) => (1, t),
+            LastRequestItem::LastInitial(t) => (2, t),
+            LastRequestItem::TgtIssued(t) => (3, t),
+            LastRequestItem::LastRenewal(t) => (4, t),
+            LastRequestItem::LastRequest(t) => (5, t),
+            LastRequestItem::PasswordExpire(t) => (6, t),
+            LastRequestItem::AccountExpire(t) => (7, t),
+        };
+
+        Ok(Self {
+            lr_type,
+            lr_value: KerberosTime::from_system_time(lr_value).map_err(|err| {
+                error!(?err, "KerberosTime::from_unix_duration");
+                KrbError::DerEncodeKerberosTime
+            })?,
+        })
+    }
+}
 
 #[derive(Debug)]
 #[allow(dead_code)]
 // TODO: Remove the above dead_code!
 pub struct KdcReplyPart {
     pub(crate) key: SessionKey,
-    // Last req shows "last login" and probably isn't important for our needs.
-    // last_req: (),
+    pub(crate) last_req: Vec<LastRequestItem>,
     pub(crate) nonce: i32,
     pub(crate) key_expiration: Option<SystemTime>,
     pub(crate) flags: FlagSet<TicketFlags>,
@@ -918,6 +995,11 @@ impl TryFrom<Asn1EncKdcRepPart> for KdcReplyPart {
         let key = SessionKey::try_from(enc_kdc_rep_part.key)?;
         let server = Name::try_from((enc_kdc_rep_part.server_name, enc_kdc_rep_part.server_realm))?;
 
+        let last_req = enc_kdc_rep_part
+            .last_req
+            .iter()
+            .map(|t| t.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
         let nonce = enc_kdc_rep_part.nonce;
         // let flags = enc_kdc_rep_part.flags.bits();
         let flags = enc_kdc_rep_part.flags;
@@ -930,6 +1012,7 @@ impl TryFrom<Asn1EncKdcRepPart> for KdcReplyPart {
 
         Ok(KdcReplyPart {
             key,
+            last_req,
             nonce,
             key_expiration,
             flags,
