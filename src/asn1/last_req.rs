@@ -10,9 +10,9 @@ use der::Sequence;
 #[derive(Debug, Eq, PartialEq, Sequence)]
 pub(crate) struct LastReqItem {
     #[asn1(context_specific = "0")]
-    lr_type: i32,
+    pub lr_type: i32,
     #[asn1(context_specific = "1")]
-    lr_value: KerberosTime,
+    pub lr_value: KerberosTime,
 }
 
 pub(crate) type LastReq = Vec<LastReqItem>;
