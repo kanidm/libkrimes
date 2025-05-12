@@ -52,6 +52,7 @@ errno = "0.3.11"
 
 libc = { version = "0.2.162", optional = true }
 keyutils = { version = "0.4.0", optional = true }
+bitmask-enum = "2.2.5"
 
 [dev-dependencies]
 base64 = "0.22.0"

@@ -6,7 +6,6 @@ use super::principal_name::PrincipalName;
 use super::realm::Realm;
 use super::ticket_flags::TicketFlags;
 use super::transited_encoding::TransitedEncoding;
-use der::flagset::FlagSet;
 use der::{Decode, DecodeValue, Encode, EncodeValue, FixedTag, Sequence, Tag, TagNumber};
 
 /// ```text
@@ -27,7 +26,7 @@ use der::{Decode, DecodeValue, Encode, EncodeValue, FixedTag, Sequence, Tag, Tag
 #[derive(Debug, Eq, PartialEq, Sequence)]
 pub(crate) struct EncTicketPart {
     #[asn1(context_specific = "0")]
-    pub flags: FlagSet<TicketFlags>,
+    pub flags: TicketFlags,
     #[asn1(context_specific = "1")]
     pub key: EncryptionKey,
     #[asn1(context_specific = "2")]

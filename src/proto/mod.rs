@@ -14,6 +14,7 @@ use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;
 use crate::asn1::checksum::Checksum;
 use crate::asn1::constants::PrincipalNameType;
+use crate::asn1::ticket_flags::TicketFlags;
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart as Asn1EncKdcRepPart,
@@ -30,7 +31,6 @@ use crate::asn1::{
     realm::Realm,
     tagged_enc_kdc_rep_part::TaggedEncKdcRepPart,
     tagged_ticket::TaggedTicket as Asn1Ticket,
-    ticket_flags::TicketFlags,
     Ia5String, OctetString,
 };
 use crate::constants::{
@@ -41,7 +41,7 @@ use crate::crypto::{
     derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{asn1::Any, flagset::FlagSet, Decode, Encode};
+use der::{asn1::Any, Decode, Encode};
 use rand::{rng, Rng};
 use std::cmp::Ordering;
 use std::fmt;
@@ -538,7 +538,7 @@ pub struct Ticket {
     pub(crate) end_time: SystemTime,
     pub(crate) renew_until: Option<SystemTime>,
     pub(crate) session_key: SessionKey,
-    pub(crate) flags: FlagSet<TicketFlags>,
+    pub(crate) flags: TicketFlags,
 }
 
 #[derive(Debug, Clone)]
@@ -634,7 +634,7 @@ pub struct KdcReplyPart {
     pub(crate) last_req: Vec<LastRequestItem>,
     pub(crate) nonce: i32,
     pub(crate) key_expiration: Option<SystemTime>,
-    pub(crate) flags: FlagSet<TicketFlags>,
+    pub(crate) flags: TicketFlags,
     pub(crate) auth_time: SystemTime,
     pub(crate) start_time: Option<SystemTime>,
     pub(crate) end_time: SystemTime,
@@ -1015,7 +1015,7 @@ impl Ticket {
         self.renew_until
     }
 
-    pub fn flags(&self) -> &FlagSet<TicketFlags> {
+    pub fn flags(&self) -> &TicketFlags {
         &self.flags
     }
 }
