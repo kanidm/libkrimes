@@ -16,10 +16,11 @@ use crate::asn1::{
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
     tagged_ticket::TaggedTicket,
+    ticket_flags::TicketFlags,
     OctetString,
 };
 use crate::error::KrbError;
-use der::{asn1::Any, flagset::FlagSet, Encode};
+use der::{asn1::Any, Encode};
 use rand::{rng, Rng};
 
 use std::time::{Duration, SystemTime};
@@ -27,7 +28,7 @@ use tracing::trace;
 
 use super::{
     DerivedKey, EncTicket, EncryptedData, KdcPrimaryKey, Name, Preauth, PreauthData, SessionKey,
-    Ticket, TicketFlags,
+    Ticket,
 };
 
 #[derive(Debug)]
@@ -46,7 +47,7 @@ pub struct AuthenticationRequest {
     pub renew: Option<SystemTime>,
     pub preauth: Preauth,
     pub etypes: Vec<EncryptionType>,
-    pub kdc_options: FlagSet<KerberosFlags>,
+    pub kdc_options: KerberosFlags,
 }
 
 #[derive(Debug)]
@@ -209,7 +210,7 @@ impl KerberosAuthenticationBuilder {
 
         let preauth = preauth.unwrap_or_default();
 
-        let mut kdc_options = FlagSet::<KerberosFlags>::default();
+        let mut kdc_options = KerberosFlags::none();
         kdc_options |= KerberosFlags::Renewable;
 
         KerberosRequest::AS(Box::new(AuthenticationRequest {
@@ -279,7 +280,7 @@ impl TicketGrantRequestBuilder {
         // So far we don't use preauth-here
         // let preauth = preauth.unwrap_or_default();
 
-        let mut kdc_options = FlagSet::<KerberosFlags>::default();
+        let mut kdc_options = KerberosFlags::none();
         kdc_options |= KerberosFlags::Renewable;
         kdc_options |= KerberosFlags::Canonicalize;
 
@@ -353,7 +354,7 @@ impl TicketGrantRequestBuilder {
             }
         };
 
-        let ap_options: ApOptions = FlagSet::<ApFlags>::default();
+        let ap_options: ApOptions = ApFlags::none();
 
         let ticket: TaggedTicket = ap_req_builder.ticket.try_into()?;
         let ap_req: ApReq = ApReq::new(ap_options, ticket, authenticator);
@@ -565,7 +566,7 @@ impl TicketGrantRequest {
         &self.ticket
     }
 
-    pub fn ticket_flags(&self) -> &FlagSet<TicketFlags> {
+    pub fn ticket_flags(&self) -> &TicketFlags {
         &self.ticket.flags
     }
 

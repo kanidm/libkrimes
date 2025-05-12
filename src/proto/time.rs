@@ -1,5 +1,6 @@
 use crate::asn1::kerberos_flags::KerberosFlags;
-use crate::proto::{AuthenticationRequest, FlagSet, Name, TicketFlags, TicketGrantRequest};
+use crate::asn1::ticket_flags::TicketFlags;
+use crate::proto::{AuthenticationRequest, Name, TicketGrantRequest};
 use crate::KerberosReply;
 use std::cmp;
 use std::time::{Duration, SystemTime};
@@ -262,7 +263,7 @@ fn as_req_renew_until(
     end_time: SystemTime,
     requested_renew_until: Option<SystemTime>,
     maximum_renew_lifetime: Option<Duration>,
-    kdc_options: FlagSet<KerberosFlags>,
+    kdc_options: KerberosFlags,
 ) -> Result<Option<SystemTime>, TimeBoundError> {
     let renewal_flags_set = kdc_options.contains(KerberosFlags::RenewableOk)
         || kdc_options.contains(KerberosFlags::Renewable);

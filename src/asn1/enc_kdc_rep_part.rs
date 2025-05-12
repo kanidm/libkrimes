@@ -5,7 +5,6 @@ use super::last_req::LastReq;
 use super::principal_name::PrincipalName;
 use super::realm::Realm;
 use super::ticket_flags::TicketFlags;
-use der::flagset::FlagSet;
 use der::Sequence;
 
 /// ```text
@@ -35,7 +34,7 @@ pub(crate) struct EncKdcRepPart {
     #[asn1(context_specific = "3", optional = "true")]
     pub(crate) key_expiration: Option<KerberosTime>,
     #[asn1(context_specific = "4")]
-    pub(crate) flags: FlagSet<TicketFlags>,
+    pub(crate) flags: TicketFlags,
     #[asn1(context_specific = "5")]
     pub(crate) auth_time: KerberosTime,
     #[asn1(context_specific = "6", optional = "true")]

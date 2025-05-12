@@ -111,7 +111,6 @@ mod tests {
     use crate::asn1::krb_kdc_req::KrbKdcReq;
     use core::iter::zip;
     use der::asn1::OctetString;
-    use der::flagset::FlagSet;
     use der::DateTime;
     use der::Decode;
 
@@ -125,7 +124,7 @@ mod tests {
         principal: String,
         realm: String,
         padata: Vec<TestPaData>,
-        kdc_options: FlagSet<KerberosFlags>,
+        kdc_options: KerberosFlags,
         from: Option<KerberosTime>,
         till: KerberosTime,
         rtime: Option<KerberosTime>,
@@ -221,7 +220,7 @@ mod tests {
                         padata_value: vec![],
                     }
                 ],
-                kdc_options: KerberosFlags::RenewableOk.into(),
+                kdc_options: KerberosFlags::RenewableOk,
                 from: None,
                 till: KerberosTime::from_date_time(DateTime::new(2024, 4, 17, 4, 15, 49).expect("Failed to build DateTime")),
                 rtime: None,
@@ -290,7 +289,7 @@ mod tests {
                         padata_value: vec![],
                     }
                 ],
-                kdc_options: KerberosFlags::Renewable.into(),
+                kdc_options: KerberosFlags::Renewable,
                 from: None,
                 till: KerberosTime::from_date_time(DateTime::new(2024, 6, 16, 5, 27, 1).expect("Failed to build DateTime")),
                 rtime: Some(KerberosTime::from_date_time(DateTime::new(2024, 6, 22, 5, 27, 1).expect("Failed to build DateTime"))),
