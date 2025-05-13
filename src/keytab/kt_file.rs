@@ -222,23 +222,28 @@ enum RecordData {
 
 impl From<&KeytabEntry> for RecordData {
     fn from(value: &KeytabEntry) -> Self {
+        let (kvno, enc_type) = match value.key {
+            DerivedKey::Aes256CtsHmacSha196 {
+                k: _,
+                i: _,
+                s: _,
+                kvno,
+            } => (kvno, EncryptionType::AES256_CTS_HMAC_SHA1_96),
+        };
+
         RecordData::Entry {
             principal: value.principal.clone().into(),
             // I think this is NOT 2038 safe and requires a version change ...
             // indicates when the key was emitted to the keytab.
             timestamp: value.timestamp,
             // Needs to be 2, nfi why.
-            key_version_u8: value.kvno as u8,
-            enctype: match value.key {
-                DerivedKey::Aes256CtsHmacSha196 { k: _, i: _, s: _ } => {
-                    EncryptionType::AES256_CTS_HMAC_SHA1_96 as _
-                }
-            },
+            key_version_u8: kvno as u8,
+            enctype: enc_type as u16,
             key: Data {
                 value: value.key.k(),
             },
             // Needs to be set?
-            key_version_u32: Some(value.kvno),
+            key_version_u32: Some(kvno),
         }
     }
 }
@@ -268,10 +273,10 @@ impl TryFrom<&RecordData> for Option<KeytabEntry> {
                             .map_err(|_| KrbError::InvalidEncryptionKey)?,
                         i: 0,
                         s: String::new(),
-                    },
-                    kvno: match key_version_u32 {
-                        Some(v) => *v,
-                        None => (*key_version_u8) as u32,
+                        kvno: match key_version_u32 {
+                            Some(v) => *v,
+                            None => (*key_version_u8) as u32,
+                        },
                     },
                 };
                 Ok(Some(e))

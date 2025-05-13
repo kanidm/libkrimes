@@ -9,7 +9,6 @@ pub struct KeytabEntry {
     pub principal: Name,
     pub key: DerivedKey,
     pub timestamp: u32,
-    pub kvno: u32,
 }
 
 pub type Keytab = Vec<KeytabEntry>;

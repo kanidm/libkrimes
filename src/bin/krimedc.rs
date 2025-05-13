@@ -326,10 +326,16 @@ enum Opt {
     },
 }
 
+fn default_kvno() -> u32 {
+    1
+}
+
 #[derive(Debug, Deserialize)]
 struct UserPrincipal {
     name: String,
     password: String,
+    #[serde(default = "default_kvno")]
+    kvno: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -337,6 +343,8 @@ struct ServicePrincipal {
     hostname: String,
     srvname: String,
     password: String,
+    #[serde(default = "default_kvno")]
+    kvno: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -367,33 +375,42 @@ impl TryFrom<Config> for ServerState {
 
         let principals = user
             .into_iter()
-            .map(|UserPrincipal { name, password }| {
-                let salt = format!("{}{}", realm, name);
+            .map(
+                |UserPrincipal {
+                     name,
+                     password,
+                     kvno,
+                 }| {
+                    let salt = format!("{}{}", realm, name);
 
-                let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None)?;
+                    let base_key =
+                        DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None, kvno)?;
 
-                let princ_name = Name::principal(&name, &realm);
+                    let princ_name = Name::principal(&name, &realm);
 
-                Ok((
-                    princ_name,
-                    PrincipalRecord {
-                        service: false,
-                        base_key,
-                    },
-                ))
-            })
+                    Ok((
+                        princ_name,
+                        PrincipalRecord {
+                            service: false,
+                            base_key,
+                        },
+                    ))
+                },
+            )
             .chain(service.into_iter().map(
                 |ServicePrincipal {
                      srvname,
                      hostname,
                      password,
+                     kvno,
                  }| {
                     let name = format!("{srvname}/{hostname}");
                     let salt = format!("{}{}", realm, name);
 
                     let princ_name = Name::service(&srvname, &hostname, &realm);
 
-                    let base_key = DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None)?;
+                    let base_key =
+                        DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None, kvno)?;
 
                     Ok((
                         princ_name,
@@ -496,14 +513,15 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
     };
 
     let key: DerivedKey = if principal_name.is_service_krbtgt(&server_state.realm) {
-        let k = match server_state.primary_key {
-            KdcPrimaryKey::Aes256 { k } => k,
+        let (k, kvno) = match server_state.primary_key {
+            KdcPrimaryKey::Aes256 { k, kvno } => (k, kvno),
         };
 
         DerivedKey::Aes256CtsHmacSha196 {
             k,
             i: 0,
             s: String::new(),
+            kvno,
         }
     } else {
         let principal_record = server_state
@@ -519,7 +537,6 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
         principal: principal_name,
         timestamp: 0,
         key,
-        kvno: 0,
     };
 
     let ktname = "FILE:".to_owned() + output.to_string_lossy().to_string().as_str();

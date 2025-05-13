@@ -297,6 +297,7 @@ mod tests {
                     "EXAMPLE.COM",
                     "testuser",
                     "password",
+                    1,
                 )
                 .expect("Failed to derive base key");
 
@@ -416,7 +417,7 @@ mod tests {
 
         // Compute the pre-authentication.
         let base_key =
-            DerivedKey::from_etype_info2(einfo2, "EXAMPLE.COM", "testuser_preauth", "password")
+            DerivedKey::from_etype_info2(einfo2, "EXAMPLE.COM", "testuser_preauth", "password", 1)
                 .expect("Failed to derive user key");
 
         let now = SystemTime::now();
