@@ -66,6 +66,7 @@ pub enum DerivedKey {
         k: [u8; AES_256_KEY_LEN],
         i: u32,
         s: String,
+        kvno: u32,
     },
 }
 
@@ -80,6 +81,7 @@ impl DerivedKey {
         passphrase: &str,
         salt: &str,
         iter_count: Option<u32>,
+        kvno: u32,
     ) -> Result<Self, KrbError> {
         if passphrase.len() < 16 {
             // Due to how the cryptography of KRB works, we need to ensure not only that the password
@@ -95,6 +97,7 @@ impl DerivedKey {
                 k,
                 i: iter_count,
                 s: salt.to_string(),
+                kvno,
             },
         )
     }
@@ -109,6 +112,7 @@ impl DerivedKey {
         realm: &str,
         username: &str,
         passphrase: &str,
+        kvno: u32,
     ) -> Result<Self, KrbError> {
         // If only Krb had put the *parameters* with the encrypted data, like any other
         // sane ecosystem.
@@ -156,6 +160,7 @@ impl DerivedKey {
                     k,
                     i: iter_count,
                     s: salt,
+                    kvno,
                 })
             }
         }
@@ -167,6 +172,7 @@ impl DerivedKey {
         realm: &str,
         username: &str,
         passphrase: &str,
+        kvno: u32,
     ) -> Result<Self, KrbError> {
         let salt = etype_info2
             .salt
@@ -199,6 +205,7 @@ impl DerivedKey {
                     k,
                     i: iter_count,
                     s: salt,
+                    kvno,
                 })
             }
             _ => Err(KrbError::UnsupportedEncryption),
@@ -217,10 +224,17 @@ impl DerivedKey {
         let key_usage = 1;
 
         match self {
-            DerivedKey::Aes256CtsHmacSha196 { k, .. } => {
-                encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)
-                    .map(|data| EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
-            }
+            DerivedKey::Aes256CtsHmacSha196 {
+                k,
+                i: _,
+                s: _,
+                kvno,
+            } => encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage).map(|data| {
+                EncryptedData::Aes256CtsHmacSha196 {
+                    kvno: Some(*kvno),
+                    data,
+                }
+            }),
         }
     }
 
@@ -235,9 +249,12 @@ impl DerivedKey {
         let key_usage = 3;
 
         match self {
-            DerivedKey::Aes256CtsHmacSha196 { i, s, k } => {
+            DerivedKey::Aes256CtsHmacSha196 { i, s, k, kvno } => {
                 let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
-                let enc_part = EncryptedData::Aes256CtsHmacSha196 { kvno: None, data };
+                let enc_part = EncryptedData::Aes256CtsHmacSha196 {
+                    kvno: Some(*kvno),
+                    data,
+                };
 
                 let ei = EtypeInfo2 {
                     etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
@@ -261,9 +278,17 @@ impl DerivedKey {
         let key_usage = 2;
 
         match self {
-            DerivedKey::Aes256CtsHmacSha196 { k, .. } => {
+            DerivedKey::Aes256CtsHmacSha196 {
+                k,
+                i: _,
+                s: _,
+                kvno,
+            } => {
                 let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
-                Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
+                Ok(EncryptedData::Aes256CtsHmacSha196 {
+                    kvno: Some(*kvno),
+                    data,
+                })
             }
         }
     }
@@ -428,7 +453,7 @@ impl SessionKey {
 }
 
 pub enum KdcPrimaryKey {
-    Aes256 { k: [u8; AES_256_KEY_LEN] },
+    Aes256 { k: [u8; AES_256_KEY_LEN], kvno: u32 },
 }
 
 impl fmt::Debug for KdcPrimaryKey {
@@ -446,9 +471,11 @@ impl TryFrom<&[u8]> for KdcPrimaryKey {
 
     fn try_from(key: &[u8]) -> Result<Self, Self::Error> {
         if key.len() == AES_256_KEY_LEN {
+            // TODO kvno from server_state
+            let kvno = 1u32;
             let mut k = [0u8; AES_256_KEY_LEN];
             k.copy_from_slice(key);
-            Ok(KdcPrimaryKey::Aes256 { k })
+            Ok(KdcPrimaryKey::Aes256 { k, kvno })
         } else {
             tracing::error!(key_len = %key.len(), expected = %AES_256_KEY_LEN);
             Err(KrbError::InvalidEncryptionKey)
@@ -468,9 +495,12 @@ impl KdcPrimaryKey {
         let key_usage = 2;
 
         match self {
-            KdcPrimaryKey::Aes256 { k } => {
+            KdcPrimaryKey::Aes256 { k, kvno } => {
                 let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
-                Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
+                Ok(EncryptedData::Aes256CtsHmacSha196 {
+                    kvno: Some(*kvno),
+                    data,
+                })
             }
         }
     }
@@ -489,9 +519,12 @@ impl KdcPrimaryKey {
         let key_usage = 3;
 
         match self {
-            KdcPrimaryKey::Aes256 { k } => {
+            KdcPrimaryKey::Aes256 { k, kvno } => {
                 let data = encrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?;
-                Ok(EncryptedData::Aes256CtsHmacSha196 { kvno: None, data })
+                Ok(EncryptedData::Aes256CtsHmacSha196 {
+                    kvno: Some(*kvno),
+                    data,
+                })
             }
         }
     }
@@ -838,9 +871,10 @@ impl EncryptedData {
         let key_usage = 2;
 
         let data = match (self, primary_key) {
-            (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, KdcPrimaryKey::Aes256 { k }) => {
-                decrypt_aes256_cts_hmac_sha1_96(k, data, key_usage)?
-            }
+            (
+                EncryptedData::Aes256CtsHmacSha196 { kvno: _, data },
+                KdcPrimaryKey::Aes256 { k, kvno: _ },
+            ) => decrypt_aes256_cts_hmac_sha1_96(k, data, key_usage)?,
         };
 
         TaggedEncTicketPart::from_der(&data)
@@ -1511,7 +1545,7 @@ pub async fn get_tgt(
                 .map(|pa_inner| pa_inner.etype_info2.as_slice());
 
             let base_key = DerivedKey::from_encrypted_reply(
-                &enc_part, etype_info, realm, principal, password,
+                &enc_part, etype_info, realm, principal, password, 1,
             )?;
 
             let kdc_reply = enc_part.decrypt_enc_kdc_rep(&base_key)?;
@@ -1563,6 +1597,7 @@ mod tests {
             "a-secure-password",
             "salt",
             Some(PBKDF2_SHA1_ITER_MINIMUM),
+            1,
         )
         .unwrap();
     }
