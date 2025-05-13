@@ -16,12 +16,14 @@ use crate::asn1::checksum::Checksum;
 use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::{
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
-    enc_kdc_rep_part::EncKdcRepPart,
+    enc_kdc_rep_part::EncKdcRepPart as Asn1EncKdcRepPart,
     enc_ticket_part::{EncTicketPart, TaggedEncTicketPart},
     encrypted_data::EncryptedData as KdcEncryptedData,
     encryption_key::EncryptionKey as KdcEncryptionKey,
     etype_info2::ETypeInfo2 as KdcETypeInfo2,
     kerberos_string::KerberosString,
+    kerberos_time::KerberosTime,
+    last_req::LastReqItem as KdcLastReqItem,
     pa_data::PaData,
     pa_enc_ts_enc::PaEncTsEnc,
     principal_name::PrincipalName,
@@ -58,7 +60,7 @@ pub struct Preauth {
     pa_fx_cookie: Option<Vec<u8>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum DerivedKey {
     Aes256CtsHmacSha196 {
         k: [u8; AES_256_KEY_LEN],
@@ -224,7 +226,7 @@ impl DerivedKey {
 
     pub(crate) fn encrypt_as_rep_part(
         &self,
-        enc_kdc_rep_part: EncKdcRepPart,
+        enc_kdc_rep_part: Asn1EncKdcRepPart,
     ) -> Result<(EtypeInfo2, EncryptedData), KrbError> {
         let data = TaggedEncKdcRepPart::EncAsRepPart(enc_kdc_rep_part)
             .to_der()
@@ -362,7 +364,7 @@ impl SessionKey {
 
     pub(crate) fn encrypt_tgs_rep_part(
         &self,
-        enc_kdc_rep_part: EncKdcRepPart,
+        enc_kdc_rep_part: Asn1EncKdcRepPart,
         is_sub_session_key: bool,
     ) -> Result<EncryptedData, KrbError> {
         let data = TaggedEncKdcRepPart::EncTgsRepPart(enc_kdc_rep_part)
@@ -463,7 +465,7 @@ impl KdcPrimaryKey {
             .to_der()
             .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
 
-        let key_usage = 3;
+        let key_usage = 2;
 
         match self {
             KdcPrimaryKey::Aes256 { k } => {
@@ -513,15 +515,90 @@ pub struct EncTicket {
     pub enc_part: EncryptedData,
 }
 
-// pub struct LastRequest
+#[derive(Debug)]
+pub enum LastRequestItem {
+    None(SystemTime),
+    LastInitialTgt(SystemTime),
+    LastInitial(SystemTime),
+    TgtIssued(SystemTime),
+    LastRenewal(SystemTime),
+    LastRequest(SystemTime),
+    PasswordExpire(SystemTime),
+    AccountExpire(SystemTime),
+}
+
+impl TryFrom<KdcLastReqItem> for LastRequestItem {
+    type Error = KrbError;
+
+    fn try_from(last_req_item: KdcLastReqItem) -> Result<Self, Self::Error> {
+        (&last_req_item).try_into()
+    }
+}
+
+impl TryFrom<&KdcLastReqItem> for LastRequestItem {
+    type Error = KrbError;
+
+    fn try_from(last_req_item: &KdcLastReqItem) -> Result<Self, Self::Error> {
+        trace!(?last_req_item);
+
+        match last_req_item.lr_type {
+            0 => Ok(LastRequestItem::None(last_req_item.lr_value.into())),
+            1 => Ok(LastRequestItem::LastInitialTgt(
+                last_req_item.lr_value.into(),
+            )),
+            2 => Ok(LastRequestItem::LastInitial(last_req_item.lr_value.into())),
+            3 => Ok(LastRequestItem::TgtIssued(last_req_item.lr_value.into())),
+            4 => Ok(LastRequestItem::LastRenewal(last_req_item.lr_value.into())),
+            5 => Ok(LastRequestItem::LastRequest(last_req_item.lr_value.into())),
+            6 => Ok(LastRequestItem::PasswordExpire(
+                last_req_item.lr_value.into(),
+            )),
+            7 => Ok(LastRequestItem::AccountExpire(
+                last_req_item.lr_value.into(),
+            )),
+            _ => Err(KrbError::LastRequestInvalidType),
+        }
+    }
+}
+
+impl TryFrom<LastRequestItem> for KdcLastReqItem {
+    type Error = KrbError;
+    fn try_from(value: LastRequestItem) -> Result<Self, Self::Error> {
+        (&value).try_into()
+    }
+}
+
+impl TryFrom<&LastRequestItem> for KdcLastReqItem {
+    type Error = KrbError;
+
+    fn try_from(value: &LastRequestItem) -> Result<Self, Self::Error> {
+        let (lr_type, lr_value) = match *value {
+            LastRequestItem::None(t) => (0, t),
+            LastRequestItem::LastInitialTgt(t) => (1, t),
+            LastRequestItem::LastInitial(t) => (2, t),
+            LastRequestItem::TgtIssued(t) => (3, t),
+            LastRequestItem::LastRenewal(t) => (4, t),
+            LastRequestItem::LastRequest(t) => (5, t),
+            LastRequestItem::PasswordExpire(t) => (6, t),
+            LastRequestItem::AccountExpire(t) => (7, t),
+        };
+
+        Ok(Self {
+            lr_type,
+            lr_value: KerberosTime::from_system_time(lr_value).map_err(|err| {
+                error!(?err, "KerberosTime::from_unix_duration");
+                KrbError::DerEncodeKerberosTime
+            })?,
+        })
+    }
+}
 
 #[derive(Debug)]
 #[allow(dead_code)]
 // TODO: Remove the above dead_code!
 pub struct KdcReplyPart {
     pub(crate) key: SessionKey,
-    // Last req shows "last login" and probably isn't important for our needs.
-    // last_req: (),
+    pub(crate) last_req: Vec<LastRequestItem>,
     pub(crate) nonce: i32,
     pub(crate) key_expiration: Option<SystemTime>,
     pub(crate) flags: FlagSet<TicketFlags>,
@@ -758,7 +835,7 @@ impl EncryptedData {
         &self,
         primary_key: &KdcPrimaryKey,
     ) -> Result<EncTicketPart, KrbError> {
-        let key_usage = 3;
+        let key_usage = 2;
 
         let data = match (self, primary_key) {
             (EncryptedData::Aes256CtsHmacSha196 { kvno: _, data }, KdcPrimaryKey::Aes256 { k }) => {
@@ -909,15 +986,20 @@ impl Ticket {
     }
 }
 
-impl TryFrom<EncKdcRepPart> for KdcReplyPart {
+impl TryFrom<Asn1EncKdcRepPart> for KdcReplyPart {
     type Error = KrbError;
 
-    fn try_from(enc_kdc_rep_part: EncKdcRepPart) -> Result<Self, Self::Error> {
+    fn try_from(enc_kdc_rep_part: Asn1EncKdcRepPart) -> Result<Self, Self::Error> {
         trace!(?enc_kdc_rep_part);
 
         let key = SessionKey::try_from(enc_kdc_rep_part.key)?;
         let server = Name::try_from((enc_kdc_rep_part.server_name, enc_kdc_rep_part.server_realm))?;
 
+        let last_req = enc_kdc_rep_part
+            .last_req
+            .iter()
+            .map(|t| t.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
         let nonce = enc_kdc_rep_part.nonce;
         // let flags = enc_kdc_rep_part.flags.bits();
         let flags = enc_kdc_rep_part.flags;
@@ -930,6 +1012,7 @@ impl TryFrom<EncKdcRepPart> for KdcReplyPart {
 
         Ok(KdcReplyPart {
             key,
+            last_req,
             nonce,
             key_expiration,
             flags,
@@ -1296,18 +1379,10 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
     }
 }
 
-impl TryFrom<PrincipalName> for Name {
+impl TryFrom<(&PrincipalName, &Realm)> for Name {
     type Error = KrbError;
 
-    fn try_from(princ: PrincipalName) -> Result<Self, Self::Error> {
-        Self::try_from(&princ)
-    }
-}
-
-impl TryFrom<&PrincipalName> for Name {
-    type Error = KrbError;
-
-    fn try_from(princ: &PrincipalName) -> Result<Self, Self::Error> {
+    fn try_from((princ, realm): (&PrincipalName, &Realm)) -> Result<Self, Self::Error> {
         let PrincipalName {
             name_type,
             name_string,
@@ -1319,100 +1394,6 @@ impl TryFrom<&PrincipalName> for Name {
         })?;
 
         trace!(?name_type, ?name_string);
-
-        match name_type {
-            PrincipalNameType::NtPrincipal => match name_string.len() {
-                2 => {
-                    let name = name_string
-                        .first()
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-
-                    let realm = name_string
-                        .get(1)
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-                    Ok(Name::Principal { name, realm })
-                }
-                3 => {
-                    let service = name_string
-                        .first()
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-
-                    let host = name_string
-                        .get(1)
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-
-                    let realm = name_string
-                        .get(2)
-                        .ok_or(KrbError::PrincipalNameInvalidComponents)
-                        .map(|krb_string| krb_string.to_string())?;
-
-                    Ok(Name::SrvPrincipal {
-                        service,
-                        host,
-                        realm,
-                    })
-                }
-                _ => Err(KrbError::NameNumberOfComponents),
-            },
-            PrincipalNameType::NtSrvInst => {
-                let (service, instance) = name_string
-                    .split_first()
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)?;
-                let service: String = service.into();
-                let mut instance: Vec<String> = instance.iter().map(|x| x.into()).collect();
-                let realm: String = instance
-                    .pop()
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)?;
-                Ok(Name::SrvInst {
-                    service,
-                    instance,
-                    realm,
-                })
-            }
-            PrincipalNameType::NtSrvHst => {
-                let service = name_string
-                    .first()
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)
-                    .map(|krb_string| krb_string.to_string())?;
-
-                let host = name_string
-                    .get(1)
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)
-                    .map(|krb_string| krb_string.to_string())?;
-
-                let realm = name_string
-                    .get(2)
-                    .ok_or(KrbError::PrincipalNameInvalidComponents)
-                    .map(|krb_string| krb_string.to_string())?;
-                Ok(Name::SrvHst {
-                    service,
-                    host,
-                    realm,
-                })
-            }
-            _ => Err(KrbError::PrincipalNameInvalidType),
-        }
-    }
-}
-
-impl TryFrom<(PrincipalName, Realm)> for Name {
-    type Error = KrbError;
-
-    fn try_from((princ, realm): (PrincipalName, Realm)) -> Result<Self, Self::Error> {
-        let PrincipalName {
-            name_type,
-            name_string,
-        } = princ;
-
-        let realm = String::from(&realm);
-        let name_type: PrincipalNameType = name_type.try_into().map_err(|err| {
-            error!(?err, ?name_type, "invalid principal name type");
-            KrbError::PrincipalNameInvalidType
-        })?;
 
         // IMPORTANT!!!!!
         // MIT KRB5 has a bug in it's KVNO tool that causes it to send NtSrvHst as
@@ -1428,12 +1409,12 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 match name_string.as_slice() {
                     [name] => Ok(Name::Principal {
                         name: name.to_string(),
-                        realm,
+                        realm: realm.into(),
                     }),
                     [service, host] => Ok(Name::SrvPrincipal {
                         service: service.to_string(),
                         host: host.to_string(),
-                        realm,
+                        realm: realm.into(),
                     }),
                     _ => Err(KrbError::NameNumberOfComponents),
                 }
@@ -1446,19 +1427,27 @@ impl TryFrom<(PrincipalName, Realm)> for Name {
                 Ok(Name::SrvInst {
                     service: service.into(),
                     instance: instance.iter().map(|x| x.into()).collect(),
-                    realm,
+                    realm: realm.into(),
                 })
             }
             PrincipalNameType::NtSrvHst => match name_string.as_slice() {
                 [service, host] => Ok(Name::SrvHst {
                     service: service.to_string(),
                     host: host.to_string(),
-                    realm,
+                    realm: realm.into(),
                 }),
                 _ => Err(KrbError::NameNumberOfComponents),
             },
             _ => Err(KrbError::PrincipalNameInvalidType),
         }
+    }
+}
+
+impl TryFrom<(PrincipalName, Realm)> for Name {
+    type Error = KrbError;
+
+    fn try_from((princ, realm): (PrincipalName, Realm)) -> Result<Self, Self::Error> {
+        Self::try_from((&princ, &realm))
     }
 }
 

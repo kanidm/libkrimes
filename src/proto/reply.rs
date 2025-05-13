@@ -1,7 +1,7 @@
 use super::{
-    AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name,
-    PreauthData, SessionKey, Ticket, TicketGrantRequest, TicketGrantTimeBound,
-    TicketRenewTimeBound,
+    AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey,
+    LastRequestItem, Name, PreauthData, SessionKey, Ticket, TicketGrantRequest,
+    TicketGrantTimeBound, TicketRenewTimeBound,
 };
 use crate::asn1::{
     authorization_data::AuthorizationData,
@@ -16,9 +16,9 @@ use crate::asn1::{
     kdc_rep::KdcRep,
     kerberos_string::KerberosString,
     kerberos_time::KerberosTime,
-    krb_error::KrbError as KdcKrbError,
-    krb_error::MethodData,
+    krb_error::{KrbError as KdcKrbError, MethodData},
     krb_kdc_rep::KrbKdcRep,
+    last_req::LastReqItem,
     pa_data::PaData,
     ticket_flags::TicketFlags,
     transited_encoding::TransitedEncoding,
@@ -447,10 +447,15 @@ impl KerberosReplyAuthenticationBuilder {
             .transpose()
             .map_err(|_| KrbError::DerEncodeKerberosTime)?;
 
+        let last_req: Vec<LastRequestItem> = vec![LastRequestItem::None(SystemTime::UNIX_EPOCH)];
+        let last_req = last_req
+            .iter()
+            .map(|i| i.try_into())
+            .collect::<Result<Vec<LastReqItem>, KrbError>>()?;
+
         let enc_kdc_rep_part = EncKdcRepPart {
             key: session_key.clone(),
-            // Not 100% clear on this field.
-            last_req: Vec::with_capacity(0),
+            last_req,
             nonce: self.nonce,
             key_expiration: None,
             flags: self.flags,
@@ -841,17 +846,10 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                             .and_then(OctetString::new)
                             .map_err(|_| KrbError::DerEncodeOctetString)?;
 
-                        let pavec = vec![
-                            PaData {
-                                padata_type: PaDataType::PaEncTimestamp as u32,
-                                padata_value: OctetString::new([])
-                                    .map_err(|_| KrbError::DerEncodeOctetString)?,
-                            },
-                            PaData {
-                                padata_type: PaDataType::PaEtypeInfo2 as u32,
-                                padata_value: etype_padata_value,
-                            },
-                        ];
+                        let pavec = vec![PaData {
+                            padata_type: PaDataType::PaEtypeInfo2 as u32,
+                            padata_value: etype_padata_value,
+                        }];
                         Some(pavec)
                     }
                     None => None,

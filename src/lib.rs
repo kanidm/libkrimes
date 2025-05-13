@@ -384,7 +384,7 @@ mod tests {
         let response = response.unwrap();
 
         let KerberosReply::PA(PreauthReply {
-            service: _service,
+            service,
             pa_data,
             stime: _,
         }) = response
@@ -411,6 +411,8 @@ mod tests {
 
         // This gets the highest encryption strength item.
         let einfo2 = pa_data.etype_info2.last().unwrap();
+
+        assert_eq!(service, Name::service_krbtgt("EXAMPLE.COM"));
 
         // Compute the pre-authentication.
         let base_key =

@@ -483,8 +483,7 @@ async fn main_run(config: Config) -> io::Result<()> {
 }
 
 async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
-    use libkrime::keytab::*;
-    use std::fs::File;
+    use libkrime::keytab::{Keytab, KeytabEntry};
 
     let server_state = ServerState::try_from(config)
         .map(Arc::new)
@@ -496,14 +495,25 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
         Name::principal(name.as_str(), server_state.realm.as_str())
     };
 
-    let principal_record = server_state
-        .principals
-        .get(&principal_name)
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "no matching principal")
-        })?;
+    let key: DerivedKey = if principal_name.is_service_krbtgt(&server_state.realm) {
+        let k = match server_state.primary_key {
+            KdcPrimaryKey::Aes256 { k } => k,
+        };
 
-    let key = principal_record.base_key.clone();
+        DerivedKey::Aes256CtsHmacSha196 {
+            k,
+            i: 0,
+            s: String::new(),
+        }
+    } else {
+        let principal_record = server_state
+            .principals
+            .get(&principal_name)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "no matching principal")
+            })?;
+        principal_record.base_key.clone()
+    };
 
     let entry = KeytabEntry {
         principal: principal_name,
@@ -512,9 +522,19 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
         kvno: 0,
     };
 
-    let kt = Keytab::File(vec![entry]);
-    let mut f = File::create(output)?;
-    kt.write(&mut f)
+    let ktname = "FILE:".to_owned() + output.to_string_lossy().to_string().as_str();
+    let k: Keytab = if output.exists() {
+        let mut keytab = libkrime::keytab::load(Some(&ktname)).map_err(|err| {
+            error!(?err, "Failed to load keytab file at {}", ktname);
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "keytab")
+        })?;
+        keytab.push(entry);
+        keytab
+    } else {
+        vec![entry]
+    };
+
+    libkrime::keytab::store(Some(&ktname), &k)
         .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "write"))?;
 
     Ok(())

@@ -410,7 +410,8 @@ impl TicketGrantRequestUnverified {
             return Err(KrbError::TgsNotForRealm);
         }
 
-        let ap_req_ticket_service_name = Name::try_from(&ap_req_ticket.sname)?;
+        let ap_req_ticket_service_name =
+            Name::try_from((&ap_req_ticket.sname, &ap_req_ticket.realm))?;
 
         if !ap_req_ticket_service_name.is_service_krbtgt(realm) {
             tracing::error!(?ap_req_ticket_service_name, "TgsTicketIsNotTgt");
@@ -780,16 +781,14 @@ impl TryFrom<KdcReq> for KerberosRequest {
 
                 trace!(?req_body);
 
-                let cname = req_body.cname.ok_or(KrbError::MissingClientName)?;
-                let realm = req_body.realm;
+                let realm = &req_body.realm;
+                let cname = &req_body.cname.ok_or(KrbError::MissingClientName)?;
+                let sname = &req_body
+                    .sname
+                    .ok_or(KrbError::MissingServiceNameWithRealm)?;
 
                 let client_name: Name = (cname, realm).try_into()?;
-
-                // Is realm from .realm? In the service? Who knows! The krb spec is cooked.
-                let service_name: Name = req_body
-                    .sname
-                    .ok_or(KrbError::MissingServiceNameWithRealm)
-                    .and_then(|s| s.try_into())?;
+                let service_name: Name = (sname, realm).try_into()?;
 
                 let from = req_body.from.map(|t| t.to_system_time());
                 let until = req_body.till.to_system_time();

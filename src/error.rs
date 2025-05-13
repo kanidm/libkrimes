@@ -70,6 +70,7 @@ pub enum KrbError {
     CredentialCacheError,
     UnsupportedCredentialCacheType,
     UnsupportedKeytabType,
+    KeytabFileError,
 
     IoError,
     BinRWError,
@@ -79,6 +80,8 @@ pub enum KrbError {
     InvalidMessageDirection,
     InvalidPvno,
     InvalidEncryptionKey,
+
+    LastRequestInvalidType,
 
     /// No really, do you have a time machine? How did you go back to before 1970?
     DoYouHaveATimeMachine,
