@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+/usr/sbin/dnsmasq --log-async --log-facility=- --keep-in-foreground --conf-file=/etc/dnsmasq.conf
+
+
