@@ -23,9 +23,8 @@ services:
     networks:
       static-network:
         ipv4_address: 192.168.238.10
-    expose:
-      - "88"
-      - "88/udp"
+    ports:
+      - "88:88"
 
   samba:
     depends_on:
@@ -51,8 +50,25 @@ services:
     networks:
       static-network:
         ipv4_address: 192.168.238.11
-    expose:
-      - "445"
+    ports:
+      - "445:445"
+
+  dnsmasq:
+    restart: no
+    build:
+      context: ../../
+      dockerfile: ./examples/samba/Dockerfile.dnsmasq
+    image: libkrimes:dnsmasq
+    container_name: libkrimes_dnsmasq
+    hostname: dnsmasq
+    domainname: example.com
+    dns_search: example.com
+    networks:
+      static-network:
+        ipv4_address: 192.168.238.12
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
 
 volumes:
   samba-keytab:
