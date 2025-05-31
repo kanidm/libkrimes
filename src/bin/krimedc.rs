@@ -564,7 +564,7 @@ fn parse_config<P: AsRef<Path>>(path: P) -> io::Result<Config> {
 
     toml::from_str(&contents).map_err(|err| {
         error!(?err);
-        io::Error::new(io::ErrorKind::Other, "toml parse failure")
+        io::Error::other("toml parse failure")
     })
 }
 
