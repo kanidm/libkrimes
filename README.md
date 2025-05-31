@@ -68,6 +68,18 @@ Valid starting       Expires              Service principal
 	renew until 31/05/2024 17:59:57
 ```
 
+You can run the test suite with:
+
+```
+cargo test
+```
+
+If you host the docker container on another address, you can instruct the test suite to use this with:
+
+```
+LIBKRIMES_TEST_KDC_ADDRESS=127.0.0.1:55000 cargo test
+```
+
 ## KrimeDC Testing
 
 Run the KrimeDC:

@@ -1505,7 +1505,9 @@ pub async fn get_tgt(
     use tokio::net::TcpStream;
     use tokio_util::codec::Framed;
 
-    let stream = TcpStream::connect("127.0.0.1:55000")
+    let kdc_addr = option_env!("LIBKRIMES_TEST_KDC_ADDRESS").unwrap_or("127.0.0.1:55000");
+
+    let stream = TcpStream::connect(kdc_addr)
         .await
         .expect("Unable to connect to localhost:55000");
 

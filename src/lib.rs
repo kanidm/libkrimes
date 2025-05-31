@@ -254,9 +254,11 @@ mod tests {
             return;
         }
 
-        let stream = TcpStream::connect("127.0.0.1:55000")
+        let kdc_addr = option_env!("LIBKRIMES_TEST_KDC_ADDRESS").unwrap_or("127.0.0.1:55000");
+
+        let stream = TcpStream::connect(kdc_addr)
             .await
-            .expect("Unable to connect to localhost:55000");
+            .expect("Unable to connect to kdc");
 
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
@@ -312,9 +314,9 @@ mod tests {
         };
 
         // MIT expects UDP over TCP...
-        let stream = TcpStream::connect("127.0.0.1:55000")
+        let stream = TcpStream::connect(kdc_addr)
             .await
-            .expect("Unable to connect to localhost:55000");
+            .expect("Unable to connect to kdc");
 
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
@@ -353,9 +355,11 @@ mod tests {
             return;
         }
 
-        let stream = TcpStream::connect("127.0.0.1:55000")
+        let kdc_addr = option_env!("LIBKRIMES_TEST_KDC_ADDRESS").unwrap_or("127.0.0.1:55000");
+
+        let stream = TcpStream::connect(kdc_addr)
             .await
-            .expect("Unable to connect to localhost:55000");
+            .expect("Unable to connect to kdc");
 
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
@@ -461,9 +465,9 @@ mod tests {
         // the MIT KRB TCP transport is just "lets pretend to be UDP with with TCP" instead of
         // doing something sensible. I can only imagine that KKDCP also does similar ... sillyness.
 
-        let stream = TcpStream::connect("127.0.0.1:55000")
+        let stream = TcpStream::connect(kdc_addr)
             .await
-            .expect("Unable to connect to localhost:55000");
+            .expect("Unable to connect to kdc");
 
         let mut krb_stream = Framed::new(stream, KerberosTcpCodec::default());
 
