@@ -213,6 +213,8 @@ async fn process_ticket_grant(
 
     trace!(?service_name);
 
+    // TODO If renew flag set
+    // TODO This option (renew) will only be honored if the ticket to be renewed has its RENEWABLE flag set and if the time in its renew-till field has not passed.
     if service_name.is_service_krbtgt(server_state.realm.as_str()) {
         // This is a renewal request for the users TGT
         return process_ticket_renewal(tgs_req_valid, server_state).await;
@@ -254,6 +256,7 @@ async fn process_ticket_renewal(
     tgs_req_valid: TicketGrantRequest,
     server_state: &ServerState,
 ) -> Result<KerberosReply, KerberosReply> {
+    // The KDC will issue a new ticket with a new session key and a later expiration time.  All other fields of the ticket are left unmodified by the renewal process.
     let stime = SystemTime::now();
     let service_name = tgs_req_valid.service_name().clone();
 
