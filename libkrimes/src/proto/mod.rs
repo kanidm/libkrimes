@@ -1059,8 +1059,11 @@ impl Name {
     }
 
     /// MIT KRB often confuses SrvHst and SrvPrincipal (name types 1 and 3). This
-    /// normalises SrvHst to SrvPrincipal to assist with name matching. Types that
-    /// are not SrvHst are not altered by this function and pass through without change
+    /// normalises SrvHst to SrvPrincipal to assist with name matching.
+    ///
+    /// MS Windows uses SrvInst instead of SrvHst in TGS-REQ. This normalises
+    /// SrvInst to SrvPrincipal if there is only one instance component and it
+    /// looks like a DNS hostname
     pub fn service_hst_normalise(self) -> Self {
         match self {
             Self::SrvHst {
@@ -1072,6 +1075,25 @@ impl Name {
                 host,
                 realm,
             },
+            Self::SrvInst {
+                service,
+                instance,
+                realm,
+            } => {
+                if instance.len() == 1 {
+                    Self::SrvPrincipal {
+                        service,
+                        host: instance.first().expect("One instance").to_string(),
+                        realm,
+                    }
+                } else {
+                    Self::SrvInst {
+                        service,
+                        instance,
+                        realm,
+                    }
+                }
+            }
             ignore => ignore,
         }
     }
