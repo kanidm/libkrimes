@@ -499,10 +499,7 @@ impl KdcPrimaryKey {
             .to_der()
             .map_err(|_| KrbError::DerEncodeEncTicketPart)?;
 
-        // When we renew a clients ticket, we need to use key_usage 3 here, not 2
-        // like in a normal TGS response since we are using the KDC Primary Key
-        // instead of a service key.
-        let key_usage = 3;
+        let key_usage = 2;
 
         match self {
             KdcPrimaryKey::Aes256 { k, kvno } => {
