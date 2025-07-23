@@ -7,8 +7,6 @@ RUN zypper --non-interactive mr -e -a &&\
 RUN useradd --shell /bin/bash --create-home --home-dir /home/krime krime
 RUN echo "krime ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers.d/krime
 
-COPY examples/samba/smb.conf /etc/samba/smb.conf
-COPY examples/samba/krb5.conf /etc/krb5.conf
 COPY examples/samba/fun.sh /home/krime/fun.sh
 
 COPY examples/samba/entrypoint.samba /entrypoint.sh
