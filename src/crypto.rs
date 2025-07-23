@@ -679,11 +679,11 @@ mod tests {
 
         let data = decrypt_aes256_cts_hmac_sha1_96(&out_key, &enc_data, key_usage).unwrap();
 
-        eprintln!("{:?}", data);
+        eprintln!("{data:?}");
 
         let pa_enc_ts_enc = PaEncTsEnc::from_der(&data).unwrap();
 
-        eprintln!("{:?}", pa_enc_ts_enc);
+        eprintln!("{pa_enc_ts_enc:?}");
     }
 
     #[test]

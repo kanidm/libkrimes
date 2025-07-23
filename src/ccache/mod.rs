@@ -187,7 +187,7 @@ impl CredentialV4 {
                         };
                         let tt = Asn1TaggedTicket::new(t);
                         tt.to_der().map_err(|e| {
-                            println!("{:#?}", e);
+                            println!("{e:#?}");
                             KrbError::DerEncodeEncTicketPart
                         })?
                     }

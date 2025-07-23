@@ -381,7 +381,7 @@ impl TryFrom<Config> for ServerState {
                      password,
                      kvno,
                  }| {
-                    let salt = format!("{}{}", realm, name);
+                    let salt = format!("{realm}{name}");
 
                     let base_key =
                         DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None, kvno)?;
@@ -405,7 +405,7 @@ impl TryFrom<Config> for ServerState {
                      kvno,
                  }| {
                     let name = format!("{srvname}/{hostname}");
-                    let salt = format!("{}{}", realm, name);
+                    let salt = format!("{realm}{name}");
 
                     let princ_name = Name::service(&srvname, &hostname, &realm);
 
