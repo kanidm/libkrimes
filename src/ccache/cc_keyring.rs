@@ -204,7 +204,7 @@ fn get_random_subsidiary_name(collection: &mut Keyring) -> Result<String, KrbErr
             .take(7)
             .map(char::from)
             .collect();
-        let s = format!("_krb_{}", s);
+        let s = format!("_krb_{s}");
         let k = subsidiary_exists(collection, s.as_str())?;
         if k.is_none() {
             return Ok(s);
@@ -224,7 +224,7 @@ fn get_subsidiary_cache(
     match &residual.subsidiary {
         Some(subsidiary_name) => {
             // The subsidiary name was given in the residual
-            let subsidiary_name = format!("_krb_{}", subsidiary_name);
+            let subsidiary_name = format!("_krb_{subsidiary_name}");
             match subsidiary_exists(collection, subsidiary_name.as_str())? {
                 Some(subsidiary) => {
                     // The subsidiary name was given in the residual and it already

@@ -147,7 +147,7 @@ impl DerivedKey {
                     (None, None)
                 };
 
-                let salt = salt.unwrap_or_else(|| format!("{}{}", realm, username));
+                let salt = salt.unwrap_or_else(|| format!("{realm}{username}"));
 
                 let iter_count = iter_count.unwrap_or(RFC_PBKDF2_SHA1_ITER);
 
@@ -178,7 +178,7 @@ impl DerivedKey {
             .salt
             .as_ref()
             .cloned()
-            .unwrap_or_else(|| format!("{}{}", realm, username));
+            .unwrap_or_else(|| format!("{realm}{username}"));
 
         match &etype_info2.etype {
             EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
@@ -958,7 +958,7 @@ impl TryInto<KdcEncryptedData> for EncryptedData {
                 etype: EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
                 kvno,
                 cipher: OctetString::new(data).map_err(|e| {
-                    println!("{:#?}", e);
+                    println!("{e:#?}");
                     KrbError::UnsupportedEncryption // TODO
                 })?,
             }),
@@ -1165,28 +1165,28 @@ impl From<&Name> for String {
     fn from(val: &Name) -> Self {
         match val {
             Name::Principal { name, realm } => {
-                format!("{}@{}", name, realm)
+                format!("{name}@{realm}")
             }
             Name::SrvPrincipal {
                 service,
                 host,
                 realm,
             } => {
-                format!("{}/{}@{}", service, host, realm)
+                format!("{service}/{host}@{realm}")
             }
             Name::SrvInst {
                 service,
                 instance,
                 realm,
             } => {
-                format!("{}/{}@{}", service, instance.join("/"), realm)
+                format!("{service}/{}@{realm}", instance.join("/"))
             }
             Name::SrvHst {
                 service,
                 host,
                 realm,
             } => {
-                format!("{}/{}@{}", service, host, realm)
+                format!("{service}/{host}@{realm}")
             }
         }
     }
