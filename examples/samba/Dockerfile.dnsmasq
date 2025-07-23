@@ -1,0 +1,19 @@
+FROM opensuse/leap:15.6 AS ref_repo
+
+RUN zypper --non-interactive mr -e -a &&\
+    zypper --non-interactive --gpg-auto-import-keys ref --force && \
+    zypper --non-interactive install \
+      hostname vim tcpdump iputils iproute2 dnsmasq netcat-openbsd
+
+COPY examples/samba/entrypoint.dnsmasq /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+SHELL ["/bin/bash", "--login", "-c"]
+CMD ["/bin/bash", "--login"]
+
+# Added as part of the pkg install
+USER dnsmasq
+WORKDIR /var/lib/empty
+
+EXPOSE 53/tcp
+EXPOSE 53/udp

@@ -1,0 +1,119 @@
+services:
+  dnsmasq:
+    restart: unless-stopped
+    build:
+      context: ../../
+      dockerfile: ./examples/samba/Dockerfile.dnsmasq
+    image: libkrimes:dnsmasq
+    container_name: libkrimes_dnsmasq
+    command: dnsmasq
+    privileged: false
+    hostname: dnsmasq
+    domainname: example.com
+    dns_search: example.com
+    dns: 192.168.103.10
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "53"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    networks:
+      static-network:
+        ipv4_address: 192.168.103.10
+    expose:
+      - "53"
+      - "53/udp"
+    configs:
+      - source: dnsmasq_conf
+        target: /etc/dnsmasq.conf
+
+  krimedc:
+    restart: no
+    build:
+      context: ../../
+      dockerfile: ./examples/samba/Dockerfile.krimedc
+    image: libkrimes:kdc
+    container_name: libkrimes_kdc
+    command: krimedc
+    privileged: false
+    hostname: krimedc
+    domainname: example.com
+    dns_search: example.com
+    dns: 192.168.103.10
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "88"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - samba-keytab:/tmp/samba/
+    networks:
+      static-network:
+        ipv4_address: 192.168.103.11
+    expose:
+      - "88"
+      - "88/udp"
+    configs:
+      - source: krb5_conf
+        target: /etc/krb5.conf
+      - source: krime_conf
+        target: /tmp/krime.conf
+
+  samba:
+    depends_on:
+      krimedc:
+        condition: service_healthy
+      dnsmasq:
+        condition: service_healthy
+    restart: unless-stopped
+    build:
+      context: ../../
+      dockerfile: ./examples/samba/Dockerfile.samba
+    image: libkrimes:smb
+    container_name: libkrimes_smb
+    command: smbd
+    hostname: samba
+    domainname: example.com
+    dns_search: example.com
+    dns: 192.168.103.10
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "445" ]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - samba-keytab:/tmp/samba/
+    networks:
+      static-network:
+        ipv4_address: 192.168.103.12
+    expose:
+      - "445"
+    configs:
+      - source: krb5_conf
+        target: /etc/krb5.conf
+      - source: smb_conf
+        target: /etc/samba/smb.conf
+
+configs:
+  krb5_conf:
+    file: ./krb5.conf
+  krime_conf:
+    file: ./krime.conf
+  smb_conf:
+    file: ./smb.conf
+  dnsmasq_conf:
+    file: ./dnsmasq.conf
+
+volumes:
+  samba-keytab:
+
+networks:
+  static-network:
+    driver: macvlan
+    driver_opts:
+      macvlan_mode: bridge
+      parent: virbr2
+    ipam:
+      config:
+        - subnet: 192.168.103.0/24
+          gateway: 192.168.103.1

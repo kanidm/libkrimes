@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "$1" == "dnsmasq" ]; then
+  /usr/sbin/dnsmasq --log-async --log-facility=- --keep-in-foreground --conf-file=/etc/dnsmasq.conf
+else
+  eval "$1"
+  exit 0
+fi
