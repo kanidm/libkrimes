@@ -161,3 +161,10 @@ SERVER="127.0.0.1:55000" DC_SERVER="127.0.0.1:55000" DOMAIN="EXAMPLE" REALM="EXA
 ```
 ```
 
+
+## CLDAP Testing
+
+`cargo build --bin krimedc`
+`$ sudo setcap 'cap_net_bind_service=+ep' /path/to/program`
+`cargo run --bin krimedc -- run examples/krime.conf`
+`net ads lookup -S 127.0.0.1`

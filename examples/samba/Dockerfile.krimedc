@@ -22,4 +22,4 @@ EXPOSE 88/udp
 
 WORKDIR /tmp/libkrimes
 COPY . .
-RUN cargo build
+RUN cargo build --features cldap
