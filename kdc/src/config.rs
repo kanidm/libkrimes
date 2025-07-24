@@ -2,6 +2,7 @@ use libkrimes::error::KrbError;
 use libkrimes::proto::{DerivedKey, KdcPrimaryKey, Name};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::fmt::{Display, Formatter};
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -174,5 +175,27 @@ impl TryFrom<&Config> for ServerState {
             ticket_granting_ticket_lifetime,
             service_granting_ticket_lifetime,
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum CoreAction {
+    Shutdown,
+}
+
+#[derive(Clone, Debug)]
+pub enum TaskName {
+    KdcTcp,
+}
+
+impl Display for TaskName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                TaskName::KdcTcp => "Key Distribution Center (TCP)",
+            }
+        )
     }
 }
