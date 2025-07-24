@@ -1,0 +1,57 @@
+[package]
+name = "libkrimes"
+
+version = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[features]
+keyring = ["dep:libc", "dep:keyutils"]
+
+[dependencies]
+bytes = "^1.1.0"
+
+num_enum = "^0.7.3"
+tokio-util = { workspace = true }
+
+tracing = { workspace = true }
+
+# der = { version = "0.7.9", features = ["alloc", "derive"] }
+der = { version = "0.8.0-rc.2", features = [
+  "alloc",
+  "derive",
+  "flagset",
+  "std",
+] }
+
+# Cryptographic Libraries from the rust-crypto project
+aes = "0.8.4"
+cbc = "0.1.2"
+hmac = "0.12.1"
+pbkdf2 = "0.12.2"
+
+rand = "0.9.0"
+sha1 = "0.10.6"
+binrw = "0.15.0"
+
+assert_hex = "0.4.1"
+uzers = "0.12.1"
+errno = "0.3.11"
+
+libc = { version = "0.2.162", optional = true }
+keyutils = { version = "0.4.0", optional = true }
+bitmask-enum = "2.2.5"
+hex = { workspace = true }
+
+[dev-dependencies]
+base64 = "0.22.0"
+clap = { version = "^4.5.8", features = ["derive"] }
+tempfile = "3.19.1"
+which = "8.0.0"
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures = { workspace = true }
