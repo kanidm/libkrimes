@@ -499,7 +499,7 @@ async fn main_run(config: Config) -> io::Result<()> {
     }
 }
 
-async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
+fn keytab_extract_run(name: &str, output: &Path, config: Config) -> io::Result<()> {
     use libkrimes::keytab::{Keytab, KeytabEntry};
 
     let server_state = ServerState::try_from(config)
@@ -509,7 +509,7 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
     let principal_name = if let Some((srv, host)) = name.split_once('/') {
         Name::service(srv, host, server_state.realm.as_str())
     } else {
-        Name::principal(name.as_str(), server_state.realm.as_str())
+        Name::principal(name, server_state.realm.as_str())
     };
 
     let key: DerivedKey = if principal_name.is_service_krbtgt(&server_state.realm) {
@@ -585,7 +585,7 @@ async fn main() -> io::Result<()> {
             config,
         } => {
             let cfg = parse_config(&config)?;
-            keytab_extract_run(name, output, cfg).await
+            keytab_extract_run(&name, &output, cfg)
         }
     }
 }
