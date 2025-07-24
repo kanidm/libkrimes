@@ -16,24 +16,22 @@
 #![deny(clippy::manual_let_else)]
 #![allow(clippy::unreachable)]
 
+mod config;
+
 use clap::{Parser, Subcommand};
+use config::{Config, ServerState};
 use futures::{SinkExt, StreamExt};
-use libkrimes::error::KrbError;
 use libkrimes::proto::{
     AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
     KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TicketGrantTimeBound,
     TicketRenewTimeBound,
 };
 use libkrimes::KdcTcpCodec;
-use serde::Deserialize;
-use std::collections::BTreeMap;
-use std::fs;
 use std::io;
-use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, instrument, trace};
@@ -326,164 +324,7 @@ enum Opt {
     },
 }
 
-fn default_kvno() -> u32 {
-    1
-}
-
-#[derive(Debug, Deserialize)]
-struct UserPrincipal {
-    name: String,
-    password: String,
-    #[serde(default = "default_kvno")]
-    kvno: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct ServicePrincipal {
-    hostname: String,
-    srvname: String,
-    password: String,
-    #[serde(default = "default_kvno")]
-    kvno: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct Config {
-    realm: String,
-    address: SocketAddr,
-    #[serde(deserialize_with = "hex::serde::deserialize")]
-    primary_key: Vec<u8>,
-
-    user: Vec<UserPrincipal>,
-
-    service: Vec<ServicePrincipal>,
-}
-
-impl TryFrom<Config> for ServerState {
-    type Error = KrbError;
-
-    fn try_from(cr: Config) -> Result<Self, Self::Error> {
-        let Config {
-            realm,
-            address: _,
-            primary_key,
-            user,
-            service,
-        } = cr;
-
-        let primary_key = KdcPrimaryKey::try_from(primary_key.as_slice())?;
-
-        let principals = user
-            .into_iter()
-            .map(
-                |UserPrincipal {
-                     name,
-                     password,
-                     kvno,
-                 }| {
-                    let salt = format!("{realm}{name}");
-
-                    let base_key =
-                        DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None, kvno)?;
-
-                    let princ_name = Name::principal(&name, &realm);
-
-                    Ok((
-                        princ_name,
-                        PrincipalRecord {
-                            service: false,
-                            base_key,
-                        },
-                    ))
-                },
-            )
-            .chain(service.into_iter().map(
-                |ServicePrincipal {
-                     srvname,
-                     hostname,
-                     password,
-                     kvno,
-                 }| {
-                    let name = format!("{srvname}/{hostname}");
-                    let salt = format!("{realm}{name}");
-
-                    let princ_name = Name::service(&srvname, &hostname, &realm);
-
-                    let base_key =
-                        DerivedKey::new_aes256_cts_hmac_sha1_96(&password, &salt, None, kvno)?;
-
-                    Ok((
-                        princ_name,
-                        PrincipalRecord {
-                            service: true,
-                            base_key,
-                        },
-                    ))
-                },
-            ))
-            .collect::<Result<_, KrbError>>()?;
-
-        let allowed_clock_skew = Duration::from_secs(300);
-
-        // Short tickets are good, but not too short.
-        let ticket_min_lifetime = Duration::from_secs(60);
-        // Should be short-ish to promote frequent renewals.
-        let ticket_granting_ticket_lifetime = Duration::from_secs(900);
-        // You can renew for up to a week. We may change this ....
-        let ticket_max_renew_time = Some(Duration::from_secs(86400 * 7));
-
-        // This needs to be *long* because TGS can't be renewed, and most
-        // applications absolutely *lose their mind* when this expires rapidly.
-        //
-        // For example, finder on macos with SMB just disconnects you soon after this
-        // expires, doesn't try to get a new TGS and open a new session to continue
-        // the connection or make a new connection.
-        //
-        // The only way to make this work is for the TGS to be looooooooooongggggggg.
-        // I'm really not sure what value should be because if it's too long then that
-        // allows an attacker a long-term access to the service. If it's too short,
-        // then things break.
-        //
-        // Likely we need to ensure that there is a way to kill sessions on the SMB side
-        // when we expire an account. Thought needed to what this value should be ...
-        let service_granting_ticket_lifetime = Duration::from_secs(3600 * 8);
-
-        Ok(ServerState {
-            realm,
-            primary_key,
-            principals,
-            allowed_clock_skew,
-            ticket_min_lifetime,
-            ticket_max_renew_time,
-
-            ticket_granting_ticket_lifetime,
-            service_granting_ticket_lifetime,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PrincipalRecord {
-    service: bool,
-    base_key: DerivedKey,
-}
-
-#[derive(Debug)]
-struct ServerState {
-    realm: String,
-    primary_key: KdcPrimaryKey,
-    allowed_clock_skew: Duration,
-
-    ticket_granting_ticket_lifetime: Duration,
-    service_granting_ticket_lifetime: Duration,
-
-    ticket_min_lifetime: Duration,
-    ticket_max_renew_time: Option<Duration>,
-
-    principals: BTreeMap<Name, PrincipalRecord>,
-}
-
-async fn main_run(config: Config) -> io::Result<()> {
+async fn main_run(config: &Config) -> io::Result<()> {
     let listener = TcpListener::bind(&config.address).await?;
 
     info!("started krimedc on {}", config.address);
@@ -499,7 +340,7 @@ async fn main_run(config: Config) -> io::Result<()> {
     }
 }
 
-fn keytab_extract_run(name: &str, output: &Path, config: Config) -> io::Result<()> {
+fn keytab_extract_run(name: &str, output: &Path, config: &Config) -> io::Result<()> {
     use libkrimes::keytab::{Keytab, KeytabEntry};
 
     let server_state = ServerState::try_from(config)
@@ -557,17 +398,6 @@ fn keytab_extract_run(name: &str, output: &Path, config: Config) -> io::Result<(
     Ok(())
 }
 
-fn parse_config<P: AsRef<Path>>(path: P) -> io::Result<Config> {
-    let mut contents = String::new();
-    let mut f = fs::File::open(&path)?;
-    f.read_to_string(&mut contents)?;
-
-    toml::from_str(&contents).map_err(|err| {
-        error!(?err);
-        io::Error::other("toml parse failure")
-    })
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
     let opt = OptParser::parse();
@@ -576,16 +406,16 @@ async fn main() -> io::Result<()> {
 
     match opt.command {
         Opt::Run { config } => {
-            let cfg = parse_config(&config)?;
-            main_run(cfg).await
+            let cfg = Config::parse(&config)?;
+            main_run(&cfg).await
         }
         Opt::Keytab {
             name,
             output,
             config,
         } => {
-            let cfg = parse_config(&config)?;
-            keytab_extract_run(&name, &output, cfg)
+            let cfg = Config::parse(&config)?;
+            keytab_extract_run(&name, &output, &cfg)
         }
     }
 }
