@@ -1,3 +1,4 @@
+use libkrimes::cldap::CldapConfigBuilder;
 use libkrimes::error::KrbError;
 use libkrimes::proto::{DerivedKey, KdcPrimaryKey, Name};
 use serde::Deserialize;
@@ -35,6 +36,7 @@ pub struct ServicePrincipal {
 pub struct Config {
     pub realm: String,
     pub address: String,
+    pub cldap: Option<CldapConfigBuilder>,
     #[serde(deserialize_with = "hex::serde::deserialize")]
     pub primary_key: Vec<u8>,
     pub user: Vec<UserPrincipal>,
@@ -82,6 +84,7 @@ impl TryFrom<&Config> for ServerState {
         let Config {
             realm,
             address: _,
+            cldap: _,
             primary_key,
             user,
             service,
@@ -186,6 +189,7 @@ pub enum CoreAction {
 #[derive(Clone, Debug)]
 pub enum TaskName {
     KdcTcp,
+    CldapUdp,
 }
 
 impl Display for TaskName {
@@ -195,6 +199,7 @@ impl Display for TaskName {
             "{}",
             match self {
                 TaskName::KdcTcp => "Key Distribution Center (TCP)",
+                TaskName::CldapUdp => "CLDAP (UDP)",
             }
         )
     }

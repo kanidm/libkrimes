@@ -16,6 +16,7 @@
 #![deny(clippy::manual_let_else)]
 #![allow(clippy::unreachable)]
 
+mod cldap;
 mod config;
 
 use clap::{Parser, Subcommand};
@@ -431,6 +432,19 @@ async fn create_server_core(config: &Config) -> Result<CoreHandle, ()> {
     )
     .await?;
     handles.push((TaskName::KdcTcp, kdc_handle));
+
+    if let Some(cldap_handle) = match &config.cldap {
+        Some(cfg) => {
+            let h = cldap::create_cldap_server(cfg, broadcast_tx.subscribe()).await?;
+            Some(h)
+        }
+        None => {
+            debug!("CLDAP server disabled");
+            None
+        }
+    } {
+        handles.push((TaskName::CldapUdp, cldap_handle));
+    }
 
     Ok(CoreHandle {
         clean_shutdown: false,

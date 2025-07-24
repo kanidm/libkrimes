@@ -6,7 +6,7 @@ members = ["libkrimes", "kdc"]
 version = "0.1.0"
 edition = "2021"
 authors = ["William Brown <william@blackhats.net.au>"]
-rust-version = "1.77"
+rust-version = "1.80"
 license = "MPL-2.0"
 homepage = "https://github.com/Firstyear/libkrimes"
 repository = "https://github.com/Firstyear/libkrimes"
@@ -22,6 +22,10 @@ tokio = { version = "1", features = [
   "io-util",
   "signal",
 ] }
-tokio-util = { version = "^0.7.1", features = ["codec"] }
+tokio-util = { version = "^0.7.1", features = ["codec", "net"] }
 hex = { version = "0.4.3", features = ["serde"] }
 futures = "^0.3.21"
+uuid = { version = "1.17.0", features = ["serde", "v4"] }
+serde = { version = "^1.0.204", features = ["derive"] }
+libc = { version = "0.2.162" }
+errno = { version = "0.3.11" }

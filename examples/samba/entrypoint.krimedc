@@ -7,7 +7,7 @@ if [ "$1" == "krimedc" ]; then
     echo "Extracting keytab for samba..."
     cargo run --bin krimedc -- keytab /tmp/krime.conf cifs/samba.example.com /tmp/samba/samba.keytab
     echo "Starting KDC..."
-    cargo run --bin krimedc -- run /tmp/krime.conf
+    cargo run --features cldap --bin krimedc -- run /tmp/krime.conf
     exit 0
 else
     eval "$1"
