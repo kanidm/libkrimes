@@ -19,7 +19,7 @@
 mod config;
 
 use clap::{Parser, Subcommand};
-use config::{Config, ServerState};
+use config::{Config, CoreAction, ServerState, TaskName};
 use futures::{SinkExt, StreamExt};
 use libkrimes::proto::{
     AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
@@ -30,9 +30,11 @@ use libkrimes::KdcTcpCodec;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::broadcast;
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, instrument, trace};
 
@@ -265,9 +267,13 @@ async fn process_ticket_renewal(
     })
 }
 
-async fn process(socket: TcpStream, info: SocketAddr, server_state: Arc<ServerState>) {
-    let mut kdc_stream = Framed::new(socket, KdcTcpCodec::default());
-    trace!(?info, "connection from");
+async fn kdc_tcp_client_process(
+    tcpstream: TcpStream,
+    client_address: SocketAddr,
+    server_state: Arc<ServerState>,
+) {
+    let mut kdc_stream = Framed::new(tcpstream, KdcTcpCodec::default());
+    trace!(?client_address, "connection from");
 
     while let Some(Ok(kdc_req)) = kdc_stream.next().await {
         trace!(?kdc_req);
@@ -324,20 +330,113 @@ enum Opt {
     },
 }
 
-async fn main_run(config: &Config) -> io::Result<()> {
-    let listener = TcpListener::bind(&config.address).await?;
-
-    info!("started krimedc on {}", config.address);
-
-    let server_state = ServerState::try_from(config)
-        .map(Arc::new)
-        .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data"))?;
+async fn kdc_tcp_acceptor(
+    listener: TcpListener,
+    server_state: Arc<ServerState>,
+    mut rx: broadcast::Receiver<CoreAction>,
+) {
+    info!("Started task {}", TaskName::KdcTcp);
 
     loop {
-        let (socket, info) = listener.accept().await?;
-        let state = server_state.clone();
-        tokio::spawn(async move { process(socket, info, state).await });
+        tokio::select! {
+        Ok(action) = rx.recv() => {
+            match action {
+                CoreAction::Shutdown => break,
+            }
+        }
+        accept_result = listener.accept() => {
+               match accept_result {
+                    Ok((tcpstream, client_socket_addr)) => {
+                        let state = server_state.clone();
+                        tokio::spawn(async move {kdc_tcp_client_process(tcpstream, client_socket_addr, state).await });
+                    },
+                    Err(e) => {
+                        error!("LDAP acceptor error, continuing -> {:?}", e);
+                    }
+                }
+            }
+        }
     }
+
+    info!("Stopped task {}", TaskName::KdcTcp);
+}
+
+async fn create_kdc_tcp_server(
+    address: &str,
+    server_state: Arc<ServerState>,
+    rx: broadcast::Receiver<CoreAction>,
+) -> Result<tokio::task::JoinHandle<()>, ()> {
+    let addr = SocketAddr::from_str(address).map_err(|e| {
+        error!("Could not parse KDC server address {} -> {:?}", address, e);
+    })?;
+
+    let listener = TcpListener::bind(&addr).await.map_err(|e| {
+        error!(
+            "Could not bind to KDC server address {} -> {:?}",
+            address, e
+        );
+    })?;
+
+    let kdc_tcp_handle = tokio::spawn(kdc_tcp_acceptor(listener, server_state, rx));
+
+    Ok(kdc_tcp_handle)
+}
+
+struct CoreHandle {
+    clean_shutdown: bool,
+    tx: broadcast::Sender<CoreAction>,
+    handles: Vec<(TaskName, tokio::task::JoinHandle<()>)>,
+}
+
+impl CoreHandle {
+    async fn shutdown(&mut self) {
+        if self.tx.send(CoreAction::Shutdown).is_err() {
+            eprintln!("No receivers acked shutdown request. Treating as unclean.");
+            return;
+        }
+
+        // Wait on the handles.
+        while let Some((handle_name, handle)) = self.handles.pop() {
+            if let Err(error) = handle.await {
+                eprintln!("Task {handle_name} failed to finish: {error:?}");
+            }
+        }
+
+        self.clean_shutdown = true;
+    }
+}
+
+impl Drop for CoreHandle {
+    fn drop(&mut self) {
+        if !self.clean_shutdown {
+            eprintln!("⚠️  UNCLEAN SHUTDOWN OCCURRED ⚠️ ");
+        }
+        debug_assert!(self.clean_shutdown);
+    }
+}
+
+async fn create_server_core(config: &Config) -> Result<CoreHandle, ()> {
+    let (broadcast_tx, mut _broadcast_rx) = broadcast::channel(4);
+
+    let server_state = ServerState::try_from(config).map(Arc::new).map_err(|e| {
+        error!("Could not get server state from config -> {:?}", e);
+    })?;
+
+    let mut handles: Vec<(TaskName, tokio::task::JoinHandle<()>)> = vec![];
+
+    let kdc_handle = create_kdc_tcp_server(
+        &config.address,
+        server_state.clone(),
+        broadcast_tx.subscribe(),
+    )
+    .await?;
+    handles.push((TaskName::KdcTcp, kdc_handle));
+
+    Ok(CoreHandle {
+        clean_shutdown: false,
+        tx: broadcast_tx,
+        handles,
+    })
 }
 
 fn keytab_extract_run(name: &str, output: &Path, config: &Config) -> io::Result<()> {
@@ -399,23 +498,89 @@ fn keytab_extract_run(name: &str, output: &Path, config: &Config) -> io::Result<
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
-    let opt = OptParser::parse();
-
+async fn main() -> Result<(), ()> {
     tracing_subscriber::fmt::init();
+
+    let opt = OptParser::parse();
 
     match opt.command {
         Opt::Run { config } => {
-            let cfg = Config::parse(&config)?;
-            main_run(&cfg).await
+            let cfg = Config::parse(&config).map_err(|e| {
+                error!("Could not parse config file {:?}: {:?}", config, e);
+            })?;
+
+            let sctx = create_server_core(&cfg).await;
+            match sctx {
+                Ok(mut sctx) => {
+                    loop {
+                        let mut listener = sctx.tx.subscribe();
+                        tokio::select! {
+                            Ok(()) = tokio::signal::ctrl_c() => {
+                                break
+                            }
+                            Some(()) = async move {
+                                let sigterm = tokio::signal::unix::SignalKind::alarm();
+                                #[allow(clippy::unwrap_used)]
+                                tokio::signal::unix::signal(sigterm).unwrap().recv().await
+                            } => {
+                                // Ignore
+                            }
+                            Some(()) = async move {
+                                let sigterm = tokio::signal::unix::SignalKind::hangup();
+                                #[allow(clippy::unwrap_used)]
+                                tokio::signal::unix::signal(sigterm).unwrap().recv().await
+                            } => {
+                                // Ignore
+                            }
+                            Some(()) = async move {
+                                let sigterm = tokio::signal::unix::SignalKind::user_defined1();
+                                #[allow(clippy::unwrap_used)]
+                                tokio::signal::unix::signal(sigterm).unwrap().recv().await
+                            } => {
+                                // Ignore
+                            }
+                            Some(()) = async move {
+                                let sigterm = tokio::signal::unix::SignalKind::user_defined2();
+                                #[allow(clippy::unwrap_used)]
+                                tokio::signal::unix::signal(sigterm).unwrap().recv().await
+                            } => {
+                                // Ignore
+                            }
+                            // we got a message on thr broadcast from somewhere else
+                            Ok(msg) = async move {
+                                listener.recv().await
+                            } => {
+                                debug!("Main loop received message: {:?}", msg);
+                                break
+                            }
+                        }
+                    }
+                    info!("Signal received, shutting down");
+                    // Send a broadcast that we are done.
+                    sctx.shutdown().await;
+                }
+                Err(_) => {
+                    error!("Failed to start server core!");
+                    return Err(());
+                }
+            }
         }
         Opt::Keytab {
             name,
             output,
             config,
         } => {
-            let cfg = Config::parse(&config)?;
-            keytab_extract_run(&name, &output, &cfg)
+            let cfg = Config::parse(&config).map_err(|e| {
+                error!("Could not parse config file {:?}: {:?}", config, e);
+            })?;
+            keytab_extract_run(&name, &output, &cfg).map_err(|e| {
+                error!(
+                    "Could not extract principal {:?} to keytab {:?}: {:?}",
+                    name, output, e
+                );
+            })?
         }
     }
+
+    Ok(())
 }
