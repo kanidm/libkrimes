@@ -18,13 +18,13 @@
 
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
-use libkrime::error::KrbError;
-use libkrime::proto::{
+use libkrimes::error::KrbError;
+use libkrimes::proto::{
     AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
     KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TicketGrantTimeBound,
     TicketRenewTimeBound,
 };
-use libkrime::KdcTcpCodec;
+use libkrimes::KdcTcpCodec;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
@@ -500,7 +500,7 @@ async fn main_run(config: Config) -> io::Result<()> {
 }
 
 async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io::Result<()> {
-    use libkrime::keytab::{Keytab, KeytabEntry};
+    use libkrimes::keytab::{Keytab, KeytabEntry};
 
     let server_state = ServerState::try_from(config)
         .map(Arc::new)
@@ -541,7 +541,7 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
 
     let ktname = "FILE:".to_owned() + output.to_string_lossy().to_string().as_str();
     let k: Keytab = if output.exists() {
-        let mut keytab = libkrime::keytab::load(Some(&ktname)).map_err(|err| {
+        let mut keytab = libkrimes::keytab::load(Some(&ktname)).map_err(|err| {
             error!(?err, "Failed to load keytab file at {}", ktname);
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "keytab")
         })?;
@@ -551,7 +551,7 @@ async fn keytab_extract_run(name: String, output: PathBuf, config: Config) -> io
         vec![entry]
     };
 
-    libkrime::keytab::store(Some(&ktname), &k)
+    libkrimes::keytab::store(Some(&ktname), &k)
         .map_err(|_err| std::io::Error::new(std::io::ErrorKind::InvalidInput, "write"))?;
 
     Ok(())

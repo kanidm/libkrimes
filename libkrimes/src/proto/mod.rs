@@ -1553,6 +1553,9 @@ pub async fn get_tgt(
             let kdc_reply = enc_part.decrypt_enc_kdc_rep(&base_key)?;
             (name, ticket, kdc_reply)
         }
+        KerberosReply::ERR(err) => {
+            panic!("{err:?}");
+        }
         _ => unreachable!(),
     };
 

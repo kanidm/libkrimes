@@ -1,61 +1,21 @@
-[package]
-name = "libkrime"
+[workspace]
+resolver = "3"
+members = ["libkrimes", "kdc"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-
 authors = ["William Brown <william@blackhats.net.au>"]
 rust-version = "1.77"
 license = "MPL-2.0"
 homepage = "https://github.com/Firstyear/libkrimes"
 repository = "https://github.com/Firstyear/libkrimes"
 
-[features]
-keyring = ["dep:libc", "dep:keyutils"]
-
-[dependencies]
-bytes = "^1.1.0"
-clap = { version = "^4.5", features = ["derive", "env"] }
-futures = "^0.3.21"
-
-hex = { version = "0.4.3", features = ["serde"] }
-num_enum = "^0.7.3"
-tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }
-
-tokio-util = { version = "^0.7.1", features = ["codec"] }
-
+[workspace.dependencies]
+libkrimes = { path = "./libkrimes" }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
-
-# der = { version = "0.7.9", features = ["alloc", "derive"] }
-der = { version = "0.8.0-rc.2", features = [
-    "alloc",
-    "derive",
-    "flagset",
-    "std",
-] }
-
-# Cryptographic Libraries from the rust-crypto project
-aes = "0.8.4"
-cbc = "0.1.2"
-hmac = "0.12.1"
-pbkdf2 = "0.12.2"
-
-rand = "0.9.0"
-sha1 = "0.10.6"
-binrw = "0.14.0"
-toml = "^0.8.20"
-
-serde = { version = "^1.0.204", features = ["derive"] }
-assert_hex = "0.4.1"
-uzers = "0.12.1"
-errno = "0.3.11"
-
-libc = { version = "0.2.162", optional = true }
-keyutils = { version = "0.4.0", optional = true }
-bitmask-enum = "2.2.5"
-
-[dev-dependencies]
-base64 = "0.22.0"
-clap = { version = "^4.5.8", features = ["derive"] }
-tempfile = "3.19.1"
-which = "7.0.2"
+tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }
+tokio-util = { version = "^0.7.1", features = ["codec"] }
+hex = { version = "0.4.3", features = ["serde"] }
+futures = "^0.3.21"
