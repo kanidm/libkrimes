@@ -21,6 +21,7 @@ pub enum KrbError {
     CtsCiphertextInvalid,
     InsecurePassphrase,
     UnsupportedEncryption,
+    UnsupportedChecksumType,
     MissingPaData,
     MissingServiceNameWithRealm,
     MissingClientName,
@@ -60,6 +61,8 @@ pub enum KrbError {
     TgsTicketIsNotTgt,
     TgsKdcReqMissingServiceName,
     TgsKdcMissingStartTime,
+
+    ApInappChecksum,
 
     NameNotPrincipal,
     NameNotServiceHost,

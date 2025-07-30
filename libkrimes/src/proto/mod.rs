@@ -12,7 +12,6 @@ pub use self::time::{
 };
 use crate::asn1::ap_req::ApReq;
 use crate::asn1::authenticator::Authenticator;
-use crate::asn1::checksum::Checksum;
 use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::ticket_flags::TicketFlags;
 use crate::asn1::{
@@ -41,7 +40,7 @@ use crate::crypto::{
     derive_key_aes256_cts_hmac_sha1_96, encrypt_aes256_cts_hmac_sha1_96,
 };
 use crate::error::KrbError;
-use der::{asn1::Any, Decode, Encode};
+use der::{Decode, Encode};
 use rand::{rng, Rng};
 use std::cmp::Ordering;
 use std::fmt;
@@ -429,23 +428,10 @@ impl SessionKey {
         }
     }
 
-    fn checksum_kdc_req_body(&self, req_body: &Any) -> Result<Checksum, KrbError> {
-        let req_body = req_body
-            .to_der()
-            .map_err(|_| KrbError::DerEncodeKdcReqBody)?;
-        self.checksum(req_body.as_slice(), 6)
-    }
-
-    fn checksum(&self, data: &[u8], key_usage: i32) -> Result<Checksum, KrbError> {
+    pub(crate) fn checksum(&self, data: &[u8], key_usage: i32) -> Result<Vec<u8>, KrbError> {
         match self {
             SessionKey::Aes256CtsHmacSha196 { k } => {
                 let checksum = checksum_hmac_sha1_96_aes256(data, k, key_usage)?;
-                let checksum =
-                    OctetString::new(checksum).map_err(|_| KrbError::DerEncodeOctetString)?;
-                let checksum = Checksum {
-                    checksum_type: 16, // RFC 3962
-                    checksum,
-                };
                 Ok(checksum)
             }
         }
@@ -1565,7 +1551,14 @@ pub async fn get_tgt(
 #[cfg(test)]
 mod tests {
     use super::SessionKey;
-    use crate::constants::PBKDF2_SHA1_ITER_MINIMUM;
+    use crate::asn1::ap_req::ApReqInner;
+    use crate::asn1::kdc_req_body::KdcReqBody;
+    use crate::constants::AES_256_KEY_LEN;
+    use crate::proto::ApReq;
+    use crate::proto::KdcPrimaryKey;
+    use crate::proto::Preauth;
+    use crate::proto::TicketGrantRequestUnverified;
+    use crate::{cksum::ChecksumBuilder, constants::PBKDF2_SHA1_ITER_MINIMUM};
     use assert_hex::assert_eq_hex;
     use der::{asn1::Any, Decode};
 
@@ -1585,12 +1578,46 @@ mod tests {
         let checksum = "E101C395D98466F1FE8B6D79";
         let checksum = hex::decode(checksum).expect("Failed to decode sample");
 
-        let calculated_checksum = session_key
-            .checksum_kdc_req_body(&kdc_req_body)
+        let checksum_builder: ChecksumBuilder = session_key.into();
+        let calculated_checksum = checksum_builder
+            .compute_kdc_req_body(&kdc_req_body)
             .expect("Failed to compute checksum");
         let calculated_checksum = calculated_checksum.checksum.as_bytes();
 
         assert_eq_hex!(checksum, calculated_checksum);
+    }
+
+    #[test]
+    fn ap_req_authenticator_cksum_sha_md5() {
+        // Windows uses RSA-MD5 for the authenticator checksum...
+        let ap_req = "6e8205503082054ca003020105a10302010ea20703050000000000a382049d6182049930820495a003020105a10c1b0a41464f524553542e4144a21f301da003020102a11630141b066b72627467741b0a41464f524553542e4144a382045d30820459a003020112a103020102a282044b04820447b379f2dd485edf834344017e20ddc7ecf945982d0ebc5141e81c8d0bc7f0ccba1a08f14cbbb8cc65865bcdc1a595df1e1b5627941ee0cfb089d844a62bca34c0962acbe00f14f3817192048ad70c07644434cc7172ec23fd5ca0fa5a17d35ea94496223e5e537c1477f06cc044dc991b678da7f6c2d064a3ef73073859776b1b81fa3f4e3140c87afb5b3460f9f4882d4559b996ae015ad54d52237dc9c659c84550904438e0c0ec05bc1e19b81b06cb8230b71131eed8fcc7a4955dd0625dd9b21978ecab851f71a6704178f52fecceec48137907e47d5de102764dc429099c02e7635f48d421016b3a6a37faa5f60fe41e041284885fa1d106588d87818ab397dbf6c4edc3c829bc0e1aa564caf606e0319249823ebeaa1a71872898365bdebaaa6828255b3aa8f843be36e59a24a23a2b4bad6be12d2ba039d72d521364efe6d13df4fdaa3cd6b40bcec50dfcee3503d96e61c5f0606e8052da1615aff4b3c03b1366d942751df08c0574cbb3a5643e76de07aeacacf0c4d401f2e1c510a710baa8aa7f29f7bfe2cab8a917355361892e100170acc14327bb4d4766903db725845e304156b2660c2c429e6b048dec8bd30bf549bede3a9ef121ef5366d70e0604dceda52c8976cca338076a29044c95bb53a0951d276070887dd7e05ea404d1edb44ccdf78a472baea182f1da3078c0dd718fc4c6fb347e5255af3ae49257e2b1d54839829974bc30057b4e21341116727252282d50716203cf17e6404da963560654045ab30a78574011f317f702c03b8c841ff3ffe171e9dc8b1717104a0f63c37aa923b7871e4d84733cac3845e48c8147d946b932f0f1c21ce2525ded17aed31720c626fdbffc972640160139ede6456c257c1789fc3160374017aad4c353450385be527b1f6826faa7ab2382d41232eff561fb930e9953c3cfa91722356f890302594e50aac78067c0af4c5e1c7a25b26ba14e56385bd7891f9c74a07be8d8b4644c78410c84ddda3ad1110a77038cdd999437114b85811eccf1aedd77ec62037c1ffcaf3d005530a6dcda2c222698e9637dab3beef6981476c1891e473572c5243c33f244f32e59071450203559925b94fc0a4535103f31951065bc8058669d68e39593d69e81ecc03d5a1676169732cf47cd4a5dcd087bdc64ddfb7d7d108496179c22830a3a22859b3270db5aa1180c80eceb41a81086a7683eddf9250bad56559b4fef2ef777134fbcf8c12c19467ca1048b70776296780294f23a52b08410d83179fbd243e28436f7a77b3b0ced820540fa9ca7e619c7271d33088c080e925d9402b48bf25650ab657c4583bdb9e0379c1dd5c346fc5a0e17a0e456a3a5308d71b4e7425d43117934b972c166714813bb3cfc76dc6fb46e34882b71b030a569bf17b4886ac436d006c49f17237822747143c8a13885653ea0eb2991deda997a15a0c110878e665de2fe05c32b0979e01d1df85e0d93a7e60460841d92888f9b6da2b56be8d638342e17a9d22bc1de52398c87a48798d4e18467932aead6648f81a48195308192a003020112a2818a04818779f6e43cb8d73417987b7fbddc4d35c5e9a5fe6e97d122e5356c82525fc10db4c21266335c3e7620c07ac4d4334d24f3cee81dc70e02bf0a5f94306bfbca254c9b83c4397141b4805ed7057a9150d1f71c5a5f7d57d1a9b8d576ee3a818cddb29f2ce5ebca5c27c885c67d7f481ddcef90702b6c601b17c06dc385b535e0cccf61c7724c3729c8".to_string();
+        let ap_req = hex::decode(&ap_req).expect("Failed to decode hex stream");
+        let ap_req: ApReqInner = ApReq::from_der(&ap_req).expect("Failed to decode").into();
+        let ap_req: ApReq = ap_req.into();
+
+        let req_body = "3081e8a00703050040810000a20c1b0a41464f524553542e4144a3273025a003020102a11e301c1b04636966731b1477696e326b32322d312e61666f726573742e6164a511180f32303337303931333032343830355aa70602042452e588a81230100201120201110201170201180202ff79aa773075a003020112a26e046caab014da39aea0046e079de6967cbe16c80ecd06d9ec7e8d00910d8c011f6771884ac73e81c8c9cdd75b2eed6d678da30e1c2fcc4222244a1d554984f44a1cfcddd8b2a39f0f9ca46cd5df1f44b7f9be51be7fd415fc270ab85523286061ea8e503bfeb5d28467eb6032be03".to_string();
+        let req_body = hex::decode(&req_body).expect("Failed to decode hex stream");
+        let req_body: KdcReqBody = KdcReqBody::from_der(&req_body).expect("Failed to decode");
+        let req_body = Any::encode_from(&req_body).expect("Failed to decode");
+
+        let t = TicketGrantRequestUnverified {
+            preauth: Preauth {
+                tgs_req: Some(ap_req),
+                ..Default::default()
+            },
+            req_body,
+        };
+
+        let k: [u8; AES_256_KEY_LEN] = [
+            0xbd, 0xba, 0x8d, 0xaa, 0xe2, 0x43, 0xed, 0x02, 0xbb, 0xbc, 0x0a, 0x4a, 0x06, 0x73,
+            0x02, 0x83, 0x9b, 0x82, 0xe7, 0x42, 0xd9, 0x41, 0x18, 0xdc, 0xbe, 0xc4, 0x2d, 0xb9,
+            0x2d, 0x5c, 0x46, 0xbe,
+        ];
+        let primary_key = KdcPrimaryKey::Aes256 { k, kvno: 1 };
+        let realm = "AFOREST.AD";
+        let res = t.validate(&primary_key, realm);
+        println!("Validation result: {res:?}");
+        assert!(res.is_ok());
     }
 
     #[test]

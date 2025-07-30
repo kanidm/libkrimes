@@ -18,6 +18,7 @@
 
 pub mod asn1;
 pub mod ccache;
+pub(crate) mod cksum;
 pub mod cldap;
 pub(crate) mod constants;
 pub(crate) mod crypto;

@@ -77,6 +77,12 @@ impl From<ApReq> for ApReqInner {
     }
 }
 
+impl From<ApReqInner> for ApReq {
+    fn from(value: ApReqInner) -> Self {
+        ApReq(value)
+    }
+}
+
 impl AsRef<ApReqInner> for ApReq {
     fn as_ref(&self) -> &ApReqInner {
         &self.0

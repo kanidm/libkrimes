@@ -362,6 +362,24 @@ impl KerberosReply {
         })
     }
 
+    pub fn error_inappropiate_checksum(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KrbApErrInappCksum,
+            service,
+            error_text: Some("Inappropriate type of checksum in message".to_string()),
+            stime,
+        })
+    }
+
+    pub fn error_unsupported_checksum(service: Name, stime: SystemTime) -> KerberosReply {
+        KerberosReply::ERR(ErrorReply {
+            code: KrbErrorCode::KdcErrSumtypeNosupp,
+            service,
+            error_text: Some("KDC has no support for checksum type".to_string()),
+            stime,
+        })
+    }
+
     pub fn error_internal(service: Name, stime: SystemTime) -> KerberosReply {
         KerberosReply::ERR(ErrorReply {
             code: KrbErrorCode::KrbErrGeneric,

@@ -1,35 +1,38 @@
-use crate::asn1::{
-    ap_options::{ApFlags, ApOptions},
-    ap_req::{ApReq, ApReqInner},
-    authenticator::{Authenticator, AuthenticatorInner},
-    authorization_data::AuthorizationData,
-    constants::{
-        encryption_types::EncryptionType, message_types::KrbMessageType, pa_data_types::PaDataType,
-    },
-    encrypted_data::EncryptedData as KdcEncryptedData,
-    encryption_key::EncryptionKey,
-    kdc_req::KdcReq,
-    kdc_req_body::KdcReqBody,
-    kerberos_flags::KerberosFlags,
-    kerberos_time::KerberosTime,
-    krb_kdc_req::KrbKdcReq,
-    pa_data::PaData,
-    pa_enc_ts_enc::PaEncTsEnc,
-    tagged_ticket::TaggedTicket,
-    ticket_flags::TicketFlags,
-    OctetString,
-};
 use crate::error::KrbError;
+use crate::{
+    asn1::{
+        ap_options::{ApFlags, ApOptions},
+        ap_req::{ApReq, ApReqInner},
+        authenticator::{Authenticator, AuthenticatorInner},
+        authorization_data::AuthorizationData,
+        constants::{
+            encryption_types::EncryptionType, message_types::KrbMessageType,
+            pa_data_types::PaDataType,
+        },
+        encrypted_data::EncryptedData as KdcEncryptedData,
+        encryption_key::EncryptionKey,
+        kdc_req::KdcReq,
+        kdc_req_body::KdcReqBody,
+        kerberos_flags::KerberosFlags,
+        kerberos_time::KerberosTime,
+        krb_kdc_req::KrbKdcReq,
+        pa_data::PaData,
+        pa_enc_ts_enc::PaEncTsEnc,
+        tagged_ticket::TaggedTicket,
+        ticket_flags::TicketFlags,
+        OctetString,
+    },
+    cksum::ChecksumBuilder,
+};
 use der::{asn1::Any, Encode};
 use rand::{rng, Rng};
-
-use std::time::{Duration, SystemTime};
-use tracing::trace;
 
 use super::{
     DerivedKey, EncTicket, EncryptedData, KdcPrimaryKey, Name, Preauth, PreauthData, SessionKey,
     Ticket,
 };
+use std::time::{Duration, SystemTime};
+use tracing::trace;
 
 #[derive(Debug)]
 pub enum KerberosRequest {
@@ -314,9 +317,9 @@ impl TicketGrantRequestBuilder {
         let req_body = Any::encode_from(&req_body).map_err(|_| KrbError::DerEncodeAny)?;
 
         //  The checksum in the authenticator is to be computed over the KDC-REQ-BODY encoding.
-        let checksum = ap_req_builder
-            .session_key
-            .checksum_kdc_req_body(&req_body)?;
+        let checksum_builder =
+            ChecksumBuilder::HmacSha196Aes256(ap_req_builder.session_key.clone());
+        let checksum = checksum_builder.compute_kdc_req_body(&req_body)?;
 
         // The encrypted authenticator is included in the AP-REQ; it certifies
         // to a server that the sender has recent knowledge of the encryption
@@ -376,6 +379,8 @@ impl TicketGrantRequestUnverified {
         primary_key: &KdcPrimaryKey,
         realm: &str,
     ) -> Result<TicketGrantRequest, KrbError> {
+        trace!(?self, "Validating ap-req");
+
         // Destructure the ticket grant to make it easier to handle.
         let TicketGrantRequestUnverified {
             preauth:
@@ -402,8 +407,8 @@ impl TicketGrantRequestUnverified {
         let ap_req_authenticator = EncryptedData::try_from(ap_req.authenticator.clone())?;
         // let ap_req_options = ap_req.ap_options;
 
-        trace!(?ap_req_ticket);
-        trace!(?ap_req_authenticator);
+        trace!(?ap_req_ticket, "ticket");
+        trace!(?ap_req_authenticator, "authenticator");
 
         // Decrypt the ticket. This should be the TGT and contains the session
         // key used for encryption of the authenticator.
@@ -423,7 +428,7 @@ impl TicketGrantRequestUnverified {
 
         let enc_ticket_part = ap_req_ticket_enc.decrypt_enc_tgt(primary_key)?;
 
-        trace!(?enc_ticket_part);
+        trace!(?enc_ticket_part, "enc-ticket-part");
 
         // Get the session Key.
 
@@ -434,18 +439,19 @@ impl TicketGrantRequestUnverified {
 
         let authenticator: AuthenticatorInner = authenticator.into();
 
-        trace!(?authenticator);
+        trace!(?authenticator, "authenticator");
 
-        let Some(authenticator_checksum) = authenticator.cksum else {
+        let Some(his_checksum) = authenticator.cksum else {
             return Err(KrbError::TgsAuthMissingChecksum);
         };
 
-        let checksum = session_key.checksum_kdc_req_body(req_body)?;
+        let checksum_builder: ChecksumBuilder =
+            (his_checksum.checksum_type, Some(session_key.clone())).try_into()?;
+        let checksum = checksum_builder.compute_kdc_req_body(req_body)?;
 
         // Validate that the checksum matches what our authenticator contains.
-
-        if checksum != authenticator_checksum {
-            tracing::debug!(?checksum, ?authenticator_checksum);
+        if checksum != his_checksum {
+            tracing::debug!(?checksum, ?his_checksum);
             return Err(KrbError::TgsAuthChecksumFailure);
         }
 
