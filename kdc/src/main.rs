@@ -22,6 +22,7 @@ mod config;
 use clap::{Parser, Subcommand};
 use config::{Config, CoreAction, ServerState, TaskName};
 use futures::{SinkExt, StreamExt};
+use libkrimes::error::KrbError;
 use libkrimes::proto::{
     AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
     KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TicketGrantTimeBound,
@@ -59,7 +60,7 @@ async fn process_authentication(
         .service_name
         .is_service_krbtgt(server_state.realm.as_str())
     {
-        error!("Request not for KRBTGT");
+        error!("Request not for KRBTGT ({:?})", auth_req.service_name);
         return Err(KerberosReply::error_as_not_krbtgt(
             auth_req.service_name.clone(),
             stime,
@@ -195,7 +196,15 @@ async fn process_ticket_grant(
         .map_err(|err| {
             error!(?err, "Unable to validate tgs_req");
             let service_name = Name::service_krbtgt(server_state.realm.as_str());
-            KerberosReply::error_request_failed_validation(service_name, stime)
+            match err {
+                KrbError::UnsupportedChecksumType => {
+                    KerberosReply::error_unsupported_checksum(service_name, stime)
+                }
+                KrbError::ApInappChecksum => {
+                    KerberosReply::error_inappropiate_checksum(service_name, stime)
+                }
+                _ => KerberosReply::error_request_failed_validation(service_name, stime),
+            }
         })?;
 
     trace!(?tgs_req_valid);
