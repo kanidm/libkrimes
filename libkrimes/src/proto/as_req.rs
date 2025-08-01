@@ -1,7 +1,9 @@
-use super::{KerberosRequest, KrbError, Name, Preauth, EncryptionType, DerivedKey, PreauthData, KerberosTime};
-use std::time::{Duration, SystemTime};
+use super::{
+    DerivedKey, EncryptionType, KerberosRequest, KerberosTime, KrbError, Name, Preauth, PreauthData,
+};
 use crate::asn1::{kerberos_flags::KerberosFlags, pa_enc_ts_enc::PaEncTsEnc};
 use rand::{rng, Rng};
+use std::time::{Duration, SystemTime};
 use tracing::trace;
 
 #[derive(Debug)]
@@ -18,7 +20,7 @@ pub struct AuthenticationRequest {
 }
 
 #[derive(Debug)]
-pub struct KerberosAuthenticationBuilder {
+pub struct AuthenticationRequestBuilder {
     client_name: Name,
     service_name: Name,
     from: Option<SystemTime>,
@@ -28,7 +30,7 @@ pub struct KerberosAuthenticationBuilder {
     etypes: Vec<EncryptionType>,
 }
 
-impl KerberosAuthenticationBuilder {
+impl AuthenticationRequestBuilder {
     pub fn new(client_name: Name, service_name: Name, until: SystemTime) -> Self {
         let etypes = vec![EncryptionType::AES256_CTS_HMAC_SHA1_96];
         Self {
@@ -92,7 +94,7 @@ impl KerberosAuthenticationBuilder {
     }
 
     pub fn build(self) -> KerberosRequest {
-        let KerberosAuthenticationBuilder {
+        let AuthenticationRequestBuilder {
             client_name,
             service_name,
             from,
@@ -127,5 +129,3 @@ impl KerberosAuthenticationBuilder {
         }))
     }
 }
-
-
