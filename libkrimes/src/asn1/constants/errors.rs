@@ -1,6 +1,6 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
-#[derive(Debug, TryFromPrimitive, IntoPrimitive)]
+#[derive(Debug, Clone, TryFromPrimitive, IntoPrimitive)]
 #[repr(i32)]
 pub enum KrbErrorCode {
     KdcErrNone = 0,                         // No error

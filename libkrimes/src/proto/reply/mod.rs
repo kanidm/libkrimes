@@ -1,4 +1,5 @@
 mod as_rep;
+mod error_rep;
 mod tgs_rep;
 
 use super::{
@@ -7,10 +8,7 @@ use super::{
     TicketRenewTimeBound,
 };
 use crate::asn1::{
-    constants::{
-        encryption_types::EncryptionType, errors::KrbErrorCode, message_types::KrbMessageType,
-        pa_data_types::PaDataType,
-    },
+    constants::{errors::KrbErrorCode, message_types::KrbMessageType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart,
     enc_ticket_part::EncTicketPart,
     encryption_key::EncryptionKey as KdcEncryptionKey,
@@ -24,10 +22,10 @@ use crate::asn1::{
     transited_encoding::TransitedEncoding,
     Ia5String, OctetString,
 };
-use crate::constants::PBKDF2_SHA1_ITER;
 use crate::error::KrbError;
 pub use as_rep::{AuthenticationReply, AuthenticationReplyBuilder};
 use der::{Decode, Encode};
+pub use error_rep::{ErrorReply, KerberosReplyPreauthBuilder, PreauthErrorReply};
 use std::time::{Duration, SystemTime};
 pub use tgs_rep::{KerberosReplyTicketGrantBuilder, TicketGrantReply};
 use tracing::{error, trace};
@@ -36,31 +34,8 @@ use tracing::{error, trace};
 pub enum KerberosReply {
     AS(AuthenticationReply),
     TGS(TicketGrantReply),
-    PA(PreauthReply),
+    PA(PreauthErrorReply),
     ERR(ErrorReply),
-}
-
-#[derive(Debug)]
-pub struct PreauthReply {
-    pub pa_data: PreauthData,
-    pub service: Name,
-    pub stime: SystemTime,
-}
-
-#[derive(Debug)]
-pub struct ErrorReply {
-    code: KrbErrorCode,
-    service: Name,
-    error_text: Option<String>,
-    stime: SystemTime,
-}
-
-pub struct KerberosReplyPreauthBuilder {
-    pa_fx_cookie: Option<Vec<u8>>,
-    aes256_cts_hmac_sha1_96_iter_count: u32,
-    salt: Option<String>,
-    service: Name,
-    stime: SystemTime,
 }
 
 pub struct KerberosReplyTicketRenewBuilder {
@@ -75,14 +50,7 @@ pub struct KerberosReplyTicketRenewBuilder {
 
 impl KerberosReply {
     pub fn preauth_builder(service: Name, stime: SystemTime) -> KerberosReplyPreauthBuilder {
-        let aes256_cts_hmac_sha1_96_iter_count: u32 = PBKDF2_SHA1_ITER;
-        KerberosReplyPreauthBuilder {
-            pa_fx_cookie: None,
-            aes256_cts_hmac_sha1_96_iter_count,
-            salt: None,
-            service,
-            stime,
-        }
+        KerberosReplyPreauthBuilder::new(service, stime)
     }
 
     pub fn authentication_builder(
@@ -130,212 +98,115 @@ impl KerberosReply {
     }
 
     pub fn error_request_invalid(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KrbErrGeneric,
-            service,
-            error_text: Some(
-                "The Kerberos Client sent a malformed and invalid request.".to_string(),
-            ),
-            stime,
-        })
+        let code = KrbErrorCode::KrbErrGeneric;
+        let error_text =
+            Some("The Kerberos Client sent a malformed and invalid request.".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_request_failed_validation(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KrbErrGeneric,
-            service,
-            error_text: Some(
-                "The Kerberos Client sent a request that was cryptographically invalid."
-                    .to_string(),
-            ),
-            stime,
-        })
+        let code = KrbErrorCode::KrbErrGeneric;
+        let error_text = Some(
+            "The Kerberos Client sent a request that was cryptographically invalid.".to_string(),
+        );
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_no_etypes(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrEtypeNosupp,
-            service,
-            error_text: Some(
-                "Client and Server do not have overlapping encryption type support.".to_string(),
-            ),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrEtypeNosupp;
+        let error_text =
+            Some("Client and Server do not have overlapping encryption type support.".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_preauth_failed(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrPreauthFailed,
-            service,
-            error_text: Some(
-                "Preauthentication Failed - Check your password is correct.".to_string(),
-            ),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrPreauthFailed;
+        let error_text =
+            Some("Preauthentication Failed - Check your password is correct.".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_client_principal(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrPreauthFailed,
-            service,
-            error_text: Some(
-                "Preauthentication Failed - Client Name was not a valid Principal.".to_string(),
-            ),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrPreauthFailed;
+        let error_text =
+            Some("Preauthentication Failed - Client Name was not a valid Principal.".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_client_realm(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrWrongRealm,
-            service,
-            error_text: Some("Preauthentication Failed - Check your realm is correct.".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrWrongRealm;
+        let error_text =
+            Some("Preauthentication Failed - Check your realm is correct.".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_client_username(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrCPrincipalUnknown,
-            service,
-            error_text: Some(
-                "Preauthentication Failed - Check your username is correct.".to_string(),
-            ),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrCPrincipalUnknown;
+        let error_text =
+            Some("Preauthentication Failed - Check your username is correct.".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_service_name(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrSPrincipalUnknown,
-            service,
-            error_text: Some("Ticket Request Failed - Service Name not found.".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrSPrincipalUnknown;
+        let error_text = Some("Ticket Request Failed - Service Name not found.".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_as_not_krbtgt(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrSvcUnavailable,
-            service,
-            error_text: Some(
-                "Authentication (ASREQ) must only be for service instance `krbtgt@REALM`."
-                    .to_string(),
-            ),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrSvcUnavailable;
+        let error_text = Some(
+            "Authentication (ASREQ) must only be for service instance `krbtgt@REALM`.".to_string(),
+        );
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_no_key(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KrbApErrNokey,
-            service,
-            error_text: Some("No Key Available".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KrbApErrNokey;
+        let error_text = Some("No Key Available".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_clock_skew(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KrbApErrSkew,
-            service,
-            error_text: Some("Clock Skew too great".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KrbApErrSkew;
+        let error_text = Some("Clock Skew too great".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_cannot_postdate(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrCannotPostdate,
-            service,
-            error_text: Some("Ticket not elegible for postdating".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrCannotPostdate;
+        let error_text = Some("Ticket not elegible for postdating".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_never_valid(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrNeverValid,
-            service,
-            error_text: Some("Requested ticket start time is later than end time".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrNeverValid;
+        let error_text = Some("Requested ticket start time is later than end time".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_renew_denied(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrPolicy,
-            service,
-            error_text: Some("Requested ticket is unable to be renewed".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrPolicy;
+        let error_text = Some("Requested ticket is unable to be renewed".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_inappropiate_checksum(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KrbApErrInappCksum,
-            service,
-            error_text: Some("Inappropriate type of checksum in message".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KrbApErrInappCksum;
+        let error_text = Some("Inappropriate type of checksum in message".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_unsupported_checksum(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KdcErrSumtypeNosupp,
-            service,
-            error_text: Some("KDC has no support for checksum type".to_string()),
-            stime,
-        })
+        let code = KrbErrorCode::KdcErrSumtypeNosupp;
+        let error_text = Some("KDC has no support for checksum type".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 
     pub fn error_internal(service: Name, stime: SystemTime) -> KerberosReply {
-        KerberosReply::ERR(ErrorReply {
-            code: KrbErrorCode::KrbErrGeneric,
-            service,
-            error_text: Some("Internal Server Error".to_string()),
-            stime,
-        })
-    }
-}
-
-impl KerberosReplyPreauthBuilder {
-    pub fn set_key_params(mut self, dk: &DerivedKey) -> Self {
-        match dk {
-            DerivedKey::Aes256CtsHmacSha196 { i, s, .. } => {
-                self.salt = Some(s.clone());
-                self.aes256_cts_hmac_sha1_96_iter_count = *i;
-                self
-            }
-        }
-    }
-
-    pub fn set_pa_fx_cookie(mut self, cookie: Option<Vec<u8>>) -> Self {
-        self.pa_fx_cookie = cookie;
-        self
-    }
-
-    pub fn build(self) -> KerberosReply {
-        let aes256_cts_hmac_sha1_96_iter_count = Some(
-            self.aes256_cts_hmac_sha1_96_iter_count
-                .to_be_bytes()
-                .to_vec(),
-        );
-
-        KerberosReply::PA(PreauthReply {
-            pa_data: PreauthData {
-                // pa_fx_fast: false,
-                enc_timestamp: true,
-                pa_fx_cookie: self.pa_fx_cookie,
-                etype_info2: vec![EtypeInfo2 {
-                    etype: EncryptionType::AES256_CTS_HMAC_SHA1_96,
-                    salt: self.salt,
-                    s2kparams: aes256_cts_hmac_sha1_96_iter_count,
-                }],
-            },
-            service: self.service,
-            stime: self.stime,
-        })
+        let code = KrbErrorCode::KrbErrGeneric;
+        let error_text = Some("Internal Server Error".to_string());
+        KerberosReply::ERR(ErrorReply::new(code, service, error_text, stime))
     }
 }
 
@@ -483,7 +354,7 @@ impl TryFrom<KdcKrbError> for KerberosReply {
 
                 let pa_data = PreauthData::try_from(pavec)?;
 
-                Ok(KerberosReply::PA(PreauthReply {
+                Ok(KerberosReply::PA(PreauthErrorReply {
                     pa_data,
                     service,
                     stime,
@@ -491,13 +362,8 @@ impl TryFrom<KdcKrbError> for KerberosReply {
             }
             code => {
                 let error_text = rep.error_text.as_ref().map(|s| s.to_string());
-
-                Ok(KerberosReply::ERR(ErrorReply {
-                    code,
-                    service,
-                    error_text,
-                    stime,
-                }))
+                let error = ErrorReply::new(code, service, error_text, stime);
+                Ok(KerberosReply::ERR(error))
             }
         }
     }
@@ -584,7 +450,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
 
                 Ok(KrbKdcRep::TgsRep(tgs_rep))
             }
-            KerberosReply::PA(PreauthReply {
+            KerberosReply::PA(PreauthErrorReply {
                 pa_data,
                 service,
                 stime,
@@ -674,19 +540,16 @@ impl TryInto<KrbKdcRep> for KerberosReply {
 
                 Ok(KrbKdcRep::ErrRep(krb_error))
             }
-            KerberosReply::ERR(ErrorReply {
-                code,
-                service,
-                error_text,
-                stime,
-            }) => {
-                let error_code = code as i32;
+            KerberosReply::ERR(error) => {
+                let error_code = error.code().clone() as i32;
 
-                let error_text = error_text
+                let error_text = error
+                    .text()
                     .as_ref()
                     .and_then(|et| Ia5String::new(&et).map(KerberosString).ok());
 
-                let stime = stime
+                let stime = error
+                    .server_time()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     // We need to stip the fractional part.
                     .map(|t| Duration::from_secs(t.as_secs()))
@@ -695,7 +558,7 @@ impl TryInto<KrbKdcRep> for KerberosReply {
                 let stime = KerberosTime::from_unix_duration(stime)
                     .map_err(|_| KrbError::DerEncodeKerberosTime)?;
 
-                let (service_name, service_realm) = (&service).try_into()?;
+                let (service_name, service_realm) = error.service().try_into()?;
 
                 let krb_error = KdcKrbError {
                     pvno: 5,

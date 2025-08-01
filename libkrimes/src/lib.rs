@@ -244,7 +244,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::KerberosTcpCodec;
-    use crate::proto::{AuthenticationReply, DerivedKey, KerberosRequest, Name, PreauthReply};
+    use crate::proto::{AuthenticationReply, DerivedKey, KerberosRequest, Name, PreauthErrorReply};
     use futures::StreamExt;
     use tracing::{trace, warn};
 
@@ -392,7 +392,7 @@ mod tests {
         assert!(response.is_ok());
         let response = response.unwrap();
 
-        let KerberosReply::PA(PreauthReply {
+        let KerberosReply::PA(PreauthErrorReply {
             service,
             pa_data,
             stime: _,
