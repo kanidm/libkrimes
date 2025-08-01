@@ -17,7 +17,7 @@ pub struct AuthenticationReply {
     pub(crate) ticket: EncTicket,
 }
 
-pub struct KerberosReplyAuthenticationBuilder {
+pub struct AuthenticationReplyBuilder {
     pub(crate) aes256_cts_hmac_sha1_96_iter_count: u32,
     pub(crate) salt: Option<String>,
     pub(crate) client: Name,
@@ -27,7 +27,7 @@ pub struct KerberosReplyAuthenticationBuilder {
     pub(crate) flags: TicketFlags,
 }
 
-impl KerberosReplyAuthenticationBuilder {
+impl AuthenticationReplyBuilder {
     pub fn new(
         client: Name,
         server: Name,
