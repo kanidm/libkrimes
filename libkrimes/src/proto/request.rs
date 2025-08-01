@@ -1,5 +1,5 @@
 use crate::error::KrbError;
-use crate::proto::{AuthenticationRequest, KerberosAuthenticationBuilder};
+use crate::proto::{AuthenticationRequest, AuthenticationRequestBuilder};
 use crate::{
     asn1::{
         ap_options::{ApFlags, ApOptions},
@@ -82,8 +82,8 @@ impl KerberosRequest {
         client_name: &Name,
         service_name: Name,
         until: SystemTime,
-    ) -> KerberosAuthenticationBuilder {
-        KerberosAuthenticationBuilder::new(client_name.clone(), service_name, until)
+    ) -> AuthenticationRequestBuilder {
+        AuthenticationRequestBuilder::new(client_name.clone(), service_name, until)
     }
 
     pub fn build_tgs(
