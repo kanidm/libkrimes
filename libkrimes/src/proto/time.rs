@@ -1,6 +1,7 @@
 use crate::asn1::kerberos_flags::KerberosFlags;
 use crate::asn1::ticket_flags::TicketFlags;
-use crate::proto::{AuthenticationRequest, Name, TicketGrantRequest};
+use crate::proto::as_req::AuthenticationRequest;
+use crate::proto::{Name, TicketGrantRequest};
 use crate::KerberosReply;
 use std::cmp;
 use std::time::{Duration, SystemTime};
