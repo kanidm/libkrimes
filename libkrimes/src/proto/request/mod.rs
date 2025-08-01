@@ -1,5 +1,6 @@
+mod as_req;
+
 use crate::error::KrbError;
-use crate::proto::{AuthenticationRequest, AuthenticationRequestBuilder};
 use crate::{
     asn1::{
         ap_options::{ApFlags, ApOptions},
@@ -24,6 +25,7 @@ use crate::{
     },
     cksum::ChecksumBuilder,
 };
+pub use as_req::{AuthenticationRequest, AuthenticationRequestBuilder};
 use der::{asn1::Any, Encode};
 use rand::{rng, Rng};
 
