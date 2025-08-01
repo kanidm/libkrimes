@@ -1524,7 +1524,7 @@ pub async fn get_tgt(
 
     let now = SystemTime::now();
     let client_name = Name::principal(principal, realm);
-    let as_req = KerberosRequest::build_as(
+    let as_req = KerberosRequest::as_builder(
         &client_name,
         Name::service_krbtgt(realm),
         now + Duration::from_secs(3600),
