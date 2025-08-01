@@ -1,13 +1,15 @@
 use crate::asn1::{
     authorization_data::AuthorizationData,
-    constants::authorization_data_types::AuthorizationDataType,
+    constants::authorization_data_types::AuthorizationDataType, enc_ticket_part::EncTicketPart,
+    encryption_key::EncryptionKey as KdcEncryptionKey,
 };
 use crate::proto::ms_pac::AdWin2kPac;
 use crate::proto::reply::{EncKdcRepPart, KerberosReply, TransitedEncoding};
 use crate::proto::request::TicketGrantRequest;
+use crate::proto::time::{TicketGrantTimeBound, TicketRenewTimeBound};
 use crate::proto::{
-    DerivedKey, EncTicket, EncTicketPart, EncryptedData, KdcEncryptionKey, KerberosTime, KrbError,
-    Name, SessionKey, Ticket, TicketFlags, TicketGrantTimeBound,
+    DerivedKey, EncTicket, EncryptedData, KdcPrimaryKey, KerberosTime, KrbError, Name, SessionKey,
+    Ticket, TicketFlags,
 };
 use der::asn1::OctetString;
 use der::Encode;
@@ -174,6 +176,134 @@ impl KerberosReplyTicketGrantBuilder {
         };
 
         let ticket_enc_part = service_key.encrypt_tgs(ticket_inner)?;
+
+        let ticket = EncTicket {
+            tkt_vno: 5,
+            service: self.service_name,
+            enc_part: ticket_enc_part,
+        };
+
+        let client_name = self.ticket.client_name;
+
+        Ok(KerberosReply::TGS(TicketGrantReply {
+            client_name,
+            enc_part,
+            ticket,
+        }))
+    }
+}
+
+pub struct KerberosReplyTicketRenewBuilder {
+    nonce: i32,
+    service_name: Name,
+    sub_session_key: Option<SessionKey>,
+    time_bounds: TicketRenewTimeBound,
+    ticket: Ticket,
+}
+
+impl KerberosReplyTicketRenewBuilder {
+    pub fn new(
+        ticket_grant_request: TicketGrantRequest,
+        time_bounds: TicketRenewTimeBound,
+    ) -> Self {
+        let TicketGrantRequest {
+            nonce,
+            service_name,
+            from: _,
+            until: _,
+            renew: _,
+            etypes: _,
+            sub_session_key,
+            client_time: _,
+            ticket,
+        } = ticket_grant_request;
+        Self {
+            nonce,
+            service_name,
+
+            sub_session_key,
+
+            time_bounds,
+
+            ticket,
+        }
+    }
+    pub fn build(self, primary_key: &KdcPrimaryKey) -> Result<KerberosReply, KrbError> {
+        let (cname, crealm) = (&self.ticket.client_name).try_into()?;
+        let (server_name, server_realm) = (&self.service_name).try_into()?;
+
+        let auth_time = KerberosTime::from_system_time(self.ticket.auth_time)
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
+        let start_time = Some(
+            KerberosTime::from_system_time(self.time_bounds.start_time())
+                .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+        );
+        let end_time = KerberosTime::from_system_time(self.time_bounds.end_time())
+            .map_err(|_| KrbError::DerEncodeKerberosTime)?;
+        let renew_till = Some(
+            KerberosTime::from_system_time(self.time_bounds.renew_until())
+                .map_err(|_| KrbError::DerEncodeKerberosTime)?,
+        );
+
+        let session_key: KdcEncryptionKey = self.ticket.session_key.clone().try_into()?;
+
+        // TGS_REP The ciphertext is encrypted with the sub-session key
+        // from the authenticator.
+        // If absent, the session key is used (with no kvno).
+        // 5.4.2 reads as though the the clients version number is used here for kvno?
+
+        // KeyUsage == 8 for session key, or == 9 for subkey.
+        // let enc_part = EncTGSRepPart == EncKDCRepPart;
+
+        let enc_kdc_rep_part = EncKdcRepPart {
+            key: session_key.clone(),
+            // Not 100% clear on this field.
+            last_req: Vec::with_capacity(0),
+            nonce: self.nonce,
+            key_expiration: None,
+            flags: self.ticket.flags,
+            auth_time,
+            start_time,
+            end_time,
+            renew_till,
+            server_realm,
+            server_name,
+            client_addresses: None,
+        };
+
+        let enc_part = if let Some(sub_session_key) = self.sub_session_key {
+            sub_session_key.encrypt_tgs_rep_part(enc_kdc_rep_part, true)?
+        } else {
+            self.ticket
+                .session_key
+                .encrypt_tgs_rep_part(enc_kdc_rep_part, false)?
+        };
+
+        let authorization_data = None;
+
+        let transited = TransitedEncoding {
+            tr_type: 1,
+            // Since no transit has occured, we record an empty str.
+            contents: OctetString::new(b"").map_err(|_| KrbError::DerEncodeOctetString)?,
+        };
+
+        // EncTicketPart
+        // Encrypted to the key of the service
+        let ticket_inner = EncTicketPart {
+            flags: self.ticket.flags,
+            key: session_key,
+            crealm,
+            cname,
+            transited,
+            auth_time,
+            start_time,
+            end_time,
+            renew_till,
+            client_addresses: None,
+            authorization_data,
+        };
+
+        let ticket_enc_part = primary_key.encrypt_tgs(ticket_inner)?;
 
         let ticket = EncTicket {
             tkt_vno: 5,
