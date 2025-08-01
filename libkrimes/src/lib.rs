@@ -268,7 +268,7 @@ mod tests {
 
         let now = SystemTime::now();
         let client_name = Name::principal("testuser", "EXAMPLE.COM");
-        let as_req = KerberosRequest::build_as(
+        let as_req = KerberosRequest::as_builder(
             &client_name,
             Name::service_krbtgt("EXAMPLE.COM"),
             now + Duration::from_secs(3600),
@@ -327,7 +327,7 @@ mod tests {
         let session_key = cleartext.key;
 
         let now = SystemTime::now();
-        let tgs_req = KerberosRequest::build_tgs(
+        let tgs_req = KerberosRequest::tgs_builder(
             Name::service("host", "pepper.example.com", "EXAMPLE.COM"),
             now,
             now + Duration::from_secs(3600),
@@ -370,7 +370,7 @@ mod tests {
         let now = SystemTime::now();
 
         let client_name = Name::principal("testuser_preauth", "EXAMPLE.COM");
-        let as_req = KerberosRequest::build_as(
+        let as_req = KerberosRequest::as_builder(
             &client_name,
             Name::service_krbtgt("EXAMPLE.COM"),
             now + Duration::from_secs(3600),
@@ -434,7 +434,7 @@ mod tests {
             .expect("Failed to convert value");
 
         let client_name = Name::principal("testuser_preauth", "EXAMPLE.COM");
-        let as_req = KerberosRequest::build_as(
+        let as_req = KerberosRequest::as_builder(
             &client_name,
             Name::service_krbtgt("EXAMPLE.COM"),
             now + Duration::from_secs(3600),
@@ -454,7 +454,7 @@ mod tests {
             )
             .unwrap();
 
-        let as_req = KerberosRequest::build_asreq(
+        let as_req = KerberosRequest::as_builder(
             Name::principal("testuser_preauth", "EXAMPLE.COM"),
             Name::service_krbtgt("EXAMPLE.COM"),
             None,

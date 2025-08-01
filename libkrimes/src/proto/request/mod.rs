@@ -29,7 +29,7 @@ pub enum KerberosRequest {
 }
 
 impl KerberosRequest {
-    pub fn build_as(
+    pub fn as_builder(
         client_name: &Name,
         service_name: Name,
         until: SystemTime,
@@ -37,7 +37,7 @@ impl KerberosRequest {
         AuthenticationRequestBuilder::new(client_name.clone(), service_name, until)
     }
 
-    pub fn build_tgs(
+    pub fn tgs_builder(
         service_name: Name,
         now: SystemTime,
         until: SystemTime,
