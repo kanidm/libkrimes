@@ -1,11 +1,11 @@
-mod as_rep;
 mod ms_pac;
 mod reply;
 mod request;
 mod time;
 
-pub use self::as_rep::{AuthenticationReply, AuthenticationReplyBuilder};
-pub use self::reply::{KerberosReply, PreauthReply, TicketGrantReply};
+pub use self::reply::{
+    AuthenticationReply, AuthenticationReplyBuilder, KerberosReply, PreauthReply, TicketGrantReply,
+};
 pub use self::request::{
     AuthenticationRequest, AuthenticationRequestBuilder, KerberosRequest, TicketGrantRequest,
     TicketGrantRequestUnverified,
