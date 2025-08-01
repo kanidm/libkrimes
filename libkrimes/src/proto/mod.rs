@@ -4,7 +4,8 @@ mod request;
 mod time;
 
 pub use self::reply::{
-    AuthenticationReply, AuthenticationReplyBuilder, KerberosReply, PreauthReply, TicketGrantReply,
+    AuthenticationReply, AuthenticationReplyBuilder, KerberosReply, PreauthErrorReply,
+    TicketGrantReply,
 };
 pub use self::request::{
     AuthenticationRequest, AuthenticationRequestBuilder, KerberosRequest, TicketGrantRequest,
