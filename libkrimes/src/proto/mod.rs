@@ -1,11 +1,13 @@
+mod as_rep;
 mod as_req;
 mod ms_pac;
 mod reply;
 mod request;
 mod time;
 
+pub use self::as_rep::{AuthenticationReply, KerberosReplyAuthenticationBuilder};
 pub use self::as_req::{AuthenticationRequest, AuthenticationRequestBuilder};
-pub use self::reply::{AuthenticationReply, KerberosReply, PreauthReply, TicketGrantReply};
+pub use self::reply::{KerberosReply, PreauthReply, TicketGrantReply};
 pub use self::request::{KerberosRequest, TicketGrantRequest, TicketGrantRequestUnverified};
 pub use self::time::{
     AuthenticationTimeBound, TicketGrantTimeBound, TicketRenewTimeBound, TimeBoundError,
