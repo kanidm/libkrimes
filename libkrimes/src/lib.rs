@@ -16,7 +16,7 @@
 #![deny(clippy::manual_let_else)]
 #![allow(clippy::unreachable)]
 
-pub mod asn1;
+mod asn1;
 pub mod ccache;
 pub(crate) mod cksum;
 pub mod cldap;
