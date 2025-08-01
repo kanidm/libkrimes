@@ -1,3 +1,5 @@
+mod as_rep;
+
 use super::{
     AuthenticationTimeBound, DerivedKey, EncTicket, EncryptedData, EtypeInfo2, KdcPrimaryKey, Name,
     PreauthData, SessionKey, Ticket, TicketGrantRequest, TicketGrantTimeBound,
@@ -25,8 +27,8 @@ use crate::asn1::{
 };
 use crate::constants::PBKDF2_SHA1_ITER;
 use crate::error::KrbError;
-use crate::proto::as_rep::{AuthenticationReply, AuthenticationReplyBuilder};
 use crate::proto::ms_pac::AdWin2kPac;
+pub use as_rep::{AuthenticationReply, AuthenticationReplyBuilder};
 use der::{Decode, Encode};
 use std::time::{Duration, SystemTime};
 use tracing::{error, trace};

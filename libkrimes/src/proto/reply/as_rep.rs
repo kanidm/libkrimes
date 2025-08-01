@@ -1,12 +1,12 @@
-use super::{
-    AuthenticationTimeBound, DerivedKey, EncTicket, EncTicketPart, EncryptedData, KdcEncryptionKey,
-    KdcPrimaryKey, KerberosTime, KrbError, LastRequestItem, Name, PreauthData, SessionKey,
-    TicketFlags,
-};
 use crate::asn1::enc_kdc_rep_part::EncKdcRepPart;
 use crate::asn1::{last_req::LastReqItem, transited_encoding::TransitedEncoding, OctetString};
 use crate::constants::PBKDF2_SHA1_ITER;
 use crate::proto::reply::KerberosReply;
+use crate::proto::{
+    AuthenticationTimeBound, DerivedKey, EncTicket, EncTicketPart, EncryptedData, KdcEncryptionKey,
+    KdcPrimaryKey, KerberosTime, KrbError, LastRequestItem, Name, PreauthData, SessionKey,
+    TicketFlags,
+};
 use std::time::SystemTime;
 
 #[derive(Debug)]
