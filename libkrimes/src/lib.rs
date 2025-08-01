@@ -35,10 +35,7 @@ use proto::{KerberosReply, KerberosRequest};
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
 
-pub struct KdcTcpCodec {
-    max_size: usize,
-}
-
+// This is the client codec. Decodes into a KerberosReply, encodes into a KerberosRequest
 pub struct KerberosTcpCodec {
     max_size: usize,
 }
@@ -135,6 +132,11 @@ impl Encoder<KerberosRequest> for KerberosTcpCodec {
 
         Ok(())
     }
+}
+
+// This is the server codec. Decodes into a KerberosRequest, encodes into a KerberosReply
+pub struct KdcTcpCodec {
+    max_size: usize,
 }
 
 impl Default for KdcTcpCodec {
