@@ -25,7 +25,7 @@ use crate::asn1::{
 };
 use crate::constants::PBKDF2_SHA1_ITER;
 use crate::error::KrbError;
-use crate::proto::as_rep::{AuthenticationReply, KerberosReplyAuthenticationBuilder};
+use crate::proto::as_rep::{AuthenticationReply, AuthenticationReplyBuilder};
 use crate::proto::ms_pac::AdWin2kPac;
 use der::{Decode, Encode};
 use std::time::{Duration, SystemTime};
@@ -110,8 +110,8 @@ impl KerberosReply {
         server: Name,
         time_bounds: AuthenticationTimeBound,
         nonce: i32,
-    ) -> KerberosReplyAuthenticationBuilder {
-        KerberosReplyAuthenticationBuilder::new(client, server, time_bounds, nonce)
+    ) -> AuthenticationReplyBuilder {
+        AuthenticationReplyBuilder::new(client, server, time_bounds, nonce)
     }
 
     pub fn ticket_renew_builder(

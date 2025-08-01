@@ -5,7 +5,7 @@ mod reply;
 mod request;
 mod time;
 
-pub use self::as_rep::{AuthenticationReply, KerberosReplyAuthenticationBuilder};
+pub use self::as_rep::{AuthenticationReply, AuthenticationReplyBuilder};
 pub use self::as_req::{AuthenticationRequest, AuthenticationRequestBuilder};
 pub use self::reply::{KerberosReply, PreauthReply, TicketGrantReply};
 pub use self::request::{KerberosRequest, TicketGrantRequest, TicketGrantRequestUnverified};
