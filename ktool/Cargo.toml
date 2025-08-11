@@ -1,0 +1,15 @@
+[package]
+name = "ktool"
+description = "The Kerbreos toolbox"
+
+version = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+libkrimes = { workspace = true }
+clap = { version = "^4.5", features = ["derive", "env"] }
