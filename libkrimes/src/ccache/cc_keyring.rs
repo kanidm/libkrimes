@@ -508,7 +508,7 @@ mod tests {
         }
 
         let (name, ticket, kdc_reply_part) =
-            crate::proto::get_tgt("testuser1", "EXAMPLE.COM", "password").await?;
+            crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
         super::store(
             &name,
             &ticket,
@@ -519,7 +519,7 @@ mod tests {
 
         // Store the same principal in the same subsidiary must succeed
         let (name, ticket, kdc_reply_part) =
-            crate::proto::get_tgt("testuser1", "EXAMPLE.COM", "password").await?;
+            crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
         super::store(
             &name,
             &ticket,
