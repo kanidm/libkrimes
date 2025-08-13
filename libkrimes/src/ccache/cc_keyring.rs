@@ -229,7 +229,7 @@ fn get_subsidiary_cache(
                 Some(subsidiary) => {
                     // The subsidiary name was given in the residual and it already
                     // exists, check the stored principal matches the given one.
-                    let stored_name = get_subsidiary_principal(&subsidiary)?.ok_or({
+                    let stored_name = get_subsidiary_principal(&subsidiary)?.ok_or_else(|| {
                         error!(collection=?collection, subsidiary=?subsidiary, residual=?residual, name=?name, "Subsidiary ccache has no principal");
                         KrbError::CredentialCacheError
                     })?;
@@ -253,7 +253,7 @@ fn get_subsidiary_cache(
             let subsidiary_name = "_krb_default".to_string();
             match subsidiary_exists(collection, subsidiary_name.as_str())? {
                 Some(subsidiary) => {
-                    let stored_name = get_subsidiary_principal(&subsidiary)?.ok_or({
+                    let stored_name = get_subsidiary_principal(&subsidiary)?.ok_or_else(|| {
                         error!(collection=?collection, subsidiary=?subsidiary, residual=?residual, name=?name, "Subsidiary ccache has no principal");
                         KrbError::CredentialCacheError
                     })?;
@@ -445,7 +445,7 @@ pub fn destroy(residual: &str) -> Result<(), KrbError> {
 
     // Use the given subsidiary name or read it from the collection
     let subsidiary_name = residual.subsidiary.map(Ok).unwrap_or_else(|| {
-        get_primary_subsidiary_name(&mut collection)?.ok_or({
+        get_primary_subsidiary_name(&mut collection)?.ok_or_else(|| {
             error!(collection=?collection, "No primary subsidiary key");
             KrbError::CredentialCacheError
         })
