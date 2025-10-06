@@ -451,13 +451,17 @@ mod tests {
         }
 
         let ccache_name = "KEYRING:session:abc";
+        let ccname = Some(ccache_name);
+        let mut ccache = super::resolve(ccname)?;
+
         let (name, ticket, kdc_reply_part) =
             crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-        super::store(&name, &ticket, &kdc_reply_part, None, Some(ccache_name))?;
+        ccache.init(&name, None)?;
+        ccache.store(&name, &ticket, &kdc_reply_part)?;
 
         let (name, ticket, kdc_reply_part) =
             crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password").await?;
-        super::store(&name, &ticket, &kdc_reply_part, None, Some(ccache_name))?;
+        ccache.store(&name, &ticket, &kdc_reply_part)?;
 
         let output = Command::new("klist")
             .stderr(Stdio::null())
@@ -472,7 +476,7 @@ mod tests {
         assert!(output.contains("testuser@EXAMPLE.COM"));
         assert!(output.contains("testuser2@EXAMPLE.COM"));
 
-        super::destroy(Some(ccache_name))?;
+        ccache.destroy()?;
 
         let output = Command::new("klist")
             .stderr(Stdio::null())
