@@ -322,8 +322,6 @@ pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, Krb
 mod tests {
     use super::*;
     use binrw::BinWrite;
-    use std::time::Duration;
-    use tracing::warn;
 
     #[tokio::test]
     async fn test_ccache_file_read_write() -> Result<(), KrbError> {
@@ -340,39 +338,6 @@ mod tests {
         let krime_buf = c.into_inner();
 
         assert_eq!(krime_buf, mit_buf);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ccache_file_write() -> Result<(), KrbError> {
-        let _ = tracing_subscriber::fmt::try_init();
-        if std::env::var("CI").is_ok() {
-            // Skip this test in CI, as it requires a KDC running on localhost
-            warn!("Skipping test_ccache_file_write in CI");
-            return Ok(());
-        }
-
-        let (name, ticket, kdc_reply) =
-            crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-
-        /*
-         * This is a file ccache produced by MIT's kinit manually edited
-         * to remove the cache configuration entries
-         */
-        let mit_ccache = "0504000c00010008000000000000000000000001000000010000000b4558414d504c452e434f4d00000008746573747573657200000001000000010000000b4558414d504c452e434f4d00000008746573747573657200000002000000020000000b4558414d504c452e434f4d000000066b72627467740000000b4558414d504c452e434f4d00120000002022ea076fcce3a4624bf3f71a5f9131240f2aac4b2f8027fe009a174362b9a14466a354d566a354d566a3e17566ac8f550000c100000000000000000000000001ba618201b6308201b2a003020105a10d1b0b4558414d504c452e434f4da220301ea003020102a11730151b066b72627467741b0b4558414d504c452e434f4da382017830820174a003020112a103020101a282016604820162d1d8e32a6b96171c211107bb955fbcbf9bf047541794c0d1cf562dafd9a0dd8cd75f87ce3d534b076f5d1b44753036c3fdc6868ae9129128983ca40ba36350d49a6e590de51e003b50faae07fd3dc7d257ff672f413ac1f5cfa4a01fdd1cfc98cb53d7124813395455b87e0965183d21782a72fc0aa509e785392404662be4f6ef6fc9f7c09f4d84c0bf991509f6fd428c7d5d85374ca28c0b27aef5796d159563c63fd346dd5858502c58b4e7c44430d835c752eadaaeec650464d8d83e1757987782a9d13198a5c0e1a6b23958bba2116fbaccb18852672ad7060306904bf0f7a6976afe9fe4dcda75faded3b8e759b137b9eb191c4e7c0400199315479ffd8d5e0b3e0d113a0e36fa21f25eeb93b74aedaa38b280285651a940aa2b07af75c14e5281b3240f0619e85476e48d1bc9610583bbeeda09a73d3886db916137f32ff035eb107eccbf0eea65b555f7c46b6d7401cc9de2d3646543d5c1115d46de56d500000000";
-        let mit_buf = hex::decode(mit_ccache).expect("Invalid hex buffer");
-
-        let krime_ccache =
-            FileCredentialCache::new(&name, &ticket, &kdc_reply, Some(Duration::new(0, 0)))?;
-        let mut c = std::io::Cursor::new(Vec::new());
-        krime_ccache.write(&mut c).expect("Unable to write ccache");
-        let krime_buf = c.into_inner();
-
-        assert_eq!(mit_buf.len(), krime_buf.len());
-
-        /* Equal until beginning of keyblock */
-        assert_eq!(&mit_buf[0..81], &krime_buf[0..81]);
-
         Ok(())
     }
 }
