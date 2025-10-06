@@ -1,15 +1,19 @@
 use super::CredentialCache;
-use crate::ccache::{Credential, CredentialV4, Principal};
+use crate::ccache::{Credential, CredentialV4, Principal, PrincipalV4};
 use crate::error::KrbError;
 use crate::proto::{EncTicket, KdcReplyPart, Name};
 use binrw::helpers::until_eof;
 use binrw::io::TakeSeekExt;
+use binrw::BinReaderExt;
 use binrw::BinWrite;
 use binrw::{binread, binwrite};
+use std::fs;
 use std::fs::File;
+use std::io::{BufReader, Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{error, trace};
+use tracing::{debug, error, trace};
 
 #[binwrite]
 #[bw(big)]
@@ -133,6 +137,15 @@ impl FileCredentialCache {
 
         Ok(FileCredentialCache::V4(ccache))
     }
+
+    pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
+        let mut reader = binrw::io::Cursor::new(inner);
+        let ccache: FileCredentialCache = reader.read_type(binrw::Endian::Big).map_err(|e| {
+            debug!(?e, "Failed to deserialize credential cache");
+            KrbError::BinRWError
+        })?;
+        Ok(ccache)
+    }
 }
 
 pub fn store(
@@ -168,24 +181,129 @@ pub fn destroy(path: &str) -> Result<(), KrbError> {
 }
 
 pub(super) struct FileCredentialCacheContext {
-    _path: PathBuf,
+    path: PathBuf,
 }
 
 impl CredentialCache for FileCredentialCacheContext {
-    fn init(&mut self, _name: &Name, _clock_skew: Option<Duration>) -> Result<(), KrbError> {
-        Err(KrbError::UnsupportedCredentialCacheType)
+    fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
+        let mut header = FileCredentialCacheHeader { fields: vec![] };
+
+        if let Some(skew) = clock_skew {
+            /*
+             * At this time there is only one defined header field. Its tag value is 1,
+             * its length is always 8, and its contents are two 32-bit integers giving
+             * the seconds and microseconds of the time offset of the KDC relative to
+             * the client. Adding this offset to the current time on the client should
+             * give the current time on the KDC, if that offset has not changed since
+             * the initial authentication.
+             */
+            let secs = skew.as_secs() as u32;
+            let secs: [u8; 4] = secs.to_be_bytes();
+            let msecs = skew.subsec_micros();
+            let msecs: [u8; 4] = msecs.to_be_bytes();
+            let mut field = HeaderField {
+                tag: 1u16,
+                value: vec![],
+            };
+            field.value.extend_from_slice(&secs);
+            field.value.extend_from_slice(&msecs);
+            header.fields.push(field);
+        }
+
+        let pv4: PrincipalV4 = name.try_into()?;
+        let v4 = FileCredentialCacheV4 {
+            header,
+            principal: Principal::V4(pv4),
+            credentials: vec![],
+        };
+        let fcc = FileCredentialCache::V4(v4);
+
+        let mut f = File::create(&self.path).map_err(|io_err| {
+            error!(?io_err, "Unable to create file at {:#?}", &self.path);
+            KrbError::IoError
+        })?;
+        fcc.write(&mut f).map_err(|x| {
+            error!(?x, "Unable to create file at {:#?}", &self.path);
+            KrbError::IoError
+        })?;
+        Ok(())
     }
+
     fn destroy(&mut self) -> Result<(), KrbError> {
-        Err(KrbError::UnsupportedCredentialCacheType)
+        match fs::exists(&self.path) {
+            Ok(true) => {
+                let mut f = File::create(&self.path).map_err(|e| {
+                    error!(?e, "Unable to open file at {:#?}", &self.path);
+                    KrbError::IoError
+                })?;
+                let size = f
+                    .metadata()
+                    .map_err(|e| {
+                        error!(?e, "Unable to fstat file at {:#?}", &self.path);
+                        KrbError::IoError
+                    })?
+                    .size();
+                let zeros = vec![0; size as usize];
+                f.write_all(&zeros).map_err(|e| {
+                    error!(?e, "Unable to write file at {:#?}", &self.path);
+                    KrbError::IoError
+                })?;
+                f.flush().map_err(|e| {
+                    error!(?e, "Unable to flush file at {:#?}", &self.path);
+                    KrbError::IoError
+                })?;
+                drop(f);
+                fs::remove_file(&self.path).map_err(|e| {
+                    error!(?e, "Unable to delete file at {:#?}", &self.path);
+                    KrbError::IoError
+                })?;
+                Ok(())
+            }
+            Ok(false) => Ok(()),
+            Err(e) => {
+                error!(?e, "Unable to open file at {:#?}", &self.path);
+                Err(KrbError::IoError)
+            }
+        }?;
+        self.path = PathBuf::new();
+        Ok(())
     }
 
     fn store(
         &mut self,
-        _name: &Name,
-        _ticket: &EncTicket,
-        _kdc_reply: &KdcReplyPart,
+        name: &Name,
+        ticket: &EncTicket,
+        kdc_reply: &KdcReplyPart,
     ) -> Result<(), KrbError> {
-        Err(KrbError::UnsupportedCredentialCacheType)
+        let cred = Credential::V4(CredentialV4::new(name, ticket, kdc_reply)?);
+
+        let f = File::open(&self.path).map_err(|io_err| {
+            error!(?io_err, "Unable to open file at {:#?}", &self.path);
+            KrbError::IoError
+        })?;
+
+        let mut reader = BufReader::new(&f);
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).map_err(|e| {
+            error!(?self.path, ?e, "Failed to read credential cache");
+            KrbError::IoError
+        })?;
+
+        let mut fcc = FileCredentialCache::read(&buffer)?;
+        match &mut fcc {
+            FileCredentialCache::V4(v4) => v4.credentials.push(cred),
+        };
+        drop(f);
+
+        let mut f = File::create(&self.path).map_err(|io_err| {
+            error!(?io_err, "Unable to open file at {:#?}", &self.path);
+            KrbError::IoError
+        })?;
+        fcc.write(&mut f).map_err(|binrw_err| {
+            error!(?binrw_err, "Unable to write binary data.");
+            KrbError::BinRWError
+        })?;
+        Ok(())
     }
 }
 
@@ -196,27 +314,16 @@ pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, Krb
 
     let path = PathBuf::from(&path);
 
-    let fcc = FileCredentialCacheContext { _path: path };
+    let fcc = FileCredentialCacheContext { path };
     Ok(Box::new(fcc))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use binrw::BinReaderExt;
     use binrw::BinWrite;
     use std::time::Duration;
     use tracing::warn;
-
-    impl FileCredentialCache {
-        pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
-            let mut reader = binrw::io::Cursor::new(inner);
-            let ccache: FileCredentialCache = reader
-                .read_type(binrw::Endian::Big)
-                .expect("Unable to create reader");
-            Ok(ccache)
-        }
-    }
 
     #[tokio::test]
     async fn test_ccache_file_read_write() -> Result<(), KrbError> {
