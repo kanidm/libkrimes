@@ -319,53 +319,6 @@ fn parse_ccache_name(ccache: Option<&str>) -> String {
     .replace("%{uid}", uid.as_str())
 }
 
-pub fn store(
-    name: &Name,
-    ticket: &EncTicket,
-    kdc_reply_part: &KdcReplyPart,
-    clock_skew: Option<Duration>,
-    ccache_name: Option<&str>,
-) -> Result<(), KrbError> {
-    let ccache_name = parse_ccache_name(ccache_name);
-
-    if ccache_name.starts_with("FILE:") {
-        return cc_file::store(
-            name,
-            ticket,
-            kdc_reply_part,
-            clock_skew,
-            ccache_name.as_str(),
-        );
-    }
-
-    #[cfg(feature = "keyring")]
-    if ccache_name.starts_with("KEYRING:") {
-        return cc_keyring::store(
-            name,
-            ticket,
-            kdc_reply_part,
-            clock_skew,
-            ccache_name.as_str(),
-        );
-    }
-
-    Err(KrbError::UnsupportedCredentialCacheType)
-}
-
-pub fn destroy(ccache_name: Option<&str>) -> Result<(), KrbError> {
-    let ccache_name = parse_ccache_name(ccache_name);
-    if ccache_name.starts_with("FILE:") {
-        return cc_file::destroy(ccache_name.as_str());
-    }
-
-    #[cfg(feature = "keyring")]
-    if ccache_name.starts_with("KEYRING:") {
-        return cc_keyring::destroy(ccache_name.as_str());
-    }
-
-    Err(KrbError::UnsupportedCredentialCacheType)
-}
-
 pub trait CredentialCache {
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError>;
     fn destroy(&mut self) -> Result<(), KrbError>;

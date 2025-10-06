@@ -67,20 +67,6 @@ impl FileCredentialCache {
     }
 }
 
-pub fn store(
-    _name: &Name,
-    _ticket: &EncTicket,
-    _kdc_reply_part: &KdcReplyPart,
-    _clock_skew: Option<Duration>,
-    _ccache_name: &str,
-) -> Result<(), KrbError> {
-    Err(KrbError::CredentialCacheError)
-}
-
-pub fn destroy(_path: &str) -> Result<(), KrbError> {
-    Err(KrbError::CredentialCacheError)
-}
-
 pub(super) struct FileCredentialCacheContext {
     path: PathBuf,
 }
