@@ -71,6 +71,7 @@
  *                            A F O R  E S T .  A D          u 2
  */
 
+use super::CredentialCache;
 use crate::ccache::{CredentialV4, PrincipalV4};
 use crate::error::KrbError;
 use crate::proto::{EncTicket, KdcReplyPart, Name};
@@ -84,7 +85,7 @@ use keyutils::{Key, Keyring};
 use libc;
 use rand::{distr::Alphanumeric, Rng};
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, trace};
 
 impl From<errno::Errno> for KrbError {
     fn from(value: errno::Errno) -> Self {
@@ -457,6 +458,39 @@ pub fn destroy(residual: &str) -> Result<(), KrbError> {
         Err(e) => Err(e),
     }
     .map_err(KrbError::from)
+}
+
+pub(super) struct KeyringCredentialCacheContext {
+    _residual: Residual,
+}
+
+impl CredentialCache for KeyringCredentialCacheContext {
+    fn init(&mut self, _name: &Name, _clock_skew: Option<Duration>) -> Result<(), KrbError> {
+        Err(KrbError::UnsupportedCredentialCacheType)
+    }
+    fn destroy(&mut self) -> Result<(), KrbError> {
+        Err(KrbError::UnsupportedCredentialCacheType)
+    }
+
+    fn store(
+        &mut self,
+        _name: &Name,
+        _ticket: &EncTicket,
+        _kdc_reply: &KdcReplyPart,
+    ) -> Result<(), KrbError> {
+        Err(KrbError::UnsupportedCredentialCacheType)
+    }
+}
+
+pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
+    trace!(?ccache_name, "Resolving keyring credential cache");
+    let residual = Residual::parse(ccache_name)?;
+    trace!(?residual, "Resolved keyring credential cache");
+
+    let kcc = KeyringCredentialCacheContext {
+        _residual: residual,
+    };
+    Ok(Box::new(kcc))
 }
 
 #[cfg(test)]
