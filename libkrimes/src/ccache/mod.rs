@@ -16,7 +16,7 @@ use der::Encode;
 use std::env;
 use std::time::Duration;
 use std::time::SystemTime;
-use tracing::error;
+use tracing::{debug, error, trace};
 use uzers::get_current_uid;
 
 /* TODO:
@@ -363,6 +363,34 @@ pub fn destroy(ccache_name: Option<&str>) -> Result<(), KrbError> {
         return cc_keyring::destroy(ccache_name.as_str());
     }
 
+    Err(KrbError::UnsupportedCredentialCacheType)
+}
+
+pub trait CredentialCache {
+    fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError>;
+    fn destroy(&mut self) -> Result<(), KrbError>;
+    fn store(
+        &mut self,
+        name: &Name,
+        ticket: &EncTicket,
+        kdc_reply: &KdcReplyPart,
+    ) -> Result<(), KrbError>;
+}
+
+pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, KrbError> {
+    let ccache_name = parse_ccache_name(ccache_name);
+    trace!(?ccache_name, "Resolving credential cache");
+
+    if ccache_name.starts_with("FILE:") {
+        return cc_file::resolve(ccache_name.as_str());
+    }
+
+    #[cfg(feature = "keyring")]
+    if ccache_name.starts_with("KEYRING:") {
+        return cc_keyring::resolve(ccache_name.as_str());
+    }
+
+    debug!(?ccache_name, "Unsupported credential cache type");
     Err(KrbError::UnsupportedCredentialCacheType)
 }
 

@@ -1,3 +1,4 @@
+use super::CredentialCache;
 use crate::ccache::{Credential, CredentialV4, Principal};
 use crate::error::KrbError;
 use crate::proto::{EncTicket, KdcReplyPart, Name};
@@ -6,8 +7,9 @@ use binrw::io::TakeSeekExt;
 use binrw::BinWrite;
 use binrw::{binread, binwrite};
 use std::fs::File;
+use std::path::PathBuf;
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, trace};
 
 #[binwrite]
 #[bw(big)]
@@ -163,6 +165,39 @@ pub fn destroy(path: &str) -> Result<(), KrbError> {
         KrbError::IoError
     })?;
     Ok(())
+}
+
+pub(super) struct FileCredentialCacheContext {
+    _path: PathBuf,
+}
+
+impl CredentialCache for FileCredentialCacheContext {
+    fn init(&mut self, _name: &Name, _clock_skew: Option<Duration>) -> Result<(), KrbError> {
+        Err(KrbError::UnsupportedCredentialCacheType)
+    }
+    fn destroy(&mut self) -> Result<(), KrbError> {
+        Err(KrbError::UnsupportedCredentialCacheType)
+    }
+
+    fn store(
+        &mut self,
+        _name: &Name,
+        _ticket: &EncTicket,
+        _kdc_reply: &KdcReplyPart,
+    ) -> Result<(), KrbError> {
+        Err(KrbError::UnsupportedCredentialCacheType)
+    }
+}
+
+pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
+    trace!(?ccache_name, "Resolving file credential cache");
+    let path = ccache_name.strip_prefix("FILE:").unwrap_or(ccache_name);
+    trace!(?path, "Resolved file credential cache");
+
+    let path = PathBuf::from(&path);
+
+    let fcc = FileCredentialCacheContext { _path: path };
+    Ok(Box::new(fcc))
 }
 
 #[cfg(test)]
