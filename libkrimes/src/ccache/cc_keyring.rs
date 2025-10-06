@@ -384,20 +384,6 @@ fn store_primary_subsidiary_name(
     }
 }
 
-pub(crate) fn store(
-    _name: &Name,
-    _ticket: &EncTicket,
-    _kdc_reply_part: &KdcReplyPart,
-    _clock_skew: Option<Duration>,
-    _residual: &str,
-) -> Result<(), KrbError> {
-    Err(KrbError::CredentialCacheError)
-}
-
-pub fn destroy(_residual: &str) -> Result<(), KrbError> {
-    Err(KrbError::CredentialCacheError)
-}
-
 pub(super) struct KeyringCredentialCacheContext {
     residual: Residual,
 }
