@@ -417,13 +417,9 @@ mod tests {
 
         let path = "/tmp/krb5cc_krime";
         let ccache_name = format!("FILE:{path}");
-        super::store(
-            &name,
-            &ticket,
-            &kdc_reply_part,
-            None,
-            Some(ccache_name.as_str()),
-        )?;
+        let mut ccache = super::resolve(Some(ccache_name.as_str()))?;
+        ccache.init(&name, None)?;
+        ccache.store(&name, &ticket, &kdc_reply_part)?;
         assert!(std::fs::exists(path).expect("Unable to check if file exists"));
 
         // TODO load and compare
@@ -439,7 +435,7 @@ mod tests {
         let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
         assert!(output.contains("testuser@EXAMPLE.COM"));
 
-        super::destroy(Some(ccache_name.as_str()))?;
+        ccache.destroy()?;
         assert!(!std::fs::exists(path).expect("Unable to check if file exists"));
 
         Ok(())

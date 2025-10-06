@@ -57,87 +57,6 @@ pub(super) enum FileCredentialCache {
 }
 
 impl FileCredentialCache {
-    fn new(
-        name: &Name,
-        ticket: &EncTicket,
-        kdc_reply_part: &KdcReplyPart,
-        clock_skew: Option<Duration>,
-    ) -> Result<Self, KrbError> {
-        let mut header = FileCredentialCacheHeader { fields: vec![] };
-
-        if let Some(skew) = clock_skew {
-            /*
-             * At this time there is only one defined header field. Its tag value is 1,
-             * its length is always 8, and its contents are two 32-bit integers giving
-             * the seconds and microseconds of the time offset of the KDC relative to
-             * the client. Adding this offset to the current time on the client should
-             * give the current time on the KDC, if that offset has not changed since
-             * the initial authentication.
-             */
-            let secs = skew.as_secs() as u32;
-            let secs: [u8; 4] = secs.to_be_bytes();
-            let msecs = skew.subsec_micros();
-            let msecs: [u8; 4] = msecs.to_be_bytes();
-            let mut field = HeaderField {
-                tag: 1u16,
-                value: vec![],
-            };
-            field.value.extend_from_slice(&secs);
-            field.value.extend_from_slice(&msecs);
-            header.fields.push(field);
-        }
-
-        let principal = Principal::V4(name.try_into()?);
-
-        let credentials = vec![
-            //Credential::V4(CredentialV4 {
-            //    client: name.try_into()?,
-            //    server: PrincipalV4 {
-            //        name_type: 1,
-            //        realm: DataComponent {
-            //            value: "X-CACHECONF:".as_bytes().into(),
-            //        },
-            //        components: vec![
-            //            DataComponent {
-            //                value: "krb5_ccache_conf_data".as_bytes().into(),
-            //            },
-            //            DataComponent {
-            //                value: "fast_avail".as_bytes().into(),
-            //            },
-            //            DataComponent {
-            //                value: "krbtgt/EXAMPLE.COM@EXAMPLE.COM".as_bytes().into(),
-            //            },
-            //        ],
-            //    },
-            //    keyblock: KeyBlock::V4(KeyBlockV4 {
-            //        enc_type: 0,
-            //        data: DataComponent { value: vec![] },
-            //    }),
-            //    authtime: 0u32,
-            //    starttime: 0u32,
-            //    endtime: 0u32,
-            //    renew_till: 0u32,
-            //    is_skey: 0u8,
-            //    ticket_flags: 0u32,
-            //    addresses: Addresses { addresses: vec![] },
-            //    authdata: AuthData { auth_data: vec![] },
-            //    ticket: DataComponent {
-            //        value: "yes".as_bytes().into(),
-            //    },
-            //    second_ticket: DataComponent { value: vec![] },
-            //}),
-            Credential::V4(CredentialV4::new(name, ticket, kdc_reply_part)?),
-        ];
-
-        let ccache: FileCredentialCacheV4 = FileCredentialCacheV4 {
-            header,
-            principal,
-            credentials,
-        };
-
-        Ok(FileCredentialCache::V4(ccache))
-    }
-
     pub fn read(inner: &Vec<u8>) -> Result<Self, KrbError> {
         let mut reader = binrw::io::Cursor::new(inner);
         let ccache: FileCredentialCache = reader.read_type(binrw::Endian::Big).map_err(|e| {
@@ -149,35 +68,17 @@ impl FileCredentialCache {
 }
 
 pub fn store(
-    name: &Name,
-    ticket: &EncTicket,
-    kdc_reply_part: &KdcReplyPart,
-    clock_skew: Option<Duration>,
-    ccache_name: &str,
+    _name: &Name,
+    _ticket: &EncTicket,
+    _kdc_reply_part: &KdcReplyPart,
+    _clock_skew: Option<Duration>,
+    _ccache_name: &str,
 ) -> Result<(), KrbError> {
-    let path = ccache_name
-        .strip_prefix("FILE:")
-        .ok_or(KrbError::UnsupportedCredentialCacheType)?;
-    let mut f = File::create(path).map_err(|io_err| {
-        error!(?io_err, "Unable to create file at {}", path);
-        KrbError::IoError
-    })?;
-
-    let fccache = FileCredentialCache::new(name, ticket, kdc_reply_part, clock_skew)?;
-    fccache.write(&mut f).map_err(|binrw_err| {
-        error!(?binrw_err, "Unable to write binary data.");
-        KrbError::BinRWError
-    })?;
-    Ok(())
+    Err(KrbError::CredentialCacheError)
 }
 
-pub fn destroy(path: &str) -> Result<(), KrbError> {
-    let path = path.strip_prefix("FILE:").unwrap_or(path);
-    std::fs::remove_file(path).map_err(|io_err| {
-        error!(?io_err, "Unable to create file at {}", path);
-        KrbError::IoError
-    })?;
-    Ok(())
+pub fn destroy(_path: &str) -> Result<(), KrbError> {
+    Err(KrbError::CredentialCacheError)
 }
 
 pub(super) struct FileCredentialCacheContext {
