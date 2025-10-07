@@ -96,11 +96,8 @@ impl From<errno::Errno> for KrbError {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct Residual {
-    #[allow(dead_code)]
     anchor: String,
-    #[allow(dead_code)]
     collection: String,
-    #[allow(dead_code)]
     subsidiary: Option<String>,
 }
 
