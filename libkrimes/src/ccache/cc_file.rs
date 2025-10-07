@@ -68,7 +68,7 @@ impl FileCredentialCache {
 }
 
 pub(super) struct FileCredentialCacheContext {
-    path: PathBuf,
+    pub path: PathBuf,
 }
 
 impl CredentialCache for FileCredentialCacheContext {

@@ -1,3 +1,4 @@
+mod cc_dir;
 mod cc_file;
 
 #[cfg(feature = "keyring")]
@@ -336,6 +337,10 @@ pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, Kr
 
     if ccache_name.starts_with("FILE:") {
         return cc_file::resolve(ccache_name.as_str());
+    }
+
+    if ccache_name.starts_with("DIR:") {
+        return cc_dir::resolve(ccache_name.as_str());
     }
 
     #[cfg(feature = "keyring")]
