@@ -177,7 +177,7 @@ fn get_subsidiary_principal(keyring: &Keyring) -> Result<Option<Name>, KrbError>
                 error!(error=?err);
                 KrbError::BinRWError
             })?;
-            let name: Name = name.try_into()?;
+            let name: Name = (&name).try_into()?;
             Ok(Some(name))
         }
         Err(errno::Errno(libc::ENOKEY)) => Ok(None),

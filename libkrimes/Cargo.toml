@@ -13,6 +13,7 @@ description = "A pure rust, minimal kerberos library"
 
 [features]
 keyring = ["dep:keyutils", "dep:keyutils-raw"]
+developer = []
 
 [dependencies]
 aes = { workspace = true }
