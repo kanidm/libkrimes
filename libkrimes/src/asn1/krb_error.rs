@@ -5,7 +5,7 @@ use super::pa_data::PaData;
 use super::principal_name::PrincipalName;
 use super::realm::Realm;
 use der::asn1::OctetString;
-use der::{Decode, DecodeValue, EncodeValue, FixedTag, Sequence, Tag, TagNumber};
+use der::Sequence;
 
 /// ```text
 /// KRB-ERROR       ::= [APPLICATION 30] SEQUENCE {
@@ -54,34 +54,6 @@ pub(crate) struct KrbError {
     pub(crate) error_data: Option<OctetString>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct TaggedKrbError(KrbError);
-
-impl FixedTag for TaggedKrbError {
-    const TAG: Tag = Tag::Application {
-        constructed: true,
-        number: TagNumber(30),
-    };
-}
-
-impl<'a> DecodeValue<'a> for TaggedKrbError {
-    type Error = der::Error;
-
-    fn decode_value<R: der::Reader<'a>>(reader: &mut R, _header: der::Header) -> der::Result<Self> {
-        let e: KrbError = KrbError::decode(reader)?;
-        Ok(Self(e))
-    }
-}
-
-impl EncodeValue for TaggedKrbError {
-    fn value_len(&self) -> der::Result<der::Length> {
-        KrbError::value_len(&self.0)
-    }
-    fn encode_value(&self, encoder: &mut impl der::Writer) -> der::Result<()> {
-        KrbError::encode_value(&self.0, encoder)
-    }
-}
-
 /// ```text
 ///    If the errorcode is KDC_ERR_PREAUTH_REQUIRED, then the e-data field will
 ///    contain an encoding of a sequence of padata fields, each
@@ -109,10 +81,41 @@ pub(crate) type MethodData = Vec<PaData>;
 mod tests {
     use crate::asn1::constants::{KrbErrorCode, KrbMessageType, PaDataType};
     use crate::asn1::kerberos_time::KerberosTime;
-    use crate::asn1::krb_error::{MethodData, TaggedKrbError};
+    use crate::asn1::krb_error::{KrbError, MethodData};
     use core::iter::zip;
     use der::DateTime;
-    use der::Decode;
+    use der::{Decode, DecodeValue, EncodeValue, FixedTag, Tag, TagNumber};
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct TaggedKrbError(KrbError);
+
+    impl FixedTag for TaggedKrbError {
+        const TAG: Tag = Tag::Application {
+            constructed: true,
+            number: TagNumber(30),
+        };
+    }
+
+    impl<'a> DecodeValue<'a> for TaggedKrbError {
+        type Error = der::Error;
+
+        fn decode_value<R: der::Reader<'a>>(
+            reader: &mut R,
+            _header: der::Header,
+        ) -> der::Result<Self> {
+            let e: KrbError = KrbError::decode(reader)?;
+            Ok(Self(e))
+        }
+    }
+
+    impl EncodeValue for TaggedKrbError {
+        fn value_len(&self) -> der::Result<der::Length> {
+            KrbError::value_len(&self.0)
+        }
+        fn encode_value(&self, encoder: &mut impl der::Writer) -> der::Result<()> {
+            KrbError::encode_value(&self.0, encoder)
+        }
+    }
 
     #[test]
     fn krb_err_response_too_big() {
