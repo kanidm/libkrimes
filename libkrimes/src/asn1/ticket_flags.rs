@@ -38,6 +38,7 @@ pub enum TicketFlags {
     HwAuthent = 1 << 11,
     TransitedPolicyChecked = 1 << 12,
     OkAsDelegate = 1 << 13,
+    EncPaRep = 1 << 15,
     Test = 1 << 31,
 }
 
