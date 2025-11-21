@@ -43,9 +43,15 @@ pub enum TicketFlags {
 }
 
 impl TicketFlags {
-    fn from_bits(val: u32) -> Self {
+    pub fn from_bits(bits: u32) -> Self {
+        let mut swap = 0u32;
+        for i in 0..32 {
+            let on = bits & (1 << i);
+            swap |= on >> i << (32 - i - 1);
+        }
+
         let mut tf = TicketFlags::none();
-        tf.bits = val;
+        tf.bits = swap;
         tf
     }
 }
@@ -65,12 +71,7 @@ impl<'a> Decode<'a> for TicketFlags {
             )
         })?;
         let bits = u32::from_be_bytes(bytes);
-        let mut swap = 0u32;
-        for i in 0..32 {
-            let on = bits & (1 << i);
-            swap |= on >> i << (32 - i - 1);
-        }
-        Ok(TicketFlags::from_bits(swap))
+        Ok(TicketFlags::from_bits(bits))
     }
 }
 
