@@ -929,7 +929,10 @@ impl TryFrom<KdcEncryptedData> for EncryptedData {
                 // but I can't obviously see it?
                 let kvno = enc_data.kvno;
                 let data = enc_data.cipher.into_bytes();
-                Ok(EncryptedData::Aes256CtsHmacSha196 { kvno, data })
+                Ok(EncryptedData::Aes256CtsHmacSha196 {
+                    kvno,
+                    data: data.to_vec(),
+                })
             }
             _ => Err(KrbError::UnsupportedEncryption),
         }
