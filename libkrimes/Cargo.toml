@@ -51,7 +51,7 @@ bitmask-enum = "2.2.5"
 hex = { workspace = true }
 
 ldap3_proto = { version = "0.6.2" }
-futures-util = { version = "0.3.31" }
+futures-util = { version = "0.3.31", features = ["sink"] }
 serde = { workspace = true }
 serde-binary = { version = "0.5.0" }
 bitflags = { version = "2.9.1" }
