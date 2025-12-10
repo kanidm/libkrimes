@@ -316,9 +316,9 @@ dependencies = [
 
 [[package]]
 name = "der"
-version = "0.8.0-rc.2"
+version = "0.8.0-rc.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a348a791b3df164315b6733835b128f52f99bd76bc3b19adbd574bde4a1be2e7"
+checksum = "02c1d73e9668ea6b6a28172aa55f3ebec38507131ce179051c8033b5c6037653"
 dependencies = [
  "der_derive",
  "flagset",
@@ -327,9 +327,9 @@ dependencies = [
 
 [[package]]
 name = "der_derive"
-version = "0.8.0-rc.2"
+version = "0.8.0-rc.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ea0c03fbeccba0997b8f476094bab403aa02013f8eb901eb23a6a7a11b80fe7"
+checksum = "be645fee2afe89d293b96c19e4456e6ac69520fc9c6b8a58298550138e361ffe"
 dependencies = [
  "proc-macro2",
  "quote",

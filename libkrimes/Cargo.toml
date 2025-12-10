@@ -22,7 +22,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 # der = { version = "0.7.9", features = ["alloc", "derive"] }
-der = { version = "0.8.0-rc.2", features = [
+der = { version = "0.8.0-rc.9", features = [
   "alloc",
   "derive",
   "flagset",

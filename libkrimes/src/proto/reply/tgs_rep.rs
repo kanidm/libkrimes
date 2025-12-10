@@ -155,7 +155,7 @@ impl KerberosReplyTicketGrantBuilder {
         let transited = TransitedEncoding {
             tr_type: 1,
             // Since no transit has occured, we record an empty str.
-            contents: OctetString::new(b"").map_err(|_| KrbError::DerEncodeOctetString)?,
+            contents: OctetString::new(*b"").map_err(|_| KrbError::DerEncodeOctetString)?,
         };
 
         // EncTicketPart
@@ -284,7 +284,7 @@ impl KerberosReplyTicketRenewBuilder {
         let transited = TransitedEncoding {
             tr_type: 1,
             // Since no transit has occured, we record an empty str.
-            contents: OctetString::new(b"").map_err(|_| KrbError::DerEncodeOctetString)?,
+            contents: OctetString::new(*b"").map_err(|_| KrbError::DerEncodeOctetString)?,
         };
 
         // EncTicketPart
