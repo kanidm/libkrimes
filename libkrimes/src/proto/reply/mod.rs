@@ -504,3 +504,14 @@ impl TryFrom<KdcRep> for KerberosReply {
         }
     }
 }
+
+/* Convenience trait for EntraID which provides the raw ASN.1 AS-REP in the PRT */
+impl TryFrom<&[u8]> for KerberosReply {
+    type Error = KrbError;
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match KrbKdcRep::from_der(value) {
+            Ok(krb_kdc_rep) => krb_kdc_rep.try_into(),
+            Err(_) => Err(KrbError::InvalidMessageType),
+        }
+    }
+}
