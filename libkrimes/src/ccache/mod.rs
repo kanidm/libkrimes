@@ -192,6 +192,24 @@ impl CredentialV4 {
                             KrbError::DerEncodeEncTicketPart
                         })?
                     }
+                    EncryptedData::Opaque { etype, kvno, data } => {
+                        let t = Asn1Ticket {
+                            tkt_vno: 5,
+                            realm: (&enc_part.server).try_into()?,
+                            sname: (&enc_part.server).try_into()?,
+                            enc_part: Asn1EncryptedData {
+                                etype: *etype,
+                                kvno: *kvno,
+                                cipher: OctetString::new(data.clone())
+                                    .map_err(|_| KrbError::DerEncodeOctetString)?,
+                            },
+                        };
+                        let tt = Asn1TaggedTicket::new(t);
+                        tt.to_der().map_err(|e| {
+                            error!(?e, "DerEncodeEncTicketPart");
+                            KrbError::DerEncodeEncTicketPart
+                        })?
+                    }
                 },
             },
             second_ticket: DataComponent { value: vec![] },
