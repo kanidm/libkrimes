@@ -872,11 +872,7 @@ impl EncryptedData {
             .map(|TaggedEncTicketPart(part)| part)
     }
 
-    #[cfg(test)]
-    pub(crate) fn decrypt_enc_kdc_rep(
-        &self,
-        base_key: &DerivedKey,
-    ) -> Result<KdcReplyPart, KrbError> {
+    pub fn decrypt_enc_kdc_rep(&self, base_key: &DerivedKey) -> Result<KdcReplyPart, KrbError> {
         // RFC 4120 The key usage value for encrypting this field is 3 in an AS-REP
         // message, using the client's long-term key or another key selected
         // via pre-authentication mechanisms.
