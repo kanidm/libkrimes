@@ -92,6 +92,9 @@ impl TryInto<KrbKdcReq> for &KerberosRequest {
                                     cipher,
                                 }
                             }
+                            EncryptedData::Opaque { .. } => {
+                                return Err(KrbError::UnsupportedEncryption);
+                            }
                         };
 
                         // Need to encode the padata value now.

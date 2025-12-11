@@ -166,6 +166,7 @@ impl DerivedKey {
                     kvno,
                 })
             }
+            EncryptedData::Opaque { .. } => Err(KrbError::UnsupportedEncryption),
         }
     }
 
@@ -385,6 +386,9 @@ impl SessionKey {
                 EncryptedData::Aes256CtsHmacSha196 { kvno: _, data },
                 SessionKey::Aes256CtsHmacSha196 { k },
             ) => decrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?,
+            (EncryptedData::Opaque { .. }, SessionKey::Aes256CtsHmacSha196 { .. }) => {
+                return Err(KrbError::UnsupportedEncryption)
+            }
         };
 
         Authenticator::from_der(&data).map_err(|_| KrbError::DerDecodeAuthenticator)
@@ -635,7 +639,15 @@ pub struct KdcReplyPart {
 
 #[derive(Debug, Clone)]
 pub enum EncryptedData {
-    Aes256CtsHmacSha196 { kvno: Option<u32>, data: Vec<u8> },
+    Aes256CtsHmacSha196 {
+        kvno: Option<u32>,
+        data: Vec<u8>,
+    },
+    Opaque {
+        etype: i32,
+        kvno: Option<u32>,
+        data: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -848,6 +860,9 @@ impl EncryptedData {
                 EncryptedData::Aes256CtsHmacSha196 { kvno: _, data },
                 DerivedKey::Aes256CtsHmacSha196 { k, .. },
             ) => decrypt_aes256_cts_hmac_sha1_96(k, data, key_usage),
+            (EncryptedData::Opaque { .. }, DerivedKey::Aes256CtsHmacSha196 { .. }) => {
+                Err(KrbError::UnsupportedEncryption)
+            }
         }
     }
 
@@ -862,6 +877,9 @@ impl EncryptedData {
                 EncryptedData::Aes256CtsHmacSha196 { kvno: _, data },
                 KdcPrimaryKey::Aes256 { k, kvno: _ },
             ) => decrypt_aes256_cts_hmac_sha1_96(k, data, key_usage)?,
+            (EncryptedData::Opaque { .. }, KdcPrimaryKey::Aes256 { .. }) => {
+                return Err(KrbError::UnsupportedEncryption);
+            }
         };
 
         TaggedEncTicketPart::from_der(&data)
@@ -917,20 +935,26 @@ impl TryFrom<KdcEncryptedData> for EncryptedData {
     type Error = KrbError;
 
     fn try_from(enc_data: KdcEncryptedData) -> Result<Self, Self::Error> {
-        let etype: EncryptionType = EncryptionType::try_from(enc_data.etype)
-            .map_err(|_| KrbError::UnsupportedEncryption)?;
-        match etype {
-            EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
-                // todo! there is some way to get a number of rounds here
-                // but I can't obviously see it?
-                let kvno = enc_data.kvno;
-                let data = enc_data.cipher.into_bytes();
-                Ok(EncryptedData::Aes256CtsHmacSha196 {
-                    kvno,
-                    data: data.to_vec(),
-                })
-            }
-            _ => Err(KrbError::UnsupportedEncryption),
+        let kvno = enc_data.kvno;
+        let data = enc_data.cipher.into_bytes();
+
+        match EncryptionType::try_from(enc_data.etype) {
+            Ok(etype) => match etype {
+                EncryptionType::AES256_CTS_HMAC_SHA1_96 => {
+                    // todo! there is some way to get a number of rounds here
+                    // but I can't obviously see it?
+                    Ok(EncryptedData::Aes256CtsHmacSha196 {
+                        kvno,
+                        data: data.to_vec(),
+                    })
+                }
+                _ => Err(KrbError::UnsupportedEncryption),
+            },
+            Err(_) => Ok(EncryptedData::Opaque {
+                etype: enc_data.etype,
+                kvno: enc_data.kvno,
+                data: data.to_vec(),
+            }),
         }
     }
 }
@@ -948,6 +972,7 @@ impl TryInto<KdcEncryptedData> for EncryptedData {
                     KrbError::UnsupportedEncryption // TODO
                 })?,
             }),
+            EncryptedData::Opaque { .. } => Err(KrbError::UnsupportedEncryption),
         }
     }
 }

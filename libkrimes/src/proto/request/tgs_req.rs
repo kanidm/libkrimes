@@ -406,6 +406,7 @@ impl TicketGrantRequestBuilder {
                     cipher,
                 }
             }
+            EncryptedData::Opaque { .. } => return Err(KrbError::UnsupportedEncryption),
         };
 
         let ap_options: ApOptions = ApFlags::none();
