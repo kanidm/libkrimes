@@ -174,14 +174,14 @@ impl CredentialV4 {
             authdata: AuthData { auth_data: vec![] },
             ticket: DataComponent {
                 value: match &ticket.enc_part {
-                    EncryptedData::Aes256CtsHmacSha196 { kvno: _, data } => {
+                    EncryptedData::Aes256CtsHmacSha196 { kvno, data } => {
                         let t = Asn1Ticket {
                             tkt_vno: 5,
                             realm: (&enc_part.server).try_into()?,
                             sname: (&enc_part.server).try_into()?,
                             enc_part: Asn1EncryptedData {
                                 etype: Asn1EncryptionType::AES256_CTS_HMAC_SHA1_96 as i32,
-                                kvno: Some(1), // TODO Why?
+                                kvno: *kvno,
                                 cipher: OctetString::new(data.clone())
                                     .map_err(|_| KrbError::DerEncodeOctetString)?,
                             },
