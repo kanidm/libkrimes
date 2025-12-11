@@ -11,10 +11,10 @@ use std::time::SystemTime;
 
 #[derive(Debug)]
 pub struct AuthenticationReply {
-    pub(crate) name: Name,
-    pub(crate) enc_part: EncryptedData,
+    pub name: Name,
+    pub enc_part: EncryptedData,
     pub(crate) pa_data: Option<PreauthData>,
-    pub(crate) ticket: EncTicket,
+    pub ticket: EncTicket,
 }
 
 pub struct AuthenticationReplyBuilder {
