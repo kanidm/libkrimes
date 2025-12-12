@@ -1524,6 +1524,26 @@ impl Preauth {
     }
 }
 
+pub struct KerberosCredentials {
+    pub(crate) name: Name,
+    pub(crate) ticket: EncTicket,
+    pub(crate) kdc_reply: KdcReplyPart,
+}
+
+impl KerberosCredentials {
+    pub fn new(name: Name, ticket: EncTicket, kdc_reply: KdcReplyPart) -> Self {
+        KerberosCredentials {
+            name,
+            ticket,
+            kdc_reply,
+        }
+    }
+
+    pub fn name(&self) -> &Name {
+        &self.name
+    }
+}
+
 // TODO; This should probably be a test-only function or removed. Or find a way to make it a proper
 // client.
 #[cfg(test)]
@@ -1531,7 +1551,7 @@ pub async fn get_tgt(
     principal: &str,
     realm: &str,
     password: &str,
-) -> Result<(Name, EncTicket, KdcReplyPart), KrbError> {
+) -> Result<KerberosCredentials, KrbError> {
     use crate::KerberosTcpCodec;
     use futures::SinkExt;
     use futures::StreamExt;
@@ -1592,7 +1612,11 @@ pub async fn get_tgt(
         _ => unreachable!(),
     };
 
-    Ok((name, ticket, kdc_reply))
+    Ok(KerberosCredentials {
+        name,
+        ticket,
+        kdc_reply,
+    })
 }
 
 #[cfg(test)]

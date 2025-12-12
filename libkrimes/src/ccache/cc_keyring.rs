@@ -74,7 +74,7 @@
 use super::CredentialCache;
 use crate::ccache::{CredentialV4, PrincipalV4};
 use crate::error::KrbError;
-use crate::proto::{EncTicket, KdcReplyPart, Name};
+use crate::proto::{EncTicket, KdcReplyPart, KerberosCredentials, Name};
 
 use binrw::{binread, binwrite};
 use binrw::{BinReaderExt, BinWrite};
@@ -449,12 +449,7 @@ impl CredentialCache for KeyringCredentialCacheContext {
         .map_err(KrbError::from)
     }
 
-    fn store(
-        &mut self,
-        name: &Name,
-        ticket: &EncTicket,
-        kdc_reply: &KdcReplyPart,
-    ) -> Result<(), KrbError> {
+    fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError> {
         // Fetch or create the keyring
         // NOTE I have seen once the session keyring revoked and further attempts
         // to attach were rejected with EKEYREVOKED (128). It was fixed running
@@ -474,16 +469,21 @@ impl CredentialCache for KeyringCredentialCacheContext {
         }?;
 
         let (subsidiary_name, mut subsidiary): (String, Keyring) =
-            get_subsidiary_cache(name, &mut collection, &self.residual)?;
+            get_subsidiary_cache(&credentials.name, &mut collection, &self.residual)?;
 
         // Store primary subsidiary name. If it already exists it is not modified.
         store_primary_subsidiary_name(subsidiary_name.as_str(), &mut collection)?;
 
         // Store the principal name within the subsidiary cache
-        store_principal(name, &mut subsidiary)?;
+        store_principal(&credentials.name, &mut subsidiary)?;
 
         // Store the principal name within the subsidiary cache
-        store_credential(name, ticket, kdc_reply, &mut subsidiary)?;
+        store_credential(
+            &credentials.name,
+            &credentials.ticket,
+            &credentials.kdc_reply,
+            &mut subsidiary,
+        )?;
 
         Ok(())
     }
@@ -549,33 +549,30 @@ mod tests {
         let ccache_name = Some("KEYRING:process:foo:bar");
         let mut ccache = crate::ccache::resolve(ccache_name)?;
 
-        let (name, ticket, kdc_reply_part) =
-            crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-        ccache.init(&name, None)?;
-        ccache.store(&name, &ticket, &kdc_reply_part)?;
+        let credentials = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
+        ccache.init(&credentials.name, None)?;
+        ccache.store(&credentials)?;
 
         // Store the same principal in the same subsidiary must succeed
-        let (name, ticket, kdc_reply_part) =
-            crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-        ccache.store(&name, &ticket, &kdc_reply_part)?;
+        let credentials = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
+        ccache.store(&credentials)?;
 
         // Store a different principal in the same subsidiary must fail
-        let (name, ticket, kdc_reply_part) =
-            crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password").await?;
-        let r = ccache.store(&name, &ticket, &kdc_reply_part);
+        let credentials = crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password").await?;
+        let r = ccache.store(&credentials);
         assert!(r.is_err());
 
         // Store a different principal in a different subsidiary must succeed
         let ccache_name_zap = Some("KEYRING:process:foo:zap");
         let mut ccache_zap = crate::ccache::resolve(ccache_name_zap)?;
-        ccache_zap.init(&name, None)?;
-        ccache_zap.store(&name, &ticket, &kdc_reply_part)?;
+        ccache_zap.init(&credentials.name, None)?;
+        ccache_zap.store(&credentials)?;
 
         // If subsidiary not given a random one will be created
         let ccache_name_no_sub = Some("KEYRING:process:abc");
         let mut ccache_no_sub = crate::ccache::resolve(ccache_name_no_sub)?;
-        ccache_no_sub.init(&name, None)?;
-        ccache_no_sub.store(&name, &ticket, &kdc_reply_part)?;
+        ccache_no_sub.init(&credentials.name, None)?;
+        ccache_no_sub.store(&credentials)?;
 
         Ok(())
     }

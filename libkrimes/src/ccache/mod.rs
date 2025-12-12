@@ -10,6 +10,7 @@ use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
 use crate::asn1::tagged_ticket::TaggedTicket as Asn1TaggedTicket;
 use crate::asn1::tagged_ticket::Ticket as Asn1Ticket;
 use crate::error::KrbError;
+use crate::proto::KerberosCredentials;
 use crate::proto::{EncTicket, EncryptedData, KdcReplyPart, Name, SessionKey};
 use binrw::{binread, binwrite};
 use der::asn1::OctetString;
@@ -341,12 +342,7 @@ fn parse_ccache_name(ccache: Option<&str>) -> String {
 pub trait CredentialCache {
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError>;
     fn destroy(&mut self) -> Result<(), KrbError>;
-    fn store(
-        &mut self,
-        name: &Name,
-        ticket: &EncTicket,
-        kdc_reply: &KdcReplyPart,
-    ) -> Result<(), KrbError>;
+    fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError>;
 }
 
 pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, KrbError> {
@@ -388,14 +384,13 @@ mod tests {
             return Ok(());
         }
 
-        let (name, ticket, kdc_reply_part) =
-            crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
+        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
 
         let path = "/tmp/krb5cc_krime";
         let ccache_name = format!("FILE:{path}");
         let mut ccache = super::resolve(Some(ccache_name.as_str()))?;
-        ccache.init(&name, None)?;
-        ccache.store(&name, &ticket, &kdc_reply_part)?;
+        ccache.init(&creds.name, None)?;
+        ccache.store(&creds)?;
         assert!(std::fs::exists(path).expect("Unable to check if file exists"));
 
         // TODO load and compare
@@ -430,14 +425,12 @@ mod tests {
         let ccname = Some(ccache_name);
         let mut ccache = super::resolve(ccname)?;
 
-        let (name, ticket, kdc_reply_part) =
-            crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-        ccache.init(&name, None)?;
-        ccache.store(&name, &ticket, &kdc_reply_part)?;
+        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
+        ccache.init(&creds.name, None)?;
+        ccache.store(&creds)?;
 
-        let (name, ticket, kdc_reply_part) =
-            crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password").await?;
-        ccache.store(&name, &ticket, &kdc_reply_part)?;
+        let creds = crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password").await?;
+        ccache.store(&creds)?;
 
         let output = Command::new("klist")
             .stderr(Stdio::null())
