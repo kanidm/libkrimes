@@ -107,6 +107,7 @@ impl AuthenticationReplyBuilder {
             server_realm,
             server_name,
             client_addresses: None,
+            encrypted_pa_data: None,
         };
 
         let (etype_info2, enc_part) = user_key.encrypt_as_rep_part(enc_kdc_rep_part)?;

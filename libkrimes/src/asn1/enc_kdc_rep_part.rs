@@ -1,3 +1,5 @@
+use crate::asn1::pa_data::PaData;
+
 use super::encryption_key::EncryptionKey;
 use super::host_addresses::HostAddresses;
 use super::kerberos_time::KerberosTime;
@@ -21,6 +23,7 @@ use der::Sequence;
 ///         srealm          [9] Realm,
 ///         sname           [10] PrincipalName,
 ///         caddr           [11] HostAddresses OPTIONAL
+///         encrypted-pa-data [12] SEQUENCE OF PA-DATA OPTIONAL (Added in rfc6806)
 /// }
 /// ```
 #[derive(Debug, Eq, PartialEq, Sequence)]
@@ -49,4 +52,6 @@ pub(crate) struct EncKdcRepPart {
     pub(crate) server_name: PrincipalName,
     #[asn1(context_specific = "11", optional = "true")]
     pub(crate) client_addresses: Option<HostAddresses>,
+    #[asn1(context_specific = "12", optional = "true")]
+    pub(crate) encrypted_pa_data: Option<Vec<PaData>>,
 }

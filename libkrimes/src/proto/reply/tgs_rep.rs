@@ -117,6 +117,7 @@ impl KerberosReplyTicketGrantBuilder {
             server_realm,
             server_name,
             client_addresses: None,
+            encrypted_pa_data: None,
         };
 
         // Encrypt this with the original tickets sub_session_key so that they
@@ -269,6 +270,7 @@ impl KerberosReplyTicketRenewBuilder {
             server_realm,
             server_name,
             client_addresses: None,
+            encrypted_pa_data: None,
         };
 
         let enc_part = if let Some(sub_session_key) = self.sub_session_key {
