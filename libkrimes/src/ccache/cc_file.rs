@@ -1,7 +1,7 @@
 use super::CredentialCache;
 use crate::ccache::{Credential, CredentialV4, Principal, PrincipalV4};
 use crate::error::KrbError;
-use crate::proto::{EncTicket, KdcReplyPart, Name};
+use crate::proto::{KerberosCredentials, Name};
 use binrw::helpers::until_eof;
 use binrw::io::TakeSeekExt;
 use binrw::BinReaderExt;
@@ -156,13 +156,12 @@ impl CredentialCache for FileCredentialCacheContext {
         Ok(())
     }
 
-    fn store(
-        &mut self,
-        name: &Name,
-        ticket: &EncTicket,
-        kdc_reply: &KdcReplyPart,
-    ) -> Result<(), KrbError> {
-        let cred = Credential::V4(CredentialV4::new(name, ticket, kdc_reply)?);
+    fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError> {
+        let cred = Credential::V4(CredentialV4::new(
+            &credentials.name,
+            &credentials.ticket,
+            &credentials.kdc_reply,
+        )?);
 
         let f = File::open(&self.path).map_err(|io_err| {
             error!(?io_err, "Unable to open file at {:#?}", &self.path);
