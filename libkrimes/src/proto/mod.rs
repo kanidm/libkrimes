@@ -46,6 +46,7 @@ use crate::crypto::{
 use crate::error::KrbError;
 use der::{Decode, Encode};
 use rand::{rng, Rng};
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::time::{Duration, SystemTime};
@@ -311,7 +312,7 @@ impl fmt::Debug for DerivedKey {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum SessionKey {
     Aes256CtsHmacSha196 { k: [u8; AES_256_KEY_LEN] },
 }
@@ -532,14 +533,14 @@ pub struct Ticket {
     pub(crate) flags: TicketFlags,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncTicket {
     tkt_vno: i8,
     service: Name,
     pub enc_part: EncryptedData,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LastRequestItem {
     None(SystemTime),
     LastInitialTgt(SystemTime),
@@ -617,7 +618,7 @@ impl TryFrom<&LastRequestItem> for KdcLastReqItem {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 // TODO: Remove the above dead_code!
 pub struct KdcReplyPart {
@@ -637,7 +638,7 @@ pub struct KdcReplyPart {
     // client_addresses: Vec<HostAddress>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EncryptedData {
     Aes256CtsHmacSha196 {
         kvno: Option<u32>,
@@ -658,7 +659,7 @@ pub struct PreauthData {
     pub(crate) etype_info2: Vec<EtypeInfo2>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum Name {
     Principal {
         name: String,
@@ -1524,6 +1525,7 @@ impl Preauth {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct KerberosCredentials {
     pub(crate) name: Name,
     pub(crate) ticket: EncTicket,
