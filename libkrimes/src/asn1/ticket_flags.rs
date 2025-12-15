@@ -1,6 +1,7 @@
 use bitmask_enum::bitmask;
 use der::asn1::BitStringRef;
 use der::{Decode, EncodeValue, Length, Result, Tagged, Writer};
+use serde::{Deserialize, Serialize};
 
 /// ```text
 /// TicketFlags     ::= KerberosFlags
@@ -95,6 +96,25 @@ impl EncodeValue for TicketFlags {
         let buff = &reversed.to_be_bytes();
         let bs = BitStringRef::from_bytes(buff)?;
         bs.encode_value(encoder)
+    }
+}
+
+impl Serialize for TicketFlags {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u32(self.bits())
+    }
+}
+
+impl<'de> Deserialize<'de> for TicketFlags {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bits = u32::deserialize(deserializer)?;
+        Ok(Self::from_bits(bits))
     }
 }
 
