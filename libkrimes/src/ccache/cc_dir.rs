@@ -92,10 +92,7 @@ pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, Krb
         let ccache_name = ccache_name
             .strip_prefix(":")
             .ok_or(KrbError::CredentialCacheError)?;
-        let path = PathBuf::from(ccache_name).canonicalize().map_err(|e| {
-            error!(?e, ?ccache_name, "Failed to canonicalize path");
-            KrbError::IoError
-        })?;
+        let path = PathBuf::from(ccache_name);
 
         let collection_path = match path.parent() {
             Some(p) => Ok(PathBuf::from(p)),
@@ -106,10 +103,7 @@ pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, Krb
         path
     } else {
         trace!(?ccache_name, "Collection without subsidiary");
-        let collection_path = PathBuf::from(ccache_name).canonicalize().map_err(|e| {
-            error!(?e, ?ccache_name, "Failed to canonicalize path");
-            KrbError::IoError
-        })?;
+        let collection_path = PathBuf::from(ccache_name);
         create_ccache_dir(&collection_path)?;
 
         match get_primary(&collection_path)? {
