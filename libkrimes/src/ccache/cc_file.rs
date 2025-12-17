@@ -9,8 +9,10 @@ use binrw::BinWrite;
 use binrw::{binread, binwrite};
 use std::fs;
 use std::fs::File;
+use std::fs::Permissions;
 use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{debug, error, trace};
@@ -109,6 +111,13 @@ impl CredentialCache for FileCredentialCacheContext {
             error!(?io_err, "Unable to create file at {:#?}", &self.path);
             KrbError::IoError
         })?;
+
+        let perms = Permissions::from_mode(0o600);
+        f.set_permissions(perms).map_err(|x| {
+            error!(?x, "Unable to set permissions at {:#?}", &self.path);
+            KrbError::IoError
+        })?;
+
         fcc.write(&mut f).map_err(|x| {
             error!(?x, "Unable to create file at {:#?}", &self.path);
             KrbError::IoError
