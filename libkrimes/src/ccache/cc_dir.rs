@@ -1,9 +1,10 @@
 use super::CredentialCache;
 use crate::ccache::cc_file::FileCredentialCacheContext;
 use crate::error::KrbError;
-use std::fs::{DirBuilder, File};
+use std::fs::{DirBuilder, File, Permissions};
 use std::io::{Read, Write};
 use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tracing::{error, trace};
 
@@ -66,6 +67,13 @@ fn set_primary(path: &Path, primary_name: &str) -> Result<(), KrbError> {
         error!(?e, ?primary_path, "Failed to create primary file");
         KrbError::IoError
     })?;
+
+    let perms = Permissions::from_mode(0o600);
+    f.set_permissions(perms).map_err(|x| {
+        error!(?x, ?primary_path, "Failed to set primary file permissions");
+        KrbError::IoError
+    })?;
+
     f.write_all(primary_name.as_bytes()).map_err(|e| {
         error!(?e, ?primary_path, "Failed to write primary file");
         KrbError::IoError
