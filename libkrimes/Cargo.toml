@@ -10,7 +10,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 
 [features]
-keyring = ["dep:keyutils"]
+keyring = ["dep:keyutils", "dep:keyutils-raw"]
 
 [dependencies]
 bytes = "^1.1.0"
@@ -47,6 +47,8 @@ libc = { workspace = true }
 errno = { workspace = true }
 
 keyutils = { version = "0.4.0", optional = true }
+keyutils-raw = { version="0.4.0", optional = true }
+
 bitmask-enum = "2.2.5"
 hex = { workspace = true }
 
@@ -57,6 +59,7 @@ serde-binary = { version = "0.5.0" }
 bitflags = { version = "2.9.1" }
 c-types = { version = "6.0.0" }
 uuid = { workspace = true }
+users = "0.11.0"
 
 [dev-dependencies]
 base64 = "0.22.0"

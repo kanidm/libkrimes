@@ -676,6 +676,7 @@ dependencies = [
  "hex",
  "hmac",
  "keyutils",
+ "keyutils-raw",
  "ldap3_proto",
  "libc",
  "md5",
@@ -690,6 +691,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "users",
  "uuid",
  "uzers",
  "which",
@@ -1294,6 +1296,16 @@ name = "uninit"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac20c07bcac4f505f1e4fbd2e55b54f6297a35a27538f107cb3d4254b4514146"
+
+[[package]]
+name = "users"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24cc0f6d6f267b73e5a2cadf007ba8f9bc39c6a6f9666f8cf25ea809a153b032"
+dependencies = [
+ "libc",
+ "log",
+]
 
 [[package]]
 name = "utf8parse"

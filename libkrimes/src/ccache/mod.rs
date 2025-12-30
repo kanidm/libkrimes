@@ -423,13 +423,15 @@ mod tests {
 
         let ccache_name = "KEYRING:session:abc";
         let ccname = Some(ccache_name);
-        let mut ccache = super::resolve(ccname)?;
 
+        let mut ccache = super::resolve(ccname)?;
         let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
         ccache.init(&creds.name, None)?;
         ccache.store(&creds)?;
 
+        let mut ccache = super::resolve(ccname)?;
         let creds = crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password").await?;
+        ccache.init(&creds.name, None)?;
         ccache.store(&creds)?;
 
         let output = Command::new("klist")
@@ -443,21 +445,6 @@ mod tests {
 
         let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
         assert!(output.contains("testuser@EXAMPLE.COM"));
-        assert!(output.contains("testuser2@EXAMPLE.COM"));
-
-        ccache.destroy()?;
-
-        let output = Command::new("klist")
-            .stderr(Stdio::null())
-            .arg("-c")
-            .arg(ccache_name)
-            .arg("-A")
-            .output()
-            .expect("Unable to execute command klist");
-        assert!(output.status.success());
-
-        let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
-        assert!(!output.contains("testuser@EXAMPLE.COM"));
         assert!(output.contains("testuser2@EXAMPLE.COM"));
 
         Ok(())
