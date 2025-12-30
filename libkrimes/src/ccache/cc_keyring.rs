@@ -82,10 +82,10 @@ use errno::Errno;
 use keyutils::keytypes::user::User;
 use keyutils::SpecialKeyring;
 use keyutils::{Key, Keyring};
-use libc;
+use keyutils_raw::{keyctl_get_keyring_id, keyctl_get_persistent};
 use rand::{distr::Alphanumeric, Rng};
 use std::time::Duration;
-use tracing::{error, trace};
+use tracing::{debug, error};
 
 impl From<errno::Errno> for KrbError {
     fn from(value: errno::Errno) -> Self {
@@ -213,60 +213,87 @@ fn get_random_subsidiary_name(collection: &mut Keyring) -> Result<String, KrbErr
     Err(KrbError::CredentialCacheError)
 }
 
+fn get_subsidiary_cache_name(residual: &Residual) -> String {
+    residual
+        .subsidiary
+        .clone()
+        .unwrap_or(residual.collection.clone())
+}
+
 /// Given a collection and a principal, get the subsidiary keyring
 fn get_subsidiary_cache(
     name: &Name,
     collection: &mut Keyring,
     residual: &Residual,
-) -> Result<(String, Keyring), KrbError> {
-    match &residual.subsidiary {
-        Some(subsidiary_name) => {
+) -> Result<Keyring, KrbError> {
+    let subsidiary_name = get_subsidiary_cache_name(residual);
+    match residual.subsidiary.as_deref() {
+        Some(_) => {
             // The subsidiary name was given in the residual
-            let subsidiary_name = format!("_krb_{subsidiary_name}");
-            match subsidiary_exists(collection, subsidiary_name.as_str())? {
+            match subsidiary_exists(collection, &subsidiary_name)? {
                 Some(subsidiary) => {
                     // The subsidiary name was given in the residual and it already
                     // exists, check the stored principal matches the given one.
                     let stored_name = get_subsidiary_principal(&subsidiary)?.ok_or_else(|| {
-                        error!(collection=?collection, subsidiary=?subsidiary, residual=?residual, name=?name, "Subsidiary ccache has no principal");
+                        error!(
+                            ?collection,
+                            ?subsidiary,
+                            ?subsidiary_name,
+                            ?name,
+                            "Subsidiary ccache has no principal"
+                        );
                         KrbError::CredentialCacheError
                     })?;
                     if &stored_name == name {
-                        Ok((subsidiary_name, subsidiary))
+                        Ok(subsidiary)
                     } else {
-                        error!(collection=?collection, residual=?residual, stored_name=?stored_name, name=?name, "Stored principal do not match");
+                        error!(
+                            ?collection,
+                            ?subsidiary_name,
+                            ?stored_name,
+                            ?name,
+                            "Stored principal do not match"
+                        );
                         Err(KrbError::CredentialCacheError)
                     }
                 }
                 None => {
-                    // The subsidiary name was given in the residual and it does not
-                    // exists so create it.
-                    let s = collection.add_keyring(subsidiary_name.as_str())?;
-                    Ok((subsidiary_name, s))
+                    // The subsidiary name was given in the residual and it does not exists so create it.
+                    collection
+                        .add_keyring(subsidiary_name.as_str())
+                        .map_err(|e| {
+                            error!(?collection, ?e, "Failed to add keyring");
+                            KrbError::CredentialCacheError
+                        })
                 }
             }
         }
         None => {
             // The subsidiary name was not given in the residual
-            let subsidiary_name = "_krb_default".to_string();
             match subsidiary_exists(collection, subsidiary_name.as_str())? {
                 Some(subsidiary) => {
                     let stored_name = get_subsidiary_principal(&subsidiary)?.ok_or_else(|| {
-                        error!(collection=?collection, subsidiary=?subsidiary, residual=?residual, name=?name, "Subsidiary ccache has no principal");
+                        error!(
+                            ?collection,
+                            ?subsidiary,
+                            ?subsidiary_name,
+                            ?name,
+                            "Subsidiary ccache has no principal"
+                        );
                         KrbError::CredentialCacheError
                     })?;
                     if &stored_name != name {
                         // If the stored principal do not match generate a random subsidiary name
                         let subsidiary_name = get_random_subsidiary_name(collection)?;
                         let subsidiary = collection.add_keyring(subsidiary_name.as_str())?;
-                        Ok((subsidiary_name, subsidiary))
+                        Ok(subsidiary)
                     } else {
-                        Ok((subsidiary_name, subsidiary))
+                        Ok(subsidiary)
                     }
                 }
                 None => {
                     let subsidiary = collection.add_keyring(subsidiary_name.as_str())?;
-                    Ok((subsidiary_name, subsidiary))
+                    Ok(subsidiary)
                 }
             }
         }
@@ -358,149 +385,224 @@ fn store_principal(name: &Name, subsidiary: &mut Keyring) -> Result<(), KrbError
 fn store_primary_subsidiary_name(
     subsidiary_name: &str,
     collection: &mut Keyring,
-) -> Result<(), KrbError> {
+) -> Result<String, KrbError> {
     let key_name: &str = "krb_ccache:primary";
-    match collection.search_for_key::<User, &str, Option<&mut Keyring>>(key_name, None) {
-        Ok(_) => Ok(()),
-        Err(errno::Errno(libc::ENOKEY)) => {
-            let pn: PrimaryName = PrimaryName {
-                strval: subsidiary_name.as_bytes().to_vec(),
-            };
-            let mut c = std::io::Cursor::new(Vec::new());
-            pn.write(&mut c).map_err(|err| {
+    let pn: PrimaryName = PrimaryName {
+        strval: subsidiary_name.as_bytes().to_vec(),
+    };
+    let mut c = std::io::Cursor::new(Vec::new());
+    pn.write(&mut c).map_err(|err| {
                 error!(subsidiary_name=?subsidiary_name, collection=?collection, error=?err, "Failed to store primary subsidiary name");
                 KrbError::BinRWError
             })?;
-            let vec = c.into_inner();
-            collection
-                .add_key::<User, &str, &[u8]>(key_name, vec.as_slice())
-                .map_err(KrbError::from)?;
-            Ok(())
-        }
-        Err(e) => Err(KrbError::from(e)),
-    }
+    let vec = c.into_inner();
+    collection
+        .add_key::<User, &str, &[u8]>(key_name, vec.as_slice())
+        .map_err(|e| {
+            error!(?e, "Failed to add key");
+            KrbError::from(e)
+        })?;
+    Ok(subsidiary_name.to_string())
 }
 
 pub(super) struct KeyringCredentialCacheContext {
     residual: Residual,
+    collection: Keyring,
+    subsidiary: Option<Keyring>,
 }
 
 impl CredentialCache for KeyringCredentialCacheContext {
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
-        let mut anchor: Keyring = match self.residual.anchor.as_str() {
-            "process" => Keyring::attach_or_create(SpecialKeyring::Process),
-            "session" => Keyring::attach_or_create(SpecialKeyring::Session),
-            "user" => Keyring::attach_or_create(SpecialKeyring::User),
-            _ => Err(Errno(libc::ENOTSUP)),
-        }?;
+        // Pick a subsidiary within collection
+        let mut subsidiary = get_subsidiary_cache(name, &mut self.collection, &self.residual)?;
+        subsidiary.clear()?;
 
-        let collection_name = format!("_krb_{}", self.residual.collection);
-        let mut collection = match anchor.search_for_keyring(collection_name.clone(), None) {
-            Ok(k) => Ok(k),
-            Err(errno::Errno(libc::ENOKEY)) => anchor.add_keyring(collection_name.clone()),
-            Err(e) => Err(e),
-        }?;
+        let desc = subsidiary.description().map_err(|e| {
+            error!(?e, "Failed to parse keyring description");
+            KrbError::CredentialCacheError
+        })?;
 
-        let (subsidiary_name, mut subsidiary): (String, Keyring) =
-            get_subsidiary_cache(name, &mut collection, &self.residual)?;
-
-        // Store primary subsidiary name. If it already exists it is not modified.
-        store_primary_subsidiary_name(subsidiary_name.as_str(), &mut collection)?;
+        // If subsidiary was not given set as primary
+        if self.residual.subsidiary.is_none() {
+            debug!(?desc.description, "Set as primary subsidiary");
+            store_primary_subsidiary_name(desc.description.as_str(), &mut self.collection)?;
+        }
 
         // Store the principal name within the subsidiary cache
+        debug!(
+            ?name,
+            ?subsidiary,
+            ?desc,
+            "Storing principal name in subsidiary cache"
+        );
         store_principal(name, &mut subsidiary)?;
 
         // Store clockskew within subsidiary cache
         if let Some(cs) = clock_skew {
+            debug!(?cs, ?subsidiary, "Storing clock skew in subsidiary cache");
             store_clock_skew(cs, &mut subsidiary)?;
         };
+
+        debug!(?subsidiary, "Subsidiary cache initialized");
+        self.subsidiary = Some(subsidiary);
         Ok(())
     }
 
     fn destroy(&mut self) -> Result<(), KrbError> {
-        let anchor: Keyring = match self.residual.anchor.as_str() {
-            "process" => Keyring::attach_or_create(SpecialKeyring::Process),
-            "session" => Keyring::attach_or_create(SpecialKeyring::Session),
-            "user" => Keyring::attach_or_create(SpecialKeyring::User),
-            _ => Err(Errno(libc::ENOTSUP)),
-        }?;
+        let subsidiary_name = match self.residual.subsidiary.as_deref() {
+            Some(name) => name.to_string(),
+            None => match get_primary_subsidiary_name(&mut self.collection)? {
+                Some(name) => name,
+                None => {
+                    debug!(
+                        concat!(
+                            "No subsidiary cache was destroyed because the subsidiary name was not specified ",
+                            "in the residual and the collection does not have a primary subsidiary defined"
+                        )
+                    );
+                    return Ok(());
+                }
+            },
+        };
 
-        let collection_name = format!("_krb_{}", self.residual.collection);
-        let mut collection = anchor.search_for_keyring(collection_name.clone(), None)?;
-
-        // Use the given subsidiary name or read it from the collection
-        let subsidiary_name = self
-            .residual
-            .clone()
-            .subsidiary
-            .map(Ok)
-            .unwrap_or_else(|| {
-                get_primary_subsidiary_name(&mut collection)?.ok_or_else(|| {
-                    error!(collection=?collection, "No primary subsidiary key");
-                    KrbError::CredentialCacheError
-                })
-            })?;
-
-        // Drop the subsidiary
-        match collection.search_for_keyring(subsidiary_name.clone(), None) {
-            Ok(subsidiary) => collection.unlink_keyring(&subsidiary),
-            Err(e) => Err(e),
+        match self
+            .collection
+            .search_for_keyring(subsidiary_name.as_str(), None)
+        {
+            Ok(k) => self.collection.unlink_keyring(&k).map_err(|e| {
+                error!(?e, "Failed to unlink subsidiary from collection");
+                e.into()
+            }),
+            Err(errno::Errno(libc::ENOKEY)) => {
+                debug!(?subsidiary_name, "Subsidiary does not exist");
+                Ok(())
+            }
+            Err(e) => {
+                error!(?e, "Failed to search for keyring");
+                Err(e.into())
+            }
         }
-        .map_err(KrbError::from)
     }
 
     fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError> {
-        // Fetch or create the keyring
-        // NOTE I have seen once the session keyring revoked and further attempts
-        // to attach were rejected with EKEYREVOKED (128). It was fixed running
-        // `keyctl new_session`.
-        let mut anchor: Keyring = match self.residual.anchor.as_str() {
-            "process" => Keyring::attach_or_create(SpecialKeyring::Process),
-            "session" => Keyring::attach_or_create(SpecialKeyring::Session),
-            "user" => Keyring::attach_or_create(SpecialKeyring::User),
-            _ => Err(Errno(libc::ENOTSUP)),
-        }?;
+        let Some(subsidiary) = self.subsidiary.as_mut() else {
+            error!("Credential cache not initialized");
+            return Err(KrbError::CredentialCacheError);
+        };
 
-        let collection_name = format!("_krb_{}", self.residual.collection);
-        let mut collection = match anchor.search_for_keyring(collection_name.clone(), None) {
-            Ok(k) => Ok(k),
-            Err(errno::Errno(libc::ENOKEY)) => anchor.add_keyring(collection_name.clone()),
-            Err(e) => Err(e),
-        }?;
+        let stored_name = get_subsidiary_principal(subsidiary)?.ok_or_else(|| {
+            error!(?subsidiary, "Subsidiary ccache has no principal");
+            KrbError::CredentialCacheError
+        })?;
 
-        let (subsidiary_name, mut subsidiary): (String, Keyring) =
-            get_subsidiary_cache(&credentials.name, &mut collection, &self.residual)?;
+        if stored_name != credentials.name {
+            error!(
+                ?stored_name,
+                ?credentials.name,
+                "Stored principal do not match"
+            );
+            return Err(KrbError::CredentialCacheError);
+        }
 
-        // Store primary subsidiary name. If it already exists it is not modified.
-        store_primary_subsidiary_name(subsidiary_name.as_str(), &mut collection)?;
-
-        // Store the principal name within the subsidiary cache
-        store_principal(&credentials.name, &mut subsidiary)?;
+        let desc = subsidiary.description().map_err(|e| {
+            error!(?e, "Failed to parse keyring description");
+            KrbError::CredentialCacheError
+        })?;
 
         // Store the principal name within the subsidiary cache
+        debug!(?desc, "Storing credentials in subsidiary cache");
         store_credential(
             &credentials.name,
             &credentials.ticket,
             &credentials.kdc_reply,
-            &mut subsidiary,
+            subsidiary,
         )?;
 
         Ok(())
     }
 }
 
-pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
-    trace!(?ccache_name, "Resolving keyring credential cache");
-    let residual = Residual::parse(ccache_name)?;
-    trace!(?residual, "Resolved keyring credential cache");
+fn get_or_create_keyring(parent: &mut Keyring, name: &str) -> Result<Keyring, Errno> {
+    match parent.search_for_keyring(name, None) {
+        Ok(k) => Ok(k),
+        Err(errno::Errno(libc::ENOKEY)) => parent.add_keyring(name),
+        Err(e) => Err(e),
+    }
+    .inspect_err(|e| error!(?parent, ?name, ?e, "Failed to get or create keyring"))
+}
 
-    let kcc = KeyringCredentialCacheContext { residual };
+/// fetch or create a keyring for the given collection name within the anchor
+fn get_collection(anchor: &str, collection: &str) -> Result<Keyring, KrbError> {
+    let mut parent = match anchor {
+        "process" => Keyring::attach_or_create(SpecialKeyring::Process)
+            .inspect_err(|e| error!(?e, "Failed to attach or create process keyring")),
+        "thread" => Keyring::attach_or_create(SpecialKeyring::Thread)
+            .inspect_err(|e| error!(?e, "Failed to attach or create thread keyring")),
+        "session" => Keyring::attach_or_create(SpecialKeyring::Session)
+            .inspect_err(|e| error!(?e, "Failed to attach or create session keyring")),
+        "user" => Keyring::attach_or_create(SpecialKeyring::User)
+            .inspect_err(|e| error!(?e, "Failed to attach or create user keyring")),
+        "persistent" => {
+            let uid = match collection.parse::<u32>() {
+                Ok(uid) => uid,
+                Err(e) => {
+                    error!(?collection, ?e, "Failed to parse collection name into uid");
+                    return Err(KrbError::CredentialCacheError);
+                }
+            };
+            // This check must be performed because new keys will be owned by the effective uid
+            let euid = users::get_effective_uid();
+            if uid != euid {
+                error!(
+                    ?uid,
+                    ?euid,
+                    "The collection name (uid) does not match the effective uid (euid)"
+                );
+                return Err(KrbError::CredentialCacheError);
+            }
+            // Must use raw calls to get the uid's persistent keyring
+            let parent = keyctl_get_keyring_id(SpecialKeyring::Process.serial(), true)
+                .inspect_err(|e| error!(?e, "Failed to attach or create process keyring"))?;
+            let parent = keyctl_get_persistent(uid, parent)
+                .inspect_err(|e| error!(?e, "Failed to attach to persistent keyring"))?;
+            let parent = unsafe { Keyring::new(parent) };
+            Ok(parent)
+        }
+        _ => Err(Errno(libc::ENOTSUP)),
+    }?;
+
+    let collection_name = match anchor {
+        "persistent" => "_krb".to_string(),
+        _ => format!("_krb_{collection}"),
+    };
+
+    get_or_create_keyring(&mut parent, &collection_name).map_err(|e| e.into())
+}
+
+pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
+    debug!(?ccache_name, "Parsing ccache name");
+
+    let residual = Residual::parse(ccache_name)?;
+    debug!(?residual, "Parsed residual");
+
+    let collection = get_collection(residual.anchor.as_str(), residual.collection.as_str())?;
+    debug!(?collection, "Resolved collection");
+
+    let kcc = KeyringCredentialCacheContext {
+        residual,
+        collection,
+        subsidiary: None,
+    };
     Ok(Box::new(kcc))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::process::Command;
+    #[cfg(feature = "keyring")]
+    use std::process::Stdio;
 
     #[tokio::test]
     async fn test_ccache_keyring_residual_parse() -> Result<(), KrbError> {
@@ -535,6 +637,92 @@ mod tests {
                 subsidiary: Some("foo".to_string())
             }
         );
+        Ok(())
+    }
+
+    fn klist_all(ccache_name: &str) -> String {
+        let output = Command::new("klist")
+            .stderr(Stdio::null())
+            .arg("-c")
+            .arg(ccache_name)
+            .arg("-A")
+            .output()
+            .expect("Unable to execute command klist");
+        assert!(output.status.success());
+
+        String::from_utf8_lossy(output.stdout.as_slice()).to_string()
+    }
+
+    #[tokio::test]
+    async fn test_ccache_keyring_primary() -> Result<(), KrbError> {
+        // No subsidiary in residual
+        let ccache_name = Some("KEYRING:session:c1");
+
+        let p1 = Name::Principal {
+            name: "p1".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+        let p2 = Name::Principal {
+            name: "p2".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+        let p3 = Name::Principal {
+            name: "p3".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+
+        let mut ccache = crate::ccache::resolve(ccache_name)?;
+        let mut col = get_collection("session", "c1")?;
+
+        // Will set primary
+        ccache.init(&p1, None)?;
+        let primary = get_primary_subsidiary_name(&mut col)?.expect("No primary key");
+        assert!(primary == "c1");
+
+        // Will generate a new subsidiary and override primary
+        ccache.init(&p2, None)?;
+        let random = get_primary_subsidiary_name(&mut col)?.expect("No primary key");
+        assert!(random != "c1"); // subsidiary name random
+
+        // Subsidiary specified, primary not overrided
+        let ccache_name = Some("KEYRING:session:c1:s1");
+        let mut ccache = crate::ccache::resolve(ccache_name)?;
+        ccache.init(&p3, None)?;
+        let primary = get_primary_subsidiary_name(&mut col)?.expect("No primary key");
+        assert!(primary == random); // subsidiary name was given in residual, do not override
+
+        // At this point, collection has 3 subsidiaries
+        let ccache_name = "KEYRING:session:c1";
+        let output = klist_all(ccache_name);
+        assert!(output.contains("p1@EXAMPLE.COM"));
+        assert!(output.contains("p2@EXAMPLE.COM"));
+        assert!(output.contains("p3@EXAMPLE.COM"));
+
+        // Destroy specifying the subsidiary deletes the specified subsidiary.
+        let ccache_name = "KEYRING:session:c1:c1";
+        let mut ccache = crate::ccache::resolve(Some(ccache_name))?;
+        ccache.destroy()?;
+        let ccache_name = "KEYRING:session:c1";
+        let output = klist_all(ccache_name);
+        assert!(!output.contains("p1@EXAMPLE.COM"));
+        assert!(output.contains("p2@EXAMPLE.COM"));
+        assert!(output.contains("p3@EXAMPLE.COM"));
+
+        // Destroy without specifying the subsidiary deletes the primary, but the key remains
+        let ccache_name = "KEYRING:session:c1";
+        let mut ccache = crate::ccache::resolve(Some(ccache_name))?;
+        ccache.destroy()?;
+        let output = klist_all(ccache_name);
+        assert!(!output.contains("p1@EXAMPLE.COM"));
+        assert!(!output.contains("p2@EXAMPLE.COM"));
+        assert!(output.contains("p3@EXAMPLE.COM"));
+
+        // Remove collection keyring
+        let mut col = Keyring::attach_or_create(SpecialKeyring::Session)?;
+        if let Ok(k) = col.search_for_keyring("_krb_c1", None) {
+            col.unlink_keyring(&k).expect("Failed to unlink");
+        };
+
         Ok(())
     }
 
