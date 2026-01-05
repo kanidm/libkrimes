@@ -178,8 +178,8 @@ mod tests {
         let iter = zip(edata, &tedata);
         for (pa, tpa) in iter {
             assert_eq!(pa.padata_type, tpa.0 as u32);
-            if tpa.1.is_some() {
-                let tbytes = hex::decode(tpa.1.unwrap()).expect("Failed to decode bytes");
+            if let Some(tpa1) = tpa.1 {
+                let tbytes = hex::decode(tpa1).expect("Failed to decode bytes");
                 assert_eq!(pa.padata_value.as_bytes(), tbytes);
             }
         }
