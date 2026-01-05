@@ -1,3 +1,4 @@
+#![allow(unused_assignments)]
 use crate::asn1::constants::encryption_types::EncryptionType;
 use crate::asn1::constants::PrincipalNameType;
 use crate::error::KrbError;
