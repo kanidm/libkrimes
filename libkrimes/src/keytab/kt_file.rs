@@ -26,9 +26,9 @@ struct Data {
 
 #[binwrite]
 #[brw(big)]
+#[derive(Clone, PartialEq, Eq)]
 #[binread]
 #[br(import { version: u8 })]
-#[derive(Clone, PartialEq, Eq)]
 struct Principal {
     #[br(temp)]
     #[bw(try_calc(u16::try_from(components.len())))]
@@ -190,11 +190,12 @@ impl TryFrom<&Principal> for Name {
         }
     }
 }
-#[binread]
+
 #[binwrite]
 #[brw(big)]
-#[br(import { version: u8, rlen: i32 })]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[binread]
+#[br(import { version: u8, rlen: i32 })]
 enum RecordData {
     #[br(pre_assert(rlen > 0))]
     Entry {
@@ -296,11 +297,11 @@ fn write_rdata(rdata: &RecordData) -> binrw::BinResult<()> {
     Ok(())
 }
 
-#[binread]
 #[binwrite]
 #[brw(big)]
-#[br(import { version: u8 })]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[binread]
+#[br(import { version: u8 })]
 struct Record {
     #[br(temp)]
     #[bw(if (matches!(rdata, RecordData::Entry { .. })), calc = 0)]
