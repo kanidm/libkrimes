@@ -5,14 +5,11 @@ use crate::keytab::{Keytab, KeytabEntry};
 use crate::proto::{DerivedKey, Name};
 use binrw::helpers::until_eof;
 use binrw::io::{SeekFrom, TakeSeekExt};
-//use binrw::io::{Seek, SeekFrom, Write};
 use binrw::BinReaderExt;
 use binrw::{binread, binwrite, BinWrite};
-//use std::env;
+use std::fmt;
 use std::fs::File;
 use std::io::Read;
-//use std::path::PathBuf;
-use std::fmt;
 use tracing::error;
 
 #[binwrite]
