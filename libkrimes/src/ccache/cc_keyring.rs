@@ -551,7 +551,7 @@ fn get_collection(anchor: &str, collection: &str) -> Result<Keyring, KrbError> {
                 }
             };
             // This check must be performed because new keys will be owned by the effective uid
-            let euid = users::get_effective_uid();
+            let euid = uzers::get_effective_uid();
             if uid != euid {
                 error!(
                     ?uid,
