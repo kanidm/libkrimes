@@ -9,6 +9,8 @@ license = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 
+description = "A pure rust, minimal kerberos library"
+
 [features]
 keyring = ["dep:keyutils", "dep:keyutils-raw"]
 
