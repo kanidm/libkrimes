@@ -12,7 +12,7 @@ homepage = "https://github.com/Firstyear/libkrimes"
 repository = "https://github.com/Firstyear/libkrimes"
 
 [workspace.dependencies]
-libkrimes = { path = "./libkrimes" }
+libkrimes = { path = "./libkrimes", version = "=0.1.0" }
 
 aes = "0.8.4"
 assert_hex = "0.4.1"
