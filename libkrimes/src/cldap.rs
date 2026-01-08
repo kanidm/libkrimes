@@ -123,9 +123,13 @@ impl CldapConfigBuilder {
     fn get_domainname(&self) -> Result<Option<String>, CldapConfigError> {
         let mut buf: Vec<u8> = Vec::with_capacity(256);
         let ptr = buf.as_mut_ptr().cast();
-        let len = buf.capacity() as libc::size_t;
+        let len = buf.capacity();
 
-        let res = unsafe { libc::getdomainname(ptr, len) };
+        #[cfg(target_os = "macos")]
+        let res = unsafe { libc::getdomainname(ptr, len as libc::c_int) };
+        #[cfg(target_os = "linux")]
+        let res = unsafe { libc::getdomainname(ptr, len as libc::size_t) };
+
         if res == -1 {
             let res = errno::errno();
             let code = res.0;
