@@ -7,6 +7,7 @@ use binrw::io::TakeSeekExt;
 use binrw::BinReaderExt;
 use binrw::BinWrite;
 use binrw::{binread, binwrite};
+use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::fs::Permissions;
@@ -29,9 +30,26 @@ struct HeaderField {
     value: Vec<u8>,
 }
 
+impl fmt::Display for HeaderField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.tag {
+            1 => {
+                let seconds: [u8; 4] = self.value[0..4].try_into().map_err(|_| fmt::Error)?;
+                let seconds = u32::from_be_bytes(seconds);
+                let microseconds: [u8; 4] = self.value[4..8].try_into().map_err(|_| fmt::Error)?;
+                let microseconds = u32::from_be_bytes(microseconds);
+                let duration = Duration::new(seconds as u64, microseconds * 1000);
+                write!(f, "KDC time offset: {:?}", duration)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 #[binwrite]
 #[bw(big)]
 #[binread]
+#[derive(Debug)]
 struct FileCredentialCacheHeader {
     #[bw(calc = fields.iter().map(|x| (x.value.len() + 4) as u16).sum::<u16>())]
     length: u16,
@@ -43,6 +61,7 @@ struct FileCredentialCacheHeader {
 #[bw(big, magic = 4u8)]
 #[binread]
 #[br(magic = 4u8)]
+#[derive(Debug)]
 pub(super) struct FileCredentialCacheV4 {
     header: FileCredentialCacheHeader,
     principal: Principal,
@@ -50,10 +69,35 @@ pub(super) struct FileCredentialCacheV4 {
     credentials: Vec<Credential>,
 }
 
+impl fmt::Display for FileCredentialCacheV4 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Header fields:")?;
+        for (i, field) in self.header.fields.iter().enumerate() {
+            writeln!(f, "[{}] {}", i, field)?;
+        }
+        writeln!(f)?;
+
+        writeln!(f, "Default principal: {}", self.principal)?;
+        writeln!(f)?;
+
+        for (i, cred) in self.credentials.iter().enumerate() {
+            match cred {
+                Credential::V4(v4) => {
+                    writeln!(f, "Credential [{}]:", i)?;
+                    v4.fmt(f)?;
+                }
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
+
 #[binwrite]
 #[bw(big, magic = 5u8)]
 #[binread]
 #[br(magic = 5u8)]
+#[derive(Debug)]
 pub(super) enum FileCredentialCache {
     V4(FileCredentialCacheV4),
 }
@@ -66,6 +110,14 @@ impl FileCredentialCache {
             KrbError::BinRWError
         })?;
         Ok(ccache)
+    }
+}
+
+impl fmt::Display for FileCredentialCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FileCredentialCache::V4(v4) => write!(f, "{v4}"),
+        }
     }
 }
 
@@ -198,6 +250,27 @@ impl CredentialCache for FileCredentialCacheContext {
             error!(?binrw_err, "Unable to write binary data.");
             KrbError::BinRWError
         })?;
+        Ok(())
+    }
+
+    fn dump(&mut self) -> Result<(), KrbError> {
+        let f = File::open(&self.path).map_err(|io_err| {
+            error!(?io_err, "Unable to open file at {:#?}", &self.path);
+            KrbError::IoError
+        })?;
+
+        let mut reader = BufReader::new(f);
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).map_err(|e| {
+            error!(?self.path, ?e, "Failed to read credential cache");
+            KrbError::IoError
+        })?;
+
+        let ccache = FileCredentialCache::read(&buffer)?;
+        trace!(?ccache, "Credential cache successfully loaded");
+
+        println!("{ccache}");
+
         Ok(())
     }
 }

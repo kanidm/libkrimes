@@ -50,6 +50,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 uzers = { workspace = true }
+chrono = "0.4.41"
 
 [dev-dependencies]
 base64 = { workspace = true }
