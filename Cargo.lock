@@ -654,6 +654,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "libkrimes",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

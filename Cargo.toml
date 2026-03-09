@@ -57,3 +57,4 @@ toml = { version = "^0.9.2" }
 uuid = { version = "1.17.0", features = ["serde", "v4"] }
 uzers = "0.12.1"
 which = "8.0.0"
+chrono = { version = "0.4.44" }
