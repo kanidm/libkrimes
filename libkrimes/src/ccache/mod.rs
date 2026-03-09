@@ -308,6 +308,25 @@ impl TryInto<Name> for PrincipalV4 {
                 };
                 Ok(n)
             }
+            PrincipalNameType::NtSrvHst => {
+                let n: Name = Name::SrvHst {
+                    service: self
+                        .components
+                        .first()
+                        .ok_or(KrbError::NameNotPrincipal)
+                        .map(|x| String::from_utf8_lossy(x.value.as_slice()).to_string())?,
+                    host: self
+                        .components
+                        .get(1..)
+                        .ok_or(KrbError::NameNotServiceHost)?
+                        .iter()
+                        .map(|x| String::from_utf8_lossy(x.value.as_slice()).to_string())
+                        .collect::<Vec<String>>()
+                        .join("/"),
+                    realm: String::from_utf8_lossy(self.realm.value.as_slice()).to_string(),
+                };
+                Ok(n)
+            }
             _ => Err(KrbError::PrincipalNameInvalidType),
         }
     }
