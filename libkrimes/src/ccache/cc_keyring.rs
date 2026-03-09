@@ -154,13 +154,29 @@ struct PrimaryName {
 }
 
 #[binwrite]
-#[bw(big, magic = 1u8)]
+#[bw(big)]
 #[binread]
-#[br(magic = 1u8)]
 #[derive(Debug)]
 struct TimeOffsets {
     secs: i32,
     usecs: i32,
+}
+
+fn get_subsidiary_time_offsets(keyring: &Keyring) -> Result<Option<TimeOffsets>, KrbError> {
+    let key_name = "__krb5_time_offsets__";
+    match keyring.search_for_key::<User, &str, Option<&mut Keyring>>(key_name, None) {
+        Ok(k) => {
+            let payload = k.read()?;
+            let mut reader = binrw::io::Cursor::new(payload);
+            let offsets: TimeOffsets = reader.read_type(binrw::Endian::Big).map_err(|err| {
+                error!(error=?err);
+                KrbError::BinRWError
+            })?;
+            Ok(Some(offsets))
+        }
+        Err(errno::Errno(libc::ENOKEY)) => Ok(None),
+        Err(e) => Err(KrbError::from(e)),
+    }
 }
 
 /// Gets the subsidiary's principal name
@@ -518,6 +534,47 @@ impl CredentialCache for KeyringCredentialCacheContext {
             subsidiary,
         )?;
 
+        Ok(())
+    }
+
+    fn dump(&mut self) -> Result<(), KrbError> {
+        let subsidiary_name = get_subsidiary_cache_name(&self.residual);
+
+        let Some(subsidiary) = subsidiary_exists(&self.collection, &subsidiary_name)? else {
+            error!("Credential cache not initialized");
+            return Err(KrbError::CredentialCacheError);
+        };
+
+        let time_offsets = get_subsidiary_time_offsets(&subsidiary)?;
+        println!("KDC time offset: {:?}", time_offsets);
+
+        let stored_name = get_subsidiary_principal(&subsidiary)?;
+        println!("Default principal: {:?}", stored_name);
+
+        let (keys, _) = subsidiary.read().map_err(|e| {
+            error!(?e, "Failed to read subsidiary");
+            KrbError::CredentialCacheError
+        })?;
+
+        for (i, k) in keys.iter().enumerate() {
+            let Ok(desc) = k.description() else {
+                continue;
+            };
+
+            if desc.description == "__krb5_time_offsets__" || desc.description == "__krb5_princ__" {
+                continue;
+            }
+
+            let payload = k.read()?;
+            let mut reader = binrw::io::Cursor::new(payload);
+            let v4: CredentialV4 = reader.read_type(binrw::Endian::Big).map_err(|err| {
+                error!(error=?err);
+                KrbError::BinRWError
+            })?;
+
+            println!("Credential [{i}]:");
+            println!("{}", v4);
+        }
         Ok(())
     }
 }
