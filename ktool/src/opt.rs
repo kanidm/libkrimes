@@ -10,4 +10,6 @@ pub(crate) struct CcacheCommonOpt {
 pub(crate) struct CcacheDumpOpt {
     #[clap(flatten)]
     pub(crate) common: CcacheCommonOpt,
+    #[arg(short, long, help = "Dump all credential caches in the collection")]
+    pub(crate) all: bool,
 }
