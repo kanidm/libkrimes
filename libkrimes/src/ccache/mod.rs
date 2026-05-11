@@ -20,6 +20,8 @@ use der::asn1::OctetString;
 use der::Encode;
 use std::env;
 use std::fmt;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -532,6 +534,20 @@ pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, Kr
     if ccache_name.starts_with("KEYRING:") {
         return cc_keyring::resolve(ccache_name.as_str());
     }
+
+    debug!(?ccache_name, "Unsupported credential cache type");
+    Err(KrbError::UnsupportedCredentialCacheType)
+}
+
+pub trait CredentialCacheCollection: Deref + DerefMut {
+    fn primary(&mut self) -> Result<String, KrbError>;
+}
+
+pub fn resolve_collection(
+    ccache_name: Option<&str>,
+) -> Result<Box<dyn CredentialCacheCollection<Target = Vec<Box<dyn CredentialCache>>>>, KrbError> {
+    let ccache_name = parse_ccache_name(ccache_name);
+    trace!(?ccache_name, "Resolving collection");
 
     debug!(?ccache_name, "Unsupported credential cache type");
     Err(KrbError::UnsupportedCredentialCacheType)
