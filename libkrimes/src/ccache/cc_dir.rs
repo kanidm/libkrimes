@@ -1,12 +1,107 @@
 use super::CredentialCache;
+use super::CredentialCacheCollection;
 use crate::ccache::cc_file::FileCredentialCacheContext;
 use crate::error::KrbError;
 use std::fs::{DirBuilder, File, Permissions};
 use std::io::{Read, Write};
+use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tracing::{error, trace};
+use walkdir::WalkDir;
+
+struct DirCredentialCacheCollection {
+    pub path: PathBuf,
+    subsidiaries: Vec<Box<dyn CredentialCache>>,
+}
+
+impl CredentialCacheCollection for DirCredentialCacheCollection {
+    fn primary(&mut self) -> Result<String, KrbError> {
+        let primary = self.path.join("primary");
+        let primary_name = match primary.exists() {
+            true => {
+                let mut f = File::open(&primary).map_err(|e| {
+                    error!(?primary, ?e, "Failed to open file");
+                    KrbError::IoError
+                })?;
+                let mut buffer = String::new();
+                f.read_to_string(&mut buffer).map_err(|e| {
+                    error!(?primary, ?e, "Filed to read file");
+                    KrbError::IoError
+                })?;
+                Some(self.path.join(buffer.trim()))
+            }
+            false => None,
+        };
+
+        match primary_name {
+            Some(p) => Ok(p.to_string_lossy().to_string()),
+            None => {
+                error!("Failed to read primary credential cache name");
+                Err(KrbError::CredentialCacheError)
+            }
+        }
+    }
+}
+
+impl Deref for DirCredentialCacheCollection {
+    type Target = Vec<Box<dyn CredentialCache>>;
+    fn deref(&self) -> &Self::Target {
+        &self.subsidiaries
+    }
+}
+impl DerefMut for DirCredentialCacheCollection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.subsidiaries
+    }
+}
+
+pub(super) fn resolve_collection<P: AsRef<Path>>(
+    path: P,
+) -> Result<Box<dyn CredentialCacheCollection<Target = Vec<Box<dyn CredentialCache>>>>, KrbError> {
+    let path = path.as_ref();
+    trace!(?path, "Loading credential cache collection");
+
+    let mut col = DirCredentialCacheCollection {
+        path: PathBuf::from(path),
+        subsidiaries: vec![],
+    };
+
+    if !col.path.is_dir() {
+        error!(?path, "Not a directory");
+        return Err(KrbError::CredentialCacheError);
+    }
+
+    for entry in WalkDir::new(path)
+        .into_iter()
+        .filter_map(|dir_ent| {
+            dir_ent
+                .map_err(|err| {
+                    error!(?err, "Failed to read directory entry");
+                    KrbError::IoError
+                })
+                .and_then(|dir_ent| {
+                    dir_ent
+                        .metadata()
+                        .map_err(|err| {
+                            error!(?err, "Failed to read directory entry metadata");
+                            KrbError::IoError
+                        })
+                        .map(|dir_ent_meta| (dir_ent, dir_ent_meta))
+                })
+                .ok()
+        })
+        .filter(|a| a.1.is_file() && a.0.file_name() != "primary")
+    {
+        let path = entry.0.path().to_string_lossy();
+        let path = format!("FILE:{}", path);
+        if let Ok(c) = super::resolve(Some(&path)) {
+            col.deref_mut().push(c);
+        }
+    }
+    Ok(Box::new(col))
+}
 
 fn create_ccache_dir(ccache_dir: &PathBuf) -> Result<(), KrbError> {
     trace!(?ccache_dir, "Check collection path");

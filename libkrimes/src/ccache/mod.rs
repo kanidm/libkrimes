@@ -22,6 +22,7 @@ use std::env;
 use std::fmt;
 use std::ops::Deref;
 use std::ops::DerefMut;
+use std::path::Path;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -548,6 +549,12 @@ pub fn resolve_collection(
 ) -> Result<Box<dyn CredentialCacheCollection<Target = Vec<Box<dyn CredentialCache>>>>, KrbError> {
     let ccache_name = parse_ccache_name(ccache_name);
     trace!(?ccache_name, "Resolving collection");
+
+    if ccache_name.starts_with("DIR:") {
+        let path = ccache_name.strip_prefix("DIR:").unwrap_or(&ccache_name);
+        let path = Path::new(path);
+        return cc_dir::resolve_collection(path);
+    }
 
     debug!(?ccache_name, "Unsupported credential cache type");
     Err(KrbError::UnsupportedCredentialCacheType)
