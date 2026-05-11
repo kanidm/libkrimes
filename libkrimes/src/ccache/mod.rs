@@ -9,16 +9,20 @@ use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
 use crate::asn1::tagged_ticket::TaggedTicket as Asn1TaggedTicket;
 use crate::asn1::tagged_ticket::Ticket as Asn1Ticket;
+use crate::asn1::ticket_flags::TicketFlags;
 use crate::error::KrbError;
 use crate::proto::KerberosCredentials;
 use crate::proto::{EncTicket, EncryptedData, KdcReplyPart, Name, SessionKey};
 use binrw::{binread, binwrite};
+use chrono::prelude::DateTime;
+use chrono::Utc;
 use der::asn1::OctetString;
 use der::Encode;
 use std::env;
 use std::fmt;
 use std::time::Duration;
 use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tracing::{debug, error, trace};
 use uzers::get_current_uid;
 
@@ -240,6 +244,42 @@ impl fmt::Display for CredentialV4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Client: {}", self.client)?;
         writeln!(f, "Server: {}", self.server)?;
+        writeln!(f, "Key: {}", self.keyblock)?;
+
+        let d = UNIX_EPOCH + Duration::from_secs(self.authtime.into());
+        let d = DateTime::<Utc>::from(d);
+        writeln!(f, "Authentication time: {}", d)?;
+
+        let d = UNIX_EPOCH + Duration::from_secs(self.starttime.into());
+        let d = DateTime::<Utc>::from(d);
+        writeln!(f, "Start time; {}", d)?;
+
+        let d = UNIX_EPOCH + Duration::from_secs(self.endtime.into());
+        let d = DateTime::<Utc>::from(d);
+        writeln!(f, "End time: {}", d)?;
+
+        let d = UNIX_EPOCH + Duration::from_secs(self.renew_till.into());
+        let d = DateTime::<Utc>::from(d);
+        writeln!(f, "Renew until: {}", d)?;
+
+        writeln!(f, "Is SKEY: {}", self.is_skey)?;
+
+        let t = TicketFlags::from_bits(self.ticket_flags);
+        writeln!(f, "Ticket flags: {}", t)?;
+
+        writeln!(f, "Addresses:")?;
+        for addr in &self.addresses.addresses {
+            writeln!(f, "  {}", addr)?;
+        }
+
+        writeln!(f, "Authorization data:")?;
+        for a in &self.authdata.auth_data {
+            writeln!(f, "  {}", a)?;
+        }
+
+        writeln!(f, "Ticket: {}", self.ticket)?;
+        writeln!(f, "Second Ticket: {}", self.second_ticket)?;
+
         Ok(())
     }
 }
