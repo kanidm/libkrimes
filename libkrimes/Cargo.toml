@@ -51,6 +51,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 uzers = { workspace = true }
 chrono = { workspace = true }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
