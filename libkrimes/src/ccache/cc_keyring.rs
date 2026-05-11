@@ -85,7 +85,7 @@ use keyutils::{Key, Keyring};
 use keyutils_raw::{keyctl_get_keyring_id, keyctl_get_persistent};
 use rand::{distr::Alphanumeric, Rng};
 use std::time::Duration;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 
 impl From<errno::Errno> for KrbError {
     fn from(value: errno::Errno) -> Self {
@@ -103,6 +103,8 @@ struct Residual {
 
 impl Residual {
     fn parse(residual: &str) -> Result<Self, KrbError> {
+        trace!(?residual, "Parsing residual");
+
         if !residual.starts_with("KEYRING:") {
             return Err(KrbError::UnsupportedCredentialCacheType);
         }
@@ -440,12 +442,12 @@ impl CredentialCache for KeyringCredentialCacheContext {
 
         // If subsidiary was not given set as primary
         if self.residual.subsidiary.is_none() {
-            debug!(?desc.description, "Set as primary subsidiary");
+            trace!(?desc.description, "Set as primary subsidiary");
             store_primary_subsidiary_name(desc.description.as_str(), &mut self.collection)?;
         }
 
         // Store the principal name within the subsidiary cache
-        debug!(
+        trace!(
             ?name,
             ?subsidiary,
             ?desc,
@@ -455,11 +457,11 @@ impl CredentialCache for KeyringCredentialCacheContext {
 
         // Store clockskew within subsidiary cache
         if let Some(cs) = clock_skew {
-            debug!(?cs, ?subsidiary, "Storing clock skew in subsidiary cache");
+            trace!(?cs, ?subsidiary, "Storing clock skew in subsidiary cache");
             store_clock_skew(cs, &mut subsidiary)?;
         };
 
-        debug!(?subsidiary, "Subsidiary cache initialized");
+        trace!(?subsidiary, "Subsidiary cache initialized");
         self.subsidiary = Some(subsidiary);
         Ok(())
     }
@@ -490,7 +492,7 @@ impl CredentialCache for KeyringCredentialCacheContext {
                 e.into()
             }),
             Err(errno::Errno(libc::ENOKEY)) => {
-                debug!(?subsidiary_name, "Subsidiary does not exist");
+                trace!(?subsidiary_name, "Subsidiary does not exist");
                 Ok(())
             }
             Err(e) => {
@@ -526,7 +528,7 @@ impl CredentialCache for KeyringCredentialCacheContext {
         })?;
 
         // Store the principal name within the subsidiary cache
-        debug!(?desc, "Storing credentials in subsidiary cache");
+        trace!(?desc, "Storing credentials in subsidiary cache");
         store_credential(
             &credentials.name,
             &credentials.ticket,
@@ -637,13 +639,11 @@ fn get_collection(anchor: &str, collection: &str) -> Result<Keyring, KrbError> {
 }
 
 pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
-    debug!(?ccache_name, "Parsing ccache name");
-
     let residual = Residual::parse(ccache_name)?;
     debug!(?residual, "Parsed residual");
 
     let collection = get_collection(residual.anchor.as_str(), residual.collection.as_str())?;
-    debug!(?collection, "Resolved collection");
+    trace!(?collection, "Resolved collection within anchor");
 
     let kcc = KeyringCredentialCacheContext {
         residual,
