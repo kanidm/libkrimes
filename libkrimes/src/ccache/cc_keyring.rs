@@ -84,6 +84,7 @@ use keyutils::SpecialKeyring;
 use keyutils::{Key, Keyring};
 use keyutils_raw::{keyctl_get_keyring_id, keyctl_get_persistent};
 use rand::{distr::Alphanumeric, Rng};
+use std::fmt::Display;
 use std::time::Duration;
 use tracing::{debug, error, trace};
 
@@ -99,6 +100,16 @@ struct Residual {
     anchor: String,
     collection: String,
     subsidiary: Option<String>,
+}
+
+impl Display for Residual {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.anchor, self.collection)?;
+        if let Some(subsidiary) = self.subsidiary.as_ref() {
+            write!(f, ":{}", subsidiary)?;
+        }
+        Ok(())
+    }
 }
 
 impl Residual {
@@ -430,6 +441,10 @@ pub(super) struct KeyringCredentialCacheContext {
 }
 
 impl CredentialCache for KeyringCredentialCacheContext {
+    fn name(&mut self) -> Result<String, KrbError> {
+        Ok(self.residual.to_string())
+    }
+
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
         // Pick a subsidiary within collection
         let mut subsidiary = get_subsidiary_cache(name, &mut self.collection, &self.residual)?;

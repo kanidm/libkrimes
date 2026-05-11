@@ -126,6 +126,10 @@ pub(super) struct FileCredentialCacheContext {
 }
 
 impl CredentialCache for FileCredentialCacheContext {
+    fn name(&mut self) -> Result<String, KrbError> {
+        Ok(self.path.to_string_lossy().to_string())
+    }
+
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
         let mut header = FileCredentialCacheHeader { fields: vec![] };
 
