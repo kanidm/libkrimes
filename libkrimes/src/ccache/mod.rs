@@ -556,6 +556,11 @@ pub fn resolve_collection(
         return cc_dir::resolve_collection(path);
     }
 
+    #[cfg(feature = "keyring")]
+    if ccache_name.starts_with("KEYRING:") {
+        return cc_keyring::resolve_collection(ccache_name.as_str());
+    }
+
     debug!(?ccache_name, "Unsupported credential cache type");
     Err(KrbError::UnsupportedCredentialCacheType)
 }
