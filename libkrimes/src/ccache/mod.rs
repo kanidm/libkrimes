@@ -10,6 +10,7 @@ use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
 use crate::asn1::tagged_ticket::TaggedTicket as Asn1TaggedTicket;
 use crate::asn1::tagged_ticket::Ticket as Asn1Ticket;
 use crate::asn1::ticket_flags::TicketFlags;
+use crate::client::conf::KerberosConfig;
 use crate::error::KrbError;
 use crate::proto::KerberosCredentials;
 use crate::proto::{EncTicket, EncryptedData, KdcReplyPart, Name, SessionKey};
@@ -498,17 +499,37 @@ impl TryFrom<&SessionKey> for KeyBlockV4 {
     }
 }
 
-fn parse_ccache_name(ccache: Option<&str>) -> String {
+#[cfg(feature = "keyring")]
+fn default_ccache_name() -> String {
+    "KEYRING:persistent:%{uid}".to_string()
+}
+
+#[cfg(not(feature = "keyring"))]
+fn default_ccache_name() -> String {
+    "FILE:/tmp/krb5cc_%{uid}".to_string()
+}
+
+fn parse_ccache_name(ccache: Option<&str>) -> Result<String, KrbError> {
     let uid = get_current_uid().to_string();
 
-    match ccache {
+    let ccache_name = match ccache {
         Some(c) => c.to_string(),
         None => match env::var("KRB5CCNAME") {
             Ok(val) => val,
-            _ => "FILE:/tmp/krb5cc_%{uid}".to_string(),
+            _ => {
+                let config = KerberosConfig::from_defaults().map_err(|e| {
+                    error!("Failed to read config: {:?}", e);
+                    KrbError::ConfigError(e)
+                })?;
+                match config.libdefaults("default_ccache_name") {
+                    Some(v) => v,
+                    _ => default_ccache_name(),
+                }
+            }
         },
     }
-    .replace("%{uid}", uid.as_str())
+    .replace("%{uid}", uid.as_str());
+    Ok(ccache_name)
 }
 
 pub trait CredentialCache {
@@ -520,7 +541,7 @@ pub trait CredentialCache {
 }
 
 pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, KrbError> {
-    let ccache_name = parse_ccache_name(ccache_name);
+    let ccache_name = parse_ccache_name(ccache_name)?;
     trace!(?ccache_name, "Resolving credential cache");
 
     if ccache_name.starts_with("FILE:") {
@@ -547,7 +568,7 @@ pub trait CredentialCacheCollection: Deref + DerefMut {
 pub fn resolve_collection(
     ccache_name: Option<&str>,
 ) -> Result<Box<dyn CredentialCacheCollection<Target = Vec<Box<dyn CredentialCache>>>>, KrbError> {
-    let ccache_name = parse_ccache_name(ccache_name);
+    let ccache_name = parse_ccache_name(ccache_name)?;
     trace!(?ccache_name, "Resolving collection");
 
     if ccache_name.starts_with("DIR:") {

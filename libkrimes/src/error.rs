@@ -1,3 +1,5 @@
+use crate::client::conf::KerberosConfigError;
+
 #[derive(Debug)]
 pub enum KrbError {
     // =========================================================================================
@@ -88,4 +90,6 @@ pub enum KrbError {
 
     /// No really, do you have a time machine? How did you go back to before 1970?
     DoYouHaveATimeMachine,
+
+    ConfigError(KerberosConfigError),
 }
