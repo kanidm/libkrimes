@@ -20,6 +20,7 @@ mod asn1;
 pub mod ccache;
 pub(crate) mod cksum;
 pub mod cldap;
+pub mod client;
 pub(crate) mod constants;
 pub(crate) mod crypto;
 pub mod error;

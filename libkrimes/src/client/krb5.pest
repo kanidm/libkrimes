@@ -1,0 +1,23 @@
+WHITESPACE = _{ " " | "\t" }
+
+comment = _{ ("#" | ";") ~ (!NEWLINE ~ ANY)* }
+final_mark = { "*" }
+
+section = { "[" ~ section_name ~ "]" ~ final_mark? ~  NEWLINE+ ~ (NEWLINE* ~ (comment | relation) ~ NEWLINE*)* }
+relation = { tag ~ final_mark? ~ "=" ~ (value | subsection) }
+
+section_name = @{ (ASCII_ALPHANUMERIC | "_")+ }
+tag = @{ (ASCII_ALPHANUMERIC | "_" | ".")+ }
+value = @{ (!(NEWLINE | "{") ~ ANY) ~ (!NEWLINE ~ ANY)+ }
+subsection = { "{" ~ NEWLINE+ ~ (NEWLINE* ~(comment | relation) ~ NEWLINE*)* ~ "}" ~ final_mark? }
+
+include_path = @{ "\""? ~ (!NEWLINE ~ ANY)+ ~ "\""? }
+include_file = { "include" ~ include_path }
+include_dir = { "includedir" ~ include_path }
+
+// Order matters, first include_dir then include_file
+file = {
+    SOI ~
+    (NEWLINE* ~ (include_dir | include_file | comment | section) ~ NEWLINE*)* ~
+    EOI
+}
