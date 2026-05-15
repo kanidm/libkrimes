@@ -13,3 +13,11 @@ pub(crate) struct CcacheDumpOpt {
     #[arg(short, long, help = "Dump all credential caches in the collection")]
     pub(crate) all: bool,
 }
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct ConfigCheckOpt {
+    #[clap(short, long)]
+    pub(crate) path: Option<String>,
+    #[clap(long, help = "Pretty print the parsing result")]
+    pub(crate) pretty: bool,
+}

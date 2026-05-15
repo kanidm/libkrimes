@@ -6,7 +6,7 @@ members = ["libkrimes", "kdc", "ktool"]
 version = "0.1.0"
 edition = "2021"
 authors = ["William Brown <william@blackhats.net.au>"]
-rust-version = "1.81"
+rust-version = "1.83"
 license = "MPL-2.0"
 homepage = "https://github.com/Firstyear/libkrimes"
 repository = "https://github.com/Firstyear/libkrimes"
@@ -37,6 +37,8 @@ ldap3_proto = { version = "0.7.1" }
 num_enum = { version = "^0.7.3" }
 md5 = "0.8.0"
 pbkdf2 = "0.12.2"
+pest = "^2.8.6"
+pest_derive = "^2.8.6"
 rand = "0.9.4"
 serde = { version = "^1.0.204", features = ["derive"] }
 serde-binary = { version = "0.5.0" }
