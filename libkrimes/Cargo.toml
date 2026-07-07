@@ -46,7 +46,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde-binary = { workspace = true }
 sha1 = { workspace = true }
-tokio = { workspace = true, default-features = false, features = ["net"] }
+tokio = { workspace = true, features = ["net"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

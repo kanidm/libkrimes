@@ -229,6 +229,7 @@ impl KerberosReplyTicketRenewBuilder {
             ticket,
         }
     }
+
     pub fn build(self, primary_key: &KdcPrimaryKey) -> Result<KerberosReply, KrbError> {
         let (cname, crealm) = (&self.ticket.client_name).try_into()?;
         let (server_name, server_realm) = (&self.service_name).try_into()?;
