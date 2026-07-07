@@ -46,12 +46,14 @@ sha1 = "0.10.6"
 tempfile = "3.19.1"
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
-tokio = { version = "1", features = [
-  "macros",
-  "rt",
-  "net",
-  "io-util",
-  "signal",
+tokio = { version = "1",
+    default-features = false,
+    features = [
+      "macros",
+      "rt",
+      "net",
+      "io-util",
+      "signal",
 ] }
 tokio-util = { version = "^0.7.1", features = ["codec", "net"] }
 tokio-stream = { version = "0.1.17" }
