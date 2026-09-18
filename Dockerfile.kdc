@@ -2,7 +2,7 @@ FROM opensuse/leap:15.6 AS ref_repo
 
 RUN zypper --non-interactive mr -e -a &&\
     zypper --non-interactive --gpg-auto-import-keys ref --force && \
-    zypper --non-interactive in git-core vim tcpdump iputils iproute2 libopenssl-3-devel openldap2-devel \
+    zypper --non-interactive in git-core vim tcpdump iputils iproute2 libopenssl-3-devel openldap2_5-devel \
     flex bison autoconf gettext-tools libtool make gcc awk gcc-c++ python3 strace gdb
 
 RUN pushd /root/ && git clone https://github.com/krb5/krb5.git && popd
@@ -31,8 +31,6 @@ RUN pushd /root/krb5/src && autoreconf -fi && ./configure \
     --with-crypto-impl=openssl \
     --without-lmdb \
     --with-ldap \
-    --with-pam \
-    --without-selinux \
     --disable-rpath \
     --disable-static \
     --enable-shared \
