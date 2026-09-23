@@ -596,6 +596,17 @@ impl CredentialCache for KeyringCredentialCacheContext {
         }
         Ok(())
     }
+
+    fn principal(&self) -> Result<Name, KrbError> {
+        let subsidiary_name = get_subsidiary_cache_name(&self.residual);
+
+        let Some(subsidiary) = subsidiary_exists(&self.collection, &subsidiary_name)? else {
+            error!("Credential cache not initialized");
+            return Err(KrbError::CredentialCacheError);
+        };
+
+        get_subsidiary_principal(&subsidiary)?.ok_or(KrbError::CredentialCacheNotFound)
+    }
 }
 
 fn get_or_create_keyring(parent: &mut Keyring, name: &str) -> Result<Keyring, Errno> {

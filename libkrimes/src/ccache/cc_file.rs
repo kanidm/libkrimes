@@ -280,6 +280,15 @@ impl CredentialCache for FileCredentialCacheContext {
 
         Ok(())
     }
+
+    fn principal(&self) -> Result<Name, KrbError> {
+        let ccache = FileCredentialCache::load(&self.path)?;
+        match &ccache {
+            FileCredentialCache::V4(v4) => match &v4.principal {
+                Principal::V4(pv4) => pv4.try_into(),
+            },
+        }
+    }
 }
 
 pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
