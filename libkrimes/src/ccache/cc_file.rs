@@ -111,6 +111,22 @@ impl FileCredentialCache {
         })?;
         Ok(ccache)
     }
+
+    pub fn load(path: &PathBuf) -> Result<Self, KrbError> {
+        let f = File::open(path).map_err(|io_err| {
+            error!(?io_err, "Unable to open file at {:#?}", path);
+            KrbError::IoError
+        })?;
+
+        let mut reader = BufReader::new(f);
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).map_err(|e| {
+            error!(?path, ?e, "Failed to read credential cache");
+            KrbError::IoError
+        })?;
+
+        FileCredentialCache::read(&buffer)
+    }
 }
 
 impl fmt::Display for FileCredentialCache {
@@ -258,20 +274,7 @@ impl CredentialCache for FileCredentialCacheContext {
     }
 
     fn dump(&mut self) -> Result<(), KrbError> {
-        let f = File::open(&self.path).map_err(|io_err| {
-            error!(?io_err, "Unable to open file at {:#?}", &self.path);
-            KrbError::IoError
-        })?;
-
-        let mut reader = BufReader::new(f);
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).map_err(|e| {
-            error!(?self.path, ?e, "Failed to read credential cache");
-            KrbError::IoError
-        })?;
-
-        let ccache = FileCredentialCache::read(&buffer)?;
-        trace!(?ccache, "Credential cache successfully loaded");
+        let ccache = FileCredentialCache::load(&self.path)?;
 
         println!("{ccache}");
 
