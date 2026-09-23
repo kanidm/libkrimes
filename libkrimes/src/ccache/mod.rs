@@ -536,6 +536,7 @@ pub trait CredentialCache {
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError>;
     fn destroy(&mut self) -> Result<(), KrbError>;
     fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError>;
+    fn principal(&self) -> Result<Name, KrbError>;
     fn dump(&mut self) -> Result<(), KrbError>;
 }
 
