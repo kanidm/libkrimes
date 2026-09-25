@@ -12,6 +12,7 @@ use crate::proto::{
     Ticket, TicketFlags,
 };
 use crypto_glue::der::{asn1::OctetString, Encode};
+use tracing::trace;
 
 #[derive(Debug)]
 pub struct TicketGrantReply {
@@ -273,6 +274,8 @@ impl KerberosReplyTicketRenewBuilder {
             encrypted_pa_data: None,
         };
 
+        trace!(?enc_kdc_rep_part);
+
         let enc_part = if let Some(sub_session_key) = self.sub_session_key {
             sub_session_key.encrypt_tgs_rep_part(enc_kdc_rep_part, true)?
         } else {
@@ -289,8 +292,7 @@ impl KerberosReplyTicketRenewBuilder {
             contents: OctetString::new(*b"").map_err(|_| KrbError::DerEncodeOctetString)?,
         };
 
-        // EncTicketPart
-        // Encrypted to the key of the service
+        // Encrypted to the key of the kdc
         let ticket_inner = EncTicketPart {
             flags: self.ticket.flags,
             key: session_key,
@@ -304,6 +306,8 @@ impl KerberosReplyTicketRenewBuilder {
             client_addresses: None,
             authorization_data,
         };
+
+        trace!(?ticket_inner);
 
         let ticket_enc_part = primary_key.encrypt_tgs(ticket_inner)?;
 

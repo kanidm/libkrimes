@@ -271,7 +271,8 @@ async fn process_ticket_renewal(
     ) {
         Ok(time_bounds) => time_bounds,
         Err(time_bound_error) => {
-            return Err(time_bound_error.to_kerberos_reply(&service_name, stime))
+            error!(?time_bound_error);
+            return Err(time_bound_error.to_kerberos_reply(&service_name, stime));
         }
     };
 
