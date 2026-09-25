@@ -15,8 +15,6 @@ COPY . /usr/src/libkrimes
 
 WORKDIR /usr/src/libkrimes
 
-RUN cargo build --release
-
 RUN --mount=type=cache,id=cargo,target=/cargo \
     export CARGO_HOME=/cargo && \
     cargo build \

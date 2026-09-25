@@ -8,6 +8,7 @@ use crate::proto::{
     TicketFlags,
 };
 use std::time::SystemTime;
+use tracing::trace;
 
 #[derive(Debug)]
 pub struct AuthenticationReply {
@@ -109,6 +110,8 @@ impl AuthenticationReplyBuilder {
             client_addresses: None,
             encrypted_pa_data: None,
         };
+
+        trace!(?enc_kdc_rep_part);
 
         let (etype_info2, enc_part) = user_key.encrypt_as_rep_part(enc_kdc_rep_part)?;
 
