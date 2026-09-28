@@ -83,8 +83,7 @@ use binrw::{BinReaderExt, BinWrite};
 use crypto_glue::rand::{self, distr::Alphanumeric, RngExt};
 use errno::Errno;
 use keyutils::keytypes::user::User;
-use keyutils::SpecialKeyring;
-use keyutils::{Key, Keyring};
+use keyutils::{Keyring, SpecialKeyring};
 use keyutils_raw::{keyctl_get_keyring_id, keyctl_get_persistent};
 use std::fmt::Display;
 use std::time::Duration;
@@ -216,16 +215,6 @@ fn get_subsidiary_principal(keyring: &Keyring) -> Result<Option<Name>, KrbError>
     }
 }
 
-fn get_subsidiary(residual: &Residual) -> Result<Keyring, KrbError> {
-    match &residual.subsidiary {
-        Some(name) => {
-            let mut collection = get_collection(residual)?;
-            get_or_create_keyring(&mut collection, name).map_err(|e| e.into())
-        }
-        None => Err(KrbError::CredentialCacheNotFound),
-    }
-}
-
 fn get_primary_subsidiary_name(collection: &mut Keyring) -> Result<Option<String>, KrbError> {
     let primary_name: &str = "krb_ccache:primary";
     match collection.search_for_key::<User, &str, Option<&mut Keyring>>(primary_name, None) {
@@ -244,7 +233,7 @@ fn get_primary_subsidiary_name(collection: &mut Keyring) -> Result<Option<String
     }
 }
 
-fn store_clock_skew(clock_skew: Duration, keyring: &mut Keyring) -> Result<Option<Key>, KrbError> {
+fn store_clock_skew(keyring: &mut Keyring, clock_skew: Duration) -> Result<(), KrbError> {
     let key_name = "__krb5_time_offsets__";
     let offsets = TimeOffsets {
         secs: clock_skew.as_secs() as i32,
@@ -252,45 +241,31 @@ fn store_clock_skew(clock_skew: Duration, keyring: &mut Keyring) -> Result<Optio
     };
     let mut c = std::io::Cursor::new(Vec::new());
     offsets.write(&mut c).map_err(|err| {
-        error!(?keyring, ?offsets, ?err, "Failed to store clock skew");
+        error!(?offsets, ?err, "Failed to store clock skew");
         KrbError::BinRWError
     })?;
     let vec = c.into_inner();
-    let key = keyring.add_key::<User, &str, &[u8]>(key_name, vec.as_slice())?;
-    Ok(Some(key))
+    keyring.add_key::<User, &str, &[u8]>(key_name, vec.as_slice())?;
+    Ok(())
 }
 
-fn store_principal(name: &Name, subsidiary: &mut Keyring) -> Result<(), KrbError> {
-    match get_subsidiary_principal(subsidiary)? {
-        Some(stored) => {
-            if &stored == name {
-                Ok(())
-            } else {
-                error!(?subsidiary, ?stored, ?name, "Stored principal do not match");
-                Err(KrbError::CredentialCacheError)
-            }
-        }
-        None => {
-            let key_name = "__krb5_princ__";
-            let princ: PrincipalV4 = name.try_into()?;
-            let mut c = std::io::Cursor::new(Vec::new());
-            princ.write(&mut c).map_err(|err| {
-                error!(?subsidiary, ?name, ?err, "Failed to store principal");
-                KrbError::BinRWError
-            })?;
-            let vec = c.into_inner();
-            subsidiary
-                .add_key::<User, &str, &[u8]>(key_name, vec.as_slice())
-                .map_err(KrbError::from)?;
-            Ok(())
-        }
-    }
+fn store_principal(keyring: &mut Keyring, name: &Name) -> Result<(), KrbError> {
+    let key_name = "__krb5_princ__";
+    let princ: PrincipalV4 = name.try_into()?;
+    let mut c = std::io::Cursor::new(Vec::new());
+    princ.write(&mut c).map_err(|err| {
+        error!(?keyring, ?name, ?err, "Failed to store principal");
+        KrbError::BinRWError
+    })?;
+    let vec = c.into_inner();
+    keyring.add_key::<User, &str, &[u8]>(key_name, vec.as_slice())?;
+    Ok(())
 }
 
 fn store_primary_subsidiary_name(
+    keyring: &mut Keyring,
     subsidiary_name: &str,
-    collection: &mut Keyring,
-) -> Result<String, KrbError> {
+) -> Result<(), KrbError> {
     let key_name: &str = "krb_ccache:primary";
     let pn: PrimaryName = PrimaryName {
         strval: subsidiary_name.as_bytes().to_vec(),
@@ -298,156 +273,21 @@ fn store_primary_subsidiary_name(
     let mut c = std::io::Cursor::new(Vec::new());
     pn.write(&mut c).map_err(|err| {
         error!(
+            ?keyring,
             ?subsidiary_name,
-            ?collection,
             ?err,
             "Failed to store primary subsidiary name"
         );
         KrbError::BinRWError
     })?;
     let vec = c.into_inner();
-    collection
+    keyring
         .add_key::<User, &str, &[u8]>(key_name, vec.as_slice())
         .map_err(|e| {
             error!(?e, "Failed to add key");
             KrbError::from(e)
         })?;
-    Ok(subsidiary_name.to_string())
-}
-
-struct KeyringCredentialCacheContext {
-    residual: Residual,
-}
-
-impl CredentialCache for KeyringCredentialCacheContext {
-    fn cc_type(&self) -> String {
-        "KEYRING".to_string()
-    }
-
-    fn name(&self) -> Result<String, KrbError> {
-        Ok(self.residual.to_string())
-    }
-
-    fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
-        let mut subsidiary = get_subsidiary(&self.residual)?;
-        subsidiary.clear()?;
-
-        // Store the principal name within the subsidiary cache
-        store_principal(name, &mut subsidiary)?;
-
-        // Store clockskew within subsidiary cache
-        if let Some(cs) = clock_skew {
-            trace!(?cs, ?subsidiary, "Storing clock skew in subsidiary cache");
-            store_clock_skew(cs, &mut subsidiary)?;
-        };
-
-        Ok(())
-    }
-
-    fn destroy(&mut self) -> Result<(), KrbError> {
-        let mut subsidiary = get_subsidiary(&self.residual)?;
-        subsidiary.clear()?;
-
-        let mut collection = get_collection(&self.residual)?;
-        collection
-            .unlink_keyring(&subsidiary)
-            .inspect_err(|e| error!(?e, "Failed to unlink subsidiary from collection"))?;
-        Ok(())
-    }
-
-    fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError> {
-        let mut subsidiary = get_subsidiary(&self.residual)?;
-
-        // Get the SPN and use it as the key name (creds->server)
-        let key_name: String = (&credentials.kdc_reply.server).into();
-        let creds: CredentialV4 = CredentialV4::new(
-            &credentials.name,
-            &credentials.ticket,
-            &credentials.kdc_reply,
-        )?;
-        let mut c = std::io::Cursor::new(Vec::new());
-        creds.write(&mut c).map_err(|err| {
-            error!(?err, "Failed to store credential");
-            KrbError::BinRWError
-        })?;
-        let vec = c.into_inner();
-        subsidiary
-            .add_key::<User, &str, &[u8]>(key_name.as_str(), vec.as_slice())
-            .map_err(KrbError::from)?;
-
-        Ok(())
-    }
-
-    fn dump(&self) -> Result<(), KrbError> {
-        let subsidiary = get_subsidiary(&self.residual)?;
-
-        let time_offsets = get_subsidiary_time_offsets(&subsidiary)?;
-        println!("KDC time offset: {:?}", time_offsets);
-
-        let stored_name = get_subsidiary_principal(&subsidiary)?;
-        println!("Default principal: {:?}", stored_name);
-
-        let (keys, _) = subsidiary.read().map_err(|e| {
-            error!(?e, "Failed to read subsidiary");
-            KrbError::CredentialCacheError
-        })?;
-
-        for (i, k) in keys.iter().enumerate() {
-            let Ok(desc) = k.description() else {
-                continue;
-            };
-
-            if desc.description == "__krb5_time_offsets__" || desc.description == "__krb5_princ__" {
-                continue;
-            }
-
-            let payload = k.read()?;
-            let mut reader = binrw::io::Cursor::new(payload);
-            let v4: CredentialV4 = reader.read_type(binrw::Endian::Big).map_err(|err| {
-                error!(error=?err);
-                KrbError::BinRWError
-            })?;
-
-            println!("Credential [{i}]:");
-            println!("{}", v4);
-        }
-        Ok(())
-    }
-
-    fn principal(&self) -> Result<Name, KrbError> {
-        let subsidiary = get_subsidiary(&self.residual)?;
-
-        get_subsidiary_principal(&subsidiary)?.ok_or(KrbError::CredentialCacheNotFound)
-    }
-}
-
-impl KeyringCredentialCacheCollection {
-    fn subsidiary_exists(&self, name: &str) -> Result<Option<Keyring>, KrbError> {
-        let collection = get_collection(&self.residual)?;
-        match collection.search_for_keyring(name, None) {
-            Ok(k) => Ok(Some(k)),
-            Err(errno::Errno(libc::ENOKEY)) => Ok(None),
-            Err(e) => Err(KrbError::from(e)),
-        }
-    }
-
-    fn gen_random_subsidiary_name(&self) -> Result<String, KrbError> {
-        let collection = get_collection(&self.residual)?;
-        for _ in 1..10 {
-            let s: String = rand::rng()
-                .sample_iter(&Alphanumeric)
-                .take(7)
-                .map(char::from)
-                .collect();
-            let s = format!("_krb_{s}");
-            let k = self.subsidiary_exists(s.as_str())?;
-            if k.is_none() {
-                return Ok(s);
-            }
-        }
-        error!(?collection, "Failed to generate random cache name");
-        Err(KrbError::CredentialCacheError)
-    }
+    Ok(())
 }
 
 fn get_or_create_keyring(parent: &mut Keyring, name: &str) -> Result<Keyring, Errno> {
@@ -459,7 +299,6 @@ fn get_or_create_keyring(parent: &mut Keyring, name: &str) -> Result<Keyring, Er
     .inspect_err(|e| error!(?parent, ?name, ?e, "Failed to get or create keyring"))
 }
 
-/// fetch or create a keyring for the given collection name within the anchor
 fn get_anchor(residual: &Residual) -> Result<Keyring, KrbError> {
     match residual.anchor.as_str() {
         "process" => Keyring::attach_or_create(SpecialKeyring::Process).map_err(|e| {
@@ -518,8 +357,179 @@ fn get_collection(residual: &Residual) -> Result<Keyring, KrbError> {
     get_or_create_keyring(&mut parent, &collection_name).map_err(|e| e.into())
 }
 
+fn get_subsidiary(residual: &Residual) -> Result<Keyring, KrbError> {
+    match &residual.subsidiary {
+        Some(name) => {
+            let mut collection = get_collection(residual)?;
+            get_or_create_keyring(&mut collection, name).map_err(|e| e.into())
+        }
+        None => Err(KrbError::CredentialCacheNotFound),
+    }
+}
+
+struct KeyringCredentialCacheContext {
+    residual: Residual,
+}
+
+impl KeyringCredentialCacheContext {
+    fn store_clock_skew(&self, clock_skew: Duration) -> Result<(), KrbError> {
+        let mut subsidiary = get_subsidiary(&self.residual)?;
+        store_clock_skew(&mut subsidiary, clock_skew)
+    }
+
+    fn store_principal(&self, name: &Name) -> Result<(), KrbError> {
+        let mut subsidiary = get_subsidiary(&self.residual)?;
+        store_principal(&mut subsidiary, name)
+    }
+
+    fn time_offsets(&self) -> Result<Option<TimeOffsets>, KrbError> {
+        let subsidiary = get_subsidiary(&self.residual)?;
+        get_subsidiary_time_offsets(&subsidiary)
+    }
+
+    fn clear(&self) -> Result<(), KrbError> {
+        let mut subsidiary = get_subsidiary(&self.residual)?;
+        subsidiary.clear().map_err(|err| err.into())
+    }
+}
+
+impl CredentialCache for KeyringCredentialCacheContext {
+    fn cc_type(&self) -> String {
+        "KEYRING".to_string()
+    }
+
+    fn name(&self) -> Result<String, KrbError> {
+        Ok(self.residual.to_string())
+    }
+
+    fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
+        self.clear()?;
+
+        // Store the principal name within the subsidiary cache
+        self.store_principal(name)?;
+
+        // Store clockskew within subsidiary cache
+        if let Some(cs) = clock_skew {
+            trace!(?cs, "Storing clock skew in subsidiary cache");
+            self.store_clock_skew(cs)?;
+        };
+
+        Ok(())
+    }
+
+    fn destroy(&mut self) -> Result<(), KrbError> {
+        self.clear()?;
+
+        let mut collection = get_collection(&self.residual)?;
+        let subsidiary = get_subsidiary(&self.residual)?;
+        collection
+            .unlink_keyring(&subsidiary)
+            .inspect_err(|e| error!(?e, "Failed to unlink subsidiary from collection"))?;
+        Ok(())
+    }
+
+    fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError> {
+        let mut subsidiary = get_subsidiary(&self.residual)?;
+
+        // Get the SPN and use it as the key name (creds->server)
+        let key_name: String = (&credentials.kdc_reply.server).into();
+        let creds: CredentialV4 = CredentialV4::new(
+            &credentials.name,
+            &credentials.ticket,
+            &credentials.kdc_reply,
+        )?;
+        let mut c = std::io::Cursor::new(Vec::new());
+        creds.write(&mut c).map_err(|err| {
+            error!(?err, "Failed to store credential");
+            KrbError::BinRWError
+        })?;
+        let vec = c.into_inner();
+        subsidiary
+            .add_key::<User, &str, &[u8]>(key_name.as_str(), vec.as_slice())
+            .map_err(KrbError::from)?;
+
+        Ok(())
+    }
+
+    fn dump(&self) -> Result<(), KrbError> {
+        let time_offsets = self.time_offsets()?;
+        println!("KDC time offset: {:?}", time_offsets);
+
+        let stored_name = self.principal()?;
+        println!("Default principal: {:?}", stored_name);
+
+        let subsidiary = get_subsidiary(&self.residual)?;
+        let (keys, _) = subsidiary.read().map_err(|e| {
+            error!(?e, "Failed to read subsidiary");
+            KrbError::CredentialCacheError
+        })?;
+
+        for (i, k) in keys.iter().enumerate() {
+            let Ok(desc) = k.description() else {
+                continue;
+            };
+
+            if desc.description == "__krb5_time_offsets__" || desc.description == "__krb5_princ__" {
+                continue;
+            }
+
+            let payload = k.read()?;
+            let mut reader = binrw::io::Cursor::new(payload);
+            let v4: CredentialV4 = reader.read_type(binrw::Endian::Big).map_err(|err| {
+                error!(error=?err);
+                KrbError::BinRWError
+            })?;
+
+            println!("Credential [{i}]:");
+            println!("{}", v4);
+        }
+        Ok(())
+    }
+
+    fn principal(&self) -> Result<Name, KrbError> {
+        let subsidiary = get_subsidiary(&self.residual)?;
+        get_subsidiary_principal(&subsidiary)?.ok_or(KrbError::CredentialCacheNotFound)
+    }
+}
+
+impl KeyringCredentialCacheCollection {
+    fn subsidiary_exists(&self, name: &str) -> Result<Option<Keyring>, KrbError> {
+        let collection = get_collection(&self.residual)?;
+        match collection.search_for_keyring(name, None) {
+            Ok(k) => Ok(Some(k)),
+            Err(errno::Errno(libc::ENOKEY)) => Ok(None),
+            Err(e) => Err(KrbError::from(e)),
+        }
+    }
+
+    fn gen_random_subsidiary_name(&self) -> Result<String, KrbError> {
+        let collection = get_collection(&self.residual)?;
+        for _ in 1..10 {
+            let s: String = rand::rng()
+                .sample_iter(&Alphanumeric)
+                .take(7)
+                .map(char::from)
+                .collect();
+            let s = format!("_krb_{s}");
+            let k = self.subsidiary_exists(s.as_str())?;
+            if k.is_none() {
+                return Ok(s);
+            }
+        }
+        error!(?collection, "Failed to generate random cache name");
+        Err(KrbError::CredentialCacheError)
+    }
+}
+
 struct KeyringCredentialCacheCollection {
     pub residual: Residual,
+}
+
+impl KeyringCredentialCacheCollection {
+    fn store_primary_subsidiary_name(&self, subsidiary_name: &str) -> Result<(), KrbError> {
+        let mut collection = get_collection(&self.residual)?;
+        store_primary_subsidiary_name(&mut collection, subsidiary_name)
+    }
 }
 
 impl CredentialCacheCollection for KeyringCredentialCacheCollection {
@@ -542,7 +552,7 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
                     collection: self.residual.collection.clone(),
                     subsidiary: Some(new_primary_name.clone()),
                 };
-                store_primary_subsidiary_name(&new_primary_name, &mut collection)?;
+                self.store_primary_subsidiary_name(&new_primary_name)?;
                 KeyringCredentialCacheContext { residual }
             }
         };
