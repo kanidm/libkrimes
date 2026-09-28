@@ -142,7 +142,7 @@ pub(super) struct FileCredentialCacheContext {
 }
 
 impl CredentialCache for FileCredentialCacheContext {
-    fn name(&mut self) -> Result<String, KrbError> {
+    fn name(&self) -> Result<String, KrbError> {
         Ok(self.path.to_string_lossy().to_string())
     }
 
@@ -273,7 +273,7 @@ impl CredentialCache for FileCredentialCacheContext {
         Ok(())
     }
 
-    fn dump(&mut self) -> Result<(), KrbError> {
+    fn dump(&self) -> Result<(), KrbError> {
         let ccache = FileCredentialCache::load(&self.path)?;
 
         println!("{ccache}");

@@ -443,7 +443,7 @@ pub(super) struct KeyringCredentialCacheContext {
 }
 
 impl CredentialCache for KeyringCredentialCacheContext {
-    fn name(&mut self) -> Result<String, KrbError> {
+    fn name(&self) -> Result<String, KrbError> {
         Ok(self.residual.to_string())
     }
 
@@ -556,7 +556,7 @@ impl CredentialCache for KeyringCredentialCacheContext {
         Ok(())
     }
 
-    fn dump(&mut self) -> Result<(), KrbError> {
+    fn dump(&self) -> Result<(), KrbError> {
         let subsidiary_name = get_subsidiary_cache_name(&self.residual);
 
         let Some(subsidiary) = subsidiary_exists(&self.collection, &subsidiary_name)? else {

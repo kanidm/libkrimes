@@ -22,7 +22,7 @@ pub(crate) fn dump(opt: CcacheDumpOpt) {
                 }
             }
         }
-    } else if let Ok(mut ccache) = libkrimes::ccache::resolve(opt.common.name.as_deref()) {
+    } else if let Ok(ccache) = libkrimes::ccache::resolve(opt.common.name.as_deref()) {
         if let Ok(ccname) = ccache.name() {
             println!("Dumping credential cache {:?}", ccname);
             if let Err(e) = ccache.dump() {
