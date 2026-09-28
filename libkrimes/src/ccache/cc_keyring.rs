@@ -317,7 +317,6 @@ fn store_primary_subsidiary_name(
 
 pub(super) struct KeyringCredentialCacheContext {
     residual: Residual,
-    subsidiary: Option<Keyring>,
 }
 
 impl CredentialCache for KeyringCredentialCacheContext {
@@ -342,7 +341,6 @@ impl CredentialCache for KeyringCredentialCacheContext {
             store_clock_skew(cs, &mut subsidiary)?;
         };
 
-        self.subsidiary = Some(subsidiary);
         Ok(())
     }
 
@@ -527,10 +525,7 @@ pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, Krb
     let collection = get_collection(&residual)?;
     trace!(?collection, "Resolved collection within anchor");
 
-    let kcc = KeyringCredentialCacheContext {
-        residual,
-        subsidiary: None,
-    };
+    let kcc = KeyringCredentialCacheContext { residual };
     Ok(Box::new(kcc))
 }
 
@@ -549,11 +544,7 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
                     collection: self.residual.collection.clone(),
                     subsidiary: Some(name.clone()),
                 };
-                let subsidiary = get_subsidiary(&residual)?;
-                KeyringCredentialCacheContext {
-                    residual,
-                    subsidiary: Some(subsidiary),
-                }
+                KeyringCredentialCacheContext { residual }
             }
             None => {
                 let new_primary_name = self.residual.collection.clone();
@@ -563,11 +554,7 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
                     subsidiary: Some(new_primary_name.clone()),
                 };
                 store_primary_subsidiary_name(&new_primary_name, &mut collection)?;
-                let subsidiary = get_subsidiary(&residual)?;
-                KeyringCredentialCacheContext {
-                    residual,
-                    subsidiary: Some(subsidiary),
-                }
+                KeyringCredentialCacheContext { residual }
             }
         };
 
@@ -581,11 +568,7 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
             collection: self.residual.collection.clone(),
             subsidiary: Some(name),
         };
-        let subsidiary = Some(get_subsidiary(&residual)?);
-        let cc = KeyringCredentialCacheContext {
-            residual,
-            subsidiary,
-        };
+        let cc = KeyringCredentialCacheContext { residual };
         Ok(Box::new(cc))
     }
 }
