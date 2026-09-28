@@ -227,4 +227,161 @@ pub(super) fn resolve(ccache_name: &str) -> Result<ResolvedCredentialCache, KrbE
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::ccache::tests::{klist, skip_env};
+    use crate::proto::Name;
+
+    #[tokio::test]
+    async fn test_ccache_dir_roundtrip() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+        if skip_env() {
+            return Ok(());
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("krb5cc_rt");
+        let ccache_name = format!("DIR:{}", path.to_string_lossy());
+
+        crate::ccache::tests::store_and_verify_roundtrip(&ccache_name).await
+    }
+
+    #[tokio::test]
+    async fn test_ccache_dir_name() -> Result<(), KrbError> {
+        // Residual without subsidiary -> primary subsidiary
+        let cccol_path = format!(
+            "/tmp/krime_test_cccol_{}",
+            DirCredentialCacheCollection::gen_random_subsidiary_name()
+        );
+        let residual = format!("DIR:{}", cccol_path);
+
+        let ResolvedCredentialCache::Collection(mut cccol) =
+            crate::ccache::resolve(Some(residual.as_str()))?
+        else {
+            panic!("Expected a collection")
+        };
+        assert_eq!(cccol.name()?, format!(":{}/tkt", cccol_path));
+        assert_eq!(cccol.full_name()?, format!("DIR::{}/tkt", cccol_path));
+        assert_eq!(cccol.name()?, cccol.primary()?.name()?);
+        assert_eq!(
+            cccol.full_name()?,
+            format!("DIR:{}", cccol.primary()?.name()?)
+        );
+
+        // Residual without subsidiary -> switch primary -> new primary subsidiary
+        let new = cccol.new_unique()?;
+        assert!(new.name()?.split("/").last().unwrap().starts_with("krb"));
+        cccol.switch(&*new)?;
+        assert_eq!(cccol.name()?, new.name()?);
+        assert_eq!(cccol.full_name()?, new.full_name()?);
+        cccol.destroy().ok();
+
+        // Residual with subsidiary -> given subsidiary
+        let cccol_path = "/tmp/krime_cccol_2".to_string();
+        let residual = format!("DIR::{}/s1", cccol_path);
+        let ResolvedCredentialCache::Subsidiary(cc) =
+            crate::ccache::resolve(Some(residual.as_str()))?
+        else {
+            panic!("Expected a subsidiary")
+        };
+        assert_eq!(cc.name()?, format!(":{}/s1", cccol_path));
+        assert_eq!(cc.full_name()?, format!("DIR::{}/s1", cccol_path));
+        cccol.destroy().ok();
+
+        Ok(())
+    }
+
+    /// find() must return the subsidiary whose principal matches, and
+    /// CredentialCacheNotFound for an absent principal. subsidiaries() must
+    /// exclude the `primary` pointer file.
+    #[tokio::test]
+    async fn test_ccache_dir_find_and_subsidiaries() -> Result<(), KrbError> {
+        let cccol_path = format!(
+            "/tmp/krime_test_find_{}",
+            DirCredentialCacheCollection::gen_random_subsidiary_name()
+        );
+        let residual = format!("DIR:{}", cccol_path);
+        let ResolvedCredentialCache::Collection(cccol) =
+            crate::ccache::resolve(Some(residual.as_str()))?
+        else {
+            panic!("Expected a collection")
+        };
+
+        let p1 = Name::Principal {
+            name: "p1".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+        let p2 = Name::Principal {
+            name: "p2".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+        let absent = Name::Principal {
+            name: "nope".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+
+        let mut c1 = cccol.primary()?;
+        c1.init(&p1, None)?;
+        let mut c2 = cccol.new_unique()?;
+        c2.init(&p2, None)?;
+
+        // subsidiaries() must not include the `primary` file.
+        let subs = cccol.subsidiaries()?;
+        assert_eq!(subs.len(), 2, "expected exactly two subsidiaries");
+
+        let found = cccol.find(&p2)?;
+        assert_eq!(found.principal()?, p2);
+
+        let res = cccol.find(&absent);
+        if let Err(err) = res {
+            assert!(matches!(err, KrbError::CredentialCacheNotFound));
+        } else {
+            panic!("Expected error")
+        }
+
+        std::fs::remove_dir_all(&cccol_path).ok();
+        Ok(())
+    }
+
+    /// End-to-end with a real TGT stored in a DIR collection; MIT must read it
+    /// both as a collection (DIR:<dir>) and as a subsidiary (DIR::<dir>/<sub>).
+    #[tokio::test]
+    async fn test_ccache_dir_store_e2e() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+        if skip_env() {
+            return Ok(());
+        }
+
+        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
+
+        let cccol_path = format!(
+            "/tmp/krime_test_dir_e2e_{}",
+            DirCredentialCacheCollection::gen_random_subsidiary_name()
+        );
+        let residual = format!("DIR:{}", cccol_path);
+        let ResolvedCredentialCache::Collection(cccol) =
+            crate::ccache::resolve(Some(residual.as_str()))?
+        else {
+            panic!("Expected a collection")
+        };
+
+        let mut primary = cccol.primary()?;
+        primary.init(&creds.name, None)?;
+        primary.store(&creds)?;
+        assert_eq!(primary.principal()?, creds.name);
+
+        // The underlying subsidiary file must exist inside the collection dir.
+        let sub_residual = primary.full_name()?;
+        assert!(sub_residual.starts_with("DIR::"));
+
+        let out = klist(&residual);
+        assert!(out.contains("testuser@EXAMPLE.COM"), "{out}");
+        assert!(out.contains("krbtgt/EXAMPLE.COM@EXAMPLE.COM"), "{out}");
+
+        let out = klist(&sub_residual);
+        assert!(out.contains("testuser@EXAMPLE.COM"), "{out}");
+
+        std::fs::remove_dir_all(&cccol_path).ok();
+        Ok(())
+    }
+}
