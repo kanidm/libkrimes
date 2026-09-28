@@ -75,7 +75,7 @@ use super::CredentialCache;
 use super::CredentialCacheCollection;
 use crate::ccache::{CredentialV4, PrincipalV4};
 use crate::error::KrbError;
-use crate::proto::{EncTicket, KdcReplyPart, KerberosCredentials, Name};
+use crate::proto::{KerberosCredentials, Name};
 
 use binrw::{binread, binwrite};
 use binrw::{BinReaderExt, BinWrite};
@@ -260,27 +260,6 @@ fn store_clock_skew(clock_skew: Duration, keyring: &mut Keyring) -> Result<Optio
     Ok(Some(key))
 }
 
-fn store_credential(
-    name: &Name,
-    ticket: &EncTicket,
-    kdc_reply_part: &KdcReplyPart,
-    subsidiary: &mut Keyring,
-) -> Result<(), KrbError> {
-    // Get the SPN and use it as the key name (creds->server)
-    let key_name: String = (&kdc_reply_part.server).into();
-    let creds: CredentialV4 = CredentialV4::new(name, ticket, kdc_reply_part)?;
-    let mut c = std::io::Cursor::new(Vec::new());
-    creds.write(&mut c).map_err(|err| {
-        error!(?subsidiary, ?name, ?err, "Failed to store credential");
-        KrbError::BinRWError
-    })?;
-    let vec = c.into_inner();
-    subsidiary
-        .add_key::<User, &str, &[u8]>(key_name.as_str(), vec.as_slice())
-        .map_err(KrbError::from)?;
-    Ok(())
-}
-
 fn store_principal(name: &Name, subsidiary: &mut Keyring) -> Result<(), KrbError> {
     match get_subsidiary_principal(subsidiary)? {
         Some(stored) => {
@@ -379,38 +358,24 @@ impl CredentialCache for KeyringCredentialCacheContext {
     }
 
     fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError> {
-        let Some(subsidiary) = self.subsidiary.as_mut() else {
-            error!("Credential cache not initialized");
-            return Err(KrbError::CredentialCacheError);
-        };
+        let mut subsidiary = get_subsidiary(&self.residual)?;
 
-        let stored_name = get_subsidiary_principal(subsidiary)?.ok_or_else(|| {
-            error!(?subsidiary, "Subsidiary ccache has no principal");
-            KrbError::CredentialCacheError
-        })?;
-
-        if stored_name != credentials.name {
-            error!(
-                ?stored_name,
-                ?credentials.name,
-                "Stored principal do not match"
-            );
-            return Err(KrbError::CredentialCacheError);
-        }
-
-        let desc = subsidiary.description().map_err(|e| {
-            error!(?e, "Failed to parse keyring description");
-            KrbError::CredentialCacheError
-        })?;
-
-        // Store the principal name within the subsidiary cache
-        trace!(?desc, "Storing credentials in subsidiary cache");
-        store_credential(
+        // Get the SPN and use it as the key name (creds->server)
+        let key_name: String = (&credentials.kdc_reply.server).into();
+        let creds: CredentialV4 = CredentialV4::new(
             &credentials.name,
             &credentials.ticket,
             &credentials.kdc_reply,
-            subsidiary,
         )?;
+        let mut c = std::io::Cursor::new(Vec::new());
+        creds.write(&mut c).map_err(|err| {
+            error!(?err, "Failed to store credential");
+            KrbError::BinRWError
+        })?;
+        let vec = c.into_inner();
+        subsidiary
+            .add_key::<User, &str, &[u8]>(key_name.as_str(), vec.as_slice())
+            .map_err(KrbError::from)?;
 
         Ok(())
     }
