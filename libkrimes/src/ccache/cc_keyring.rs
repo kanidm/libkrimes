@@ -623,21 +623,29 @@ fn get_or_create_keyring(parent: &mut Keyring, name: &str) -> Result<Keyring, Er
 }
 
 /// fetch or create a keyring for the given collection name within the anchor
-fn get_collection(anchor: &str, collection: &str) -> Result<Keyring, KrbError> {
-    let mut parent = match anchor {
-        "process" => Keyring::attach_or_create(SpecialKeyring::Process)
-            .inspect_err(|e| error!(?e, "Failed to attach or create process keyring")),
-        "thread" => Keyring::attach_or_create(SpecialKeyring::Thread)
-            .inspect_err(|e| error!(?e, "Failed to attach or create thread keyring")),
-        "session" => Keyring::attach_or_create(SpecialKeyring::Session)
-            .inspect_err(|e| error!(?e, "Failed to attach or create session keyring")),
-        "user" => Keyring::attach_or_create(SpecialKeyring::User)
-            .inspect_err(|e| error!(?e, "Failed to attach or create user keyring")),
+fn get_anchor(residual: &Residual) -> Result<Keyring, KrbError> {
+    match residual.anchor.as_str() {
+        "process" => Keyring::attach_or_create(SpecialKeyring::Process).map_err(|e| {
+            error!(?e, "Failed to attach or create process keyring");
+            e.into()
+        }),
+        "thread" => Keyring::attach_or_create(SpecialKeyring::Thread).map_err(|e| {
+            error!(?e, "Failed to attach or create thread keyring");
+            e.into()
+        }),
+        "session" => Keyring::attach_or_create(SpecialKeyring::Session).map_err(|e| {
+            error!(?e, "Failed to attach or create session keyring");
+            e.into()
+        }),
+        "user" => Keyring::attach_or_create(SpecialKeyring::User).map_err(|e| {
+            error!(?e, "Failed to attach or create user keyring");
+            e.into()
+        }),
         "persistent" => {
-            let uid = match collection.parse::<u32>() {
+            let uid = match residual.collection.parse::<u32>() {
                 Ok(uid) => uid,
                 Err(e) => {
-                    error!(?collection, ?e, "Failed to parse collection name into uid");
+                    error!(?residual.collection, ?e, "Failed to parse collection name into uid");
                     return Err(KrbError::CredentialCacheError);
                 }
             };
@@ -659,14 +667,17 @@ fn get_collection(anchor: &str, collection: &str) -> Result<Keyring, KrbError> {
             let parent = unsafe { Keyring::new(parent) };
             Ok(parent)
         }
-        _ => Err(Errno(libc::ENOTSUP)),
-    }?;
+        _ => Err(Errno(libc::ENOTSUP).into()),
+    }
+}
 
-    let collection_name = match anchor {
+fn get_collection(residual: &Residual) -> Result<Keyring, KrbError> {
+    let collection_name = match residual.anchor.as_str() {
         "persistent" => "_krb".to_string(),
-        _ => format!("_krb_{collection}"),
+        _ => format!("_krb_{}", residual.collection),
     };
 
+    let mut parent = get_anchor(residual)?;
     get_or_create_keyring(&mut parent, &collection_name).map_err(|e| e.into())
 }
 
@@ -674,7 +685,7 @@ pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, Krb
     let residual = Residual::parse(ccache_name)?;
     debug!(?residual, "Parsed residual");
 
-    let collection = get_collection(residual.anchor.as_str(), residual.collection.as_str())?;
+    let collection = get_collection(&residual)?;
     trace!(?collection, "Resolved collection within anchor");
 
     let kcc = KeyringCredentialCacheContext {
@@ -692,10 +703,7 @@ struct KeyringCredentialCacheCollection {
 
 impl CredentialCacheCollection for KeyringCredentialCacheCollection {
     fn primary(&mut self) -> Result<String, KrbError> {
-        let mut col = get_collection(
-            self.residual.anchor.as_ref(),
-            self.residual.collection.as_ref(),
-        )?;
+        let mut col = get_collection(&self.residual)?;
         let primary_name = get_primary_subsidiary_name(&mut col)?;
         match primary_name {
             Some(p) => Ok(p),
@@ -727,7 +735,7 @@ pub(super) fn resolve_collection(
     let residual = Residual::parse(name)?;
     debug!(?residual, "Parsed residual");
 
-    let collection = get_collection(residual.anchor.as_str(), residual.collection.as_str())?;
+    let collection = get_collection(&residual)?;
     trace!(?collection, "Resolved collection within anchor");
 
     // Now iterate subsidiaries
@@ -822,7 +830,7 @@ mod tests {
     #[tokio::test]
     async fn test_ccache_keyring_primary() -> Result<(), KrbError> {
         // No subsidiary in residual
-        let ccache_name = Some("KEYRING:session:c1");
+        let ccache_name = "KEYRING:session:c1";
 
         let p1 = Name::Principal {
             name: "p1".to_string(),
@@ -837,8 +845,9 @@ mod tests {
             realm: "EXAMPLE.COM".to_string(),
         };
 
-        let mut ccache = crate::ccache::resolve(ccache_name)?;
-        let mut col = get_collection("session", "c1")?;
+        let residual = Residual::parse(ccache_name)?;
+        let mut ccache = crate::ccache::resolve(Some(ccache_name))?;
+        let mut col = get_collection(&residual)?;
 
         // Will set primary
         ccache.init(&p1, None)?;
