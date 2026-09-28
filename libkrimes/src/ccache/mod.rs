@@ -567,6 +567,7 @@ pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, Kr
 
 pub trait CredentialCacheCollection: Deref + DerefMut {
     fn primary(&mut self) -> Result<String, KrbError>;
+    fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError>;
 }
 
 pub fn resolve_collection(
