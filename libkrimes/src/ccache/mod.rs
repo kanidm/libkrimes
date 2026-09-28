@@ -600,85 +600,125 @@ pub fn resolve(ccache_name: Option<&str>) -> Result<ResolvedCredentialCache, Krb
 
 #[cfg(test)]
 mod tests {
-    use tracing::warn;
-
     use super::*;
     use std::process::Command;
-    #[cfg(feature = "keyring")]
-    use std::process::Stdio;
 
-    #[tokio::test]
-    async fn test_ccache_file_store() -> Result<(), KrbError> {
-        let _ = tracing_subscriber::fmt::try_init();
+    /// Returns true when the environment cannot run KDC/MIT-dependent tests, in
+    /// which case tests should early-return Ok(()) to avoid failing in CI or
+    /// minimal environments.
+    pub(super) fn skip_env() -> bool {
         if std::env::var("CI").is_ok() {
-            // Skip this test in CI, as it requires a KDC running on localhost
-            warn!("Skipping test_ccache_file_store in CI");
-            return Ok(());
+            tracing::warn!("Skipping ccache integration test in CI");
+            return true;
         }
-
-        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-
-        let path = "/tmp/krb5cc_krime";
-        let ccache_name = format!("FILE:{path}");
-        let mut ccache = super::resolve(Some(ccache_name.as_str()))?;
-        ccache.init(&creds.name, None)?;
-        ccache.store(&creds)?;
-        assert!(std::fs::exists(path).expect("Unable to check if file exists"));
-
-        // TODO load and compare
-
-        // Test MIT can parse the created ccache
-        let output = Command::new("klist")
-            .arg("-c")
-            .arg(ccache_name.as_str())
-            .output()
-            .expect("Unable to execute command klist");
-        assert!(output.status.success());
-
-        let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
-        assert!(output.contains("testuser@EXAMPLE.COM"));
-
-        ccache.destroy()?;
-        assert!(!std::fs::exists(path).expect("Unable to check if file exists"));
-
-        Ok(())
+        if which::which("klist").is_err() {
+            tracing::warn!("Skipping ccache integration test: klist not on PATH");
+            return true;
+        }
+        false
     }
 
-    #[tokio::test]
-    #[cfg(feature = "keyring")]
-    async fn test_ccache_keyring_store() -> Result<(), KrbError> {
-        if std::env::var("CI").is_ok() {
-            // Skip this test in CI, as it requires a KDC running on localhost
-            warn!("Skipping get_tgt in CI");
-            return Ok(());
-        }
-
-        let ccache_name = "KEYRING:session:abc";
-        let ccname = Some(ccache_name);
-
-        let mut ccache = super::resolve(ccname)?;
-        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-        ccache.init(&creds.name, None)?;
-        ccache.store(&creds)?;
-
-        let mut ccache = super::resolve(ccname)?;
-        let creds = crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password").await?;
-        ccache.init(&creds.name, None)?;
-        ccache.store(&creds)?;
-
+    /// Run `klist -c <ccache_name>` and return stdout. Asserts success.
+    pub(super) fn klist(ccache_name: &str) -> String {
         let output = Command::new("klist")
-            .stderr(Stdio::null())
+            .arg("-c")
+            .arg(ccache_name)
+            .output()
+            .expect("Unable to execute command klist");
+        assert!(
+            output.status.success(),
+            "klist failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(output.stdout.as_slice()).to_string()
+    }
+
+    #[cfg(feature = "keyring")]
+    pub(super) fn klist_all(ccache_name: &str) -> String {
+        let output = Command::new("klist")
             .arg("-c")
             .arg(ccache_name)
             .arg("-A")
             .output()
             .expect("Unable to execute command klist");
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "klist failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
 
-        let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
-        assert!(output.contains("testuser@EXAMPLE.COM"));
-        assert!(output.contains("testuser2@EXAMPLE.COM"));
+        String::from_utf8_lossy(output.stdout.as_slice()).to_string()
+    }
 
+    #[tokio::test]
+    async fn test_resolve_file_is_subsidiary() -> Result<(), KrbError> {
+        let ResolvedCredentialCache::Subsidiary(cc) =
+            resolve(Some("FILE:/tmp/krime_resolve_test"))?
+        else {
+            panic!("FILE: must resolve to a Subsidiary");
+        };
+        assert_eq!(cc.cc_type(), "FILE");
+        assert_eq!(cc.name()?, "/tmp/krime_resolve_test");
+        assert_eq!(cc.full_name()?, "FILE:/tmp/krime_resolve_test");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_resolve_dir_collection_vs_subsidiary() -> Result<(), KrbError> {
+        // DIR:<dir> -> collection
+        let dir = format!("/tmp/krime_resolve_dir_{}", std::process::id());
+        let residual = format!("DIR:{dir}");
+        let ResolvedCredentialCache::Collection(cccol) = resolve(Some(residual.as_str()))? else {
+            panic!("DIR:<dir> must resolve to a Collection");
+        };
+        assert_eq!(cccol.cc_type(), "DIR");
+
+        // DIR::<dir>/<sub> -> subsidiary
+        let residual = format!("DIR::{dir}/s1");
+        let ResolvedCredentialCache::Subsidiary(cc) = resolve(Some(residual.as_str()))? else {
+            panic!("DIR::<dir>/<sub> must resolve to a Subsidiary");
+        };
+        assert_eq!(cc.cc_type(), "DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_resolve_unsupported_type() {
+        let res = resolve(Some("BOGUS:/tmp/whatever"));
+        if let Err(err) = res {
+            assert!(matches!(err, KrbError::UnsupportedCredentialCacheType));
+        } else {
+            panic!("BOGUS:/tmp/whatever must fail with KrbError::UnsupportedCredentialCacheType")
+        }
+    }
+
+    /// Full round-trip used by every cache type:
+    /// init -> store -> principal() matches -> MIT klist sees the TGT -> destroy.
+    pub(super) async fn store_and_verify_roundtrip(ccache_name: &str) -> Result<(), KrbError> {
+        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
+
+        let mut ccache = match crate::ccache::resolve(Some(ccache_name))? {
+            ResolvedCredentialCache::Subsidiary(ccache) => ccache,
+            ResolvedCredentialCache::Collection(cccol) => cccol.primary()?,
+        };
+
+        ccache.init(&creds.name, None)?;
+        ccache.store(&creds)?;
+
+        assert_eq!(ccache.principal()?, creds.name);
+
+        let output = klist(ccache_name);
+        assert!(
+            output.contains("testuser@EXAMPLE.COM"),
+            "klist output missing default principal: {output}"
+        );
+        assert!(
+            output.contains("krbtgt/EXAMPLE.COM@EXAMPLE.COM"),
+            "klist output missing krbtgt service principal: {output}"
+        );
+
+        ccache.destroy()?;
         Ok(())
     }
 }
