@@ -338,7 +338,6 @@ fn store_primary_subsidiary_name(
 
 pub(super) struct KeyringCredentialCacheContext {
     residual: Residual,
-    collection: Keyring,
     subsidiary: Option<Keyring>,
 }
 
@@ -369,39 +368,14 @@ impl CredentialCache for KeyringCredentialCacheContext {
     }
 
     fn destroy(&mut self) -> Result<(), KrbError> {
-        let subsidiary_name = match self.residual.subsidiary.as_deref() {
-            Some(name) => name.to_string(),
-            None => match get_primary_subsidiary_name(&mut self.collection)? {
-                Some(name) => name,
-                None => {
-                    debug!(
-                        concat!(
-                            "No subsidiary cache was destroyed because the subsidiary name was not specified ",
-                            "in the residual and the collection does not have a primary subsidiary defined"
-                        )
-                    );
-                    return Ok(());
-                }
-            },
-        };
+        let mut subsidiary = get_subsidiary(&self.residual)?;
+        subsidiary.clear()?;
 
-        match self
-            .collection
-            .search_for_keyring(subsidiary_name.as_str(), None)
-        {
-            Ok(k) => self.collection.unlink_keyring(&k).map_err(|e| {
-                error!(?e, "Failed to unlink subsidiary from collection");
-                e.into()
-            }),
-            Err(errno::Errno(libc::ENOKEY)) => {
-                trace!(?subsidiary_name, "Subsidiary does not exist");
-                Ok(())
-            }
-            Err(e) => {
-                error!(?e, "Failed to search for keyring");
-                Err(e.into())
-            }
-        }
+        let mut collection = get_collection(&self.residual)?;
+        collection
+            .unlink_keyring(&subsidiary)
+            .inspect_err(|e| error!(?e, "Failed to unlink subsidiary from collection"))?;
+        Ok(())
     }
 
     fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError> {
@@ -590,7 +564,6 @@ pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, Krb
 
     let kcc = KeyringCredentialCacheContext {
         residual,
-        collection,
         subsidiary: None,
     };
     Ok(Box::new(kcc))
@@ -614,7 +587,6 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
                 let subsidiary = get_subsidiary(&residual)?;
                 KeyringCredentialCacheContext {
                     residual,
-                    collection,
                     subsidiary: Some(subsidiary),
                 }
             }
@@ -629,7 +601,6 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
                 let subsidiary = get_subsidiary(&residual)?;
                 KeyringCredentialCacheContext {
                     residual,
-                    collection,
                     subsidiary: Some(subsidiary),
                 }
             }
@@ -645,11 +616,9 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
             collection: self.residual.collection.clone(),
             subsidiary: Some(name),
         };
-        let collection = get_collection(&residual)?;
         let subsidiary = Some(get_subsidiary(&residual)?);
         let cc = KeyringCredentialCacheContext {
             residual,
-            collection,
             subsidiary,
         };
         Ok(Box::new(cc))
