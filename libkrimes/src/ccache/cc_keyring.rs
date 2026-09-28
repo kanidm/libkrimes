@@ -443,6 +443,10 @@ pub(super) struct KeyringCredentialCacheContext {
 }
 
 impl CredentialCache for KeyringCredentialCacheContext {
+    fn cc_type(&self) -> String {
+        "KEYRING".to_string()
+    }
+
     fn name(&self) -> Result<String, KrbError> {
         Ok(self.residual.to_string())
     }

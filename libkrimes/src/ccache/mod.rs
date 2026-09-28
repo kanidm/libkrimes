@@ -532,7 +532,11 @@ fn parse_ccache_name(ccache: Option<&str>) -> Result<String, KrbError> {
 }
 
 pub trait CredentialCache {
+    fn cc_type(&self) -> String;
     fn name(&self) -> Result<String, KrbError>;
+    fn full_name(&self) -> Result<String, KrbError> {
+        Ok(format!("{}:{}", self.cc_type(), self.name()?))
+    }
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError>;
     fn destroy(&mut self) -> Result<(), KrbError>;
     fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError>;
