@@ -542,9 +542,31 @@ pub trait CredentialCache {
 }
 
 pub trait CredentialCacheCollection {
+    fn cc_type(&self) -> String;
+    fn name(&self) -> Result<String, KrbError>;
+    fn full_name(&self) -> Result<String, KrbError> {
+        Ok(format!("{}:{}", self.cc_type(), self.name()?))
+    }
+
     fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError>;
     fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError>;
+    fn switch(&mut self, ccache: &dyn CredentialCache) -> Result<(), KrbError>;
     fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError>;
+
+    fn find(&self, name: &Name) -> Result<Box<dyn CredentialCache>, KrbError> {
+        for cc in self.subsidiaries()? {
+            if &cc.principal()? == name {
+                return Ok(cc);
+            }
+        }
+        Err(KrbError::CredentialCacheNotFound)
+    }
+    fn destroy(&mut self) -> Result<(), KrbError> {
+        // Destroy the primary subsidiary. The primary key ramain stale.
+        let mut cc = self.primary()?;
+        cc.destroy()
+    }
+
     fn try_iter(&self) -> Result<std::vec::IntoIter<Box<dyn CredentialCache>>, KrbError> {
         Ok(self.subsidiaries()?.into_iter())
     }

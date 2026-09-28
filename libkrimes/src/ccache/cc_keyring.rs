@@ -533,6 +533,14 @@ impl KeyringCredentialCacheCollection {
 }
 
 impl CredentialCacheCollection for KeyringCredentialCacheCollection {
+    fn cc_type(&self) -> String {
+        "KEYRING".to_string()
+    }
+
+    fn name(&self) -> Result<String, KrbError> {
+        self.primary()?.name()
+    }
+
     fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
         let mut collection = get_collection(&self.residual)?;
 
@@ -569,6 +577,15 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
         };
         let cc = KeyringCredentialCacheContext { residual };
         Ok(Box::new(cc))
+    }
+
+    fn switch(&mut self, ccache: &dyn CredentialCache) -> Result<(), KrbError> {
+        let new_primary_name = ccache
+            .full_name()
+            .and_then(|x| Residual::parse(&x))
+            .map(|x| x.subsidiary)?
+            .ok_or(KrbError::CredentialCacheNotFound)?;
+        self.store_primary_subsidiary_name(&new_primary_name)
     }
 
     fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError> {
