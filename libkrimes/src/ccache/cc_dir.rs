@@ -2,18 +2,30 @@ use super::CredentialCache;
 use super::CredentialCacheCollection;
 use crate::ccache::cc_file::FileCredentialCacheContext;
 use crate::error::KrbError;
+use crypto_glue::rand::{self, distr::Alphanumeric, RngExt};
 use std::fs::{DirBuilder, File, Permissions};
 use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use tracing::{error, trace};
+use tracing::{debug, error, trace};
 use walkdir::WalkDir;
 
 struct DirCredentialCacheCollection {
     pub path: PathBuf,
     subsidiaries: Vec<Box<dyn CredentialCache>>,
+}
+
+impl DirCredentialCacheCollection {
+    fn gen_random_subsidiary_name(&self) -> String {
+        let s: String = rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(6)
+            .map(char::from)
+            .collect();
+        format!("krb{s}")
+    }
 }
 
 impl CredentialCacheCollection for DirCredentialCacheCollection {
@@ -42,6 +54,28 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
                 Err(KrbError::CredentialCacheError)
             }
         }
+    }
+
+    fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
+        for _ in 1..10 {
+            let new_name = self.gen_random_subsidiary_name();
+            let path = self.path.join(new_name);
+            match path.try_exists() {
+                Ok(true) => {
+                    continue;
+                }
+                Ok(false) => {
+                    let cc = FileCredentialCacheContext { path };
+                    return Ok(Box::new(cc));
+                }
+                Err(e) => {
+                    debug!("Failed to check if path {:?} exists: {:?}", path, e);
+                    return Err(KrbError::IoError);
+                }
+            }
+        }
+        error!("Failed to generate a random subsidiary name");
+        Err(KrbError::CredentialCacheError)
     }
 }
 
