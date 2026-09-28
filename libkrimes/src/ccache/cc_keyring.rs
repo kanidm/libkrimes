@@ -240,7 +240,7 @@ fn get_random_subsidiary_name(collection: &mut Keyring) -> Result<String, KrbErr
         }
     }
 
-    error!(collection=?collection, "Failed to generate random cache name");
+    error!(?collection, "Failed to generate random cache name");
     Err(KrbError::CredentialCacheError)
 }
 
@@ -338,7 +338,7 @@ fn get_primary_subsidiary_name(collection: &mut Keyring) -> Result<Option<String
             let payload = k.read()?;
             let mut reader = binrw::io::Cursor::new(payload);
             let pn: PrimaryName = reader.read_type(binrw::Endian::Big).map_err(|err| {
-                error!(collection=?collection, error=?err, "Failed to read primary name");
+                error!(?collection, ?err, "Failed to read primary name");
                 KrbError::BinRWError
             })?;
             let pn: String = String::from_utf8_lossy(pn.strval.as_slice()).to_string();
@@ -357,7 +357,7 @@ fn store_clock_skew(clock_skew: Duration, keyring: &mut Keyring) -> Result<Optio
     };
     let mut c = std::io::Cursor::new(Vec::new());
     offsets.write(&mut c).map_err(|err| {
-        error!(keyring=?keyring, offsets=?offsets, error=?err, "Failed to store clock skew");
+        error!(?keyring, ?offsets, ?err, "Failed to store clock skew");
         KrbError::BinRWError
     })?;
     let vec = c.into_inner();
@@ -376,7 +376,7 @@ fn store_credential(
     let creds: CredentialV4 = CredentialV4::new(name, ticket, kdc_reply_part)?;
     let mut c = std::io::Cursor::new(Vec::new());
     creds.write(&mut c).map_err(|err| {
-        error!(subsidiary=?subsidiary, name=?name,error=?err, "Failed to store credential");
+        error!(?subsidiary, ?name, ?err, "Failed to store credential");
         KrbError::BinRWError
     })?;
     let vec = c.into_inner();
@@ -392,7 +392,7 @@ fn store_principal(name: &Name, subsidiary: &mut Keyring) -> Result<(), KrbError
             if &stored == name {
                 Ok(())
             } else {
-                error!(subsidiary=?subsidiary, stored_name=?stored, name=?name, "Stored principal do not match");
+                error!(?subsidiary, ?stored, ?name, "Stored principal do not match");
                 Err(KrbError::CredentialCacheError)
             }
         }
@@ -401,7 +401,7 @@ fn store_principal(name: &Name, subsidiary: &mut Keyring) -> Result<(), KrbError
             let princ: PrincipalV4 = name.try_into()?;
             let mut c = std::io::Cursor::new(Vec::new());
             princ.write(&mut c).map_err(|err| {
-                error!(subsidiary=?subsidiary, name=?name, error=?err, "Failed to store principal");
+                error!(?subsidiary, ?name, ?err, "Failed to store principal");
                 KrbError::BinRWError
             })?;
             let vec = c.into_inner();
@@ -423,9 +423,14 @@ fn store_primary_subsidiary_name(
     };
     let mut c = std::io::Cursor::new(Vec::new());
     pn.write(&mut c).map_err(|err| {
-                error!(subsidiary_name=?subsidiary_name, collection=?collection, error=?err, "Failed to store primary subsidiary name");
-                KrbError::BinRWError
-            })?;
+        error!(
+            ?subsidiary_name,
+            ?collection,
+            ?err,
+            "Failed to store primary subsidiary name"
+        );
+        KrbError::BinRWError
+    })?;
     let vec = c.into_inner();
     collection
         .add_key::<User, &str, &[u8]>(key_name, vec.as_slice())
