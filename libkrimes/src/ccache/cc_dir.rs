@@ -11,7 +11,7 @@ use tracing::{debug, error, trace};
 use walkdir::WalkDir;
 
 struct DirCredentialCacheCollection {
-    pub cccol_path: PathBuf,
+    cccol_path: PathBuf,
 }
 
 impl DirCredentialCacheCollection {
@@ -44,7 +44,7 @@ impl DirCredentialCacheCollection {
         })
     }
 
-    fn gen_random_subsidiary_name(&self) -> String {
+    fn gen_random_subsidiary_name() -> String {
         let s: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(6)
@@ -77,9 +77,9 @@ impl DirCredentialCacheCollection {
 }
 
 impl CredentialCacheCollection for DirCredentialCacheCollection {
-    fn primary(&mut self) -> Result<String, KrbError> {
+    fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
         let primary = self.cccol_path.join("primary");
-        let cc = match std::fs::exists(&primary) {
+        match std::fs::exists(&primary) {
             Ok(true) => {
                 let mut f = File::open(&primary).map_err(|e| {
                     error!(?primary, ?e, "Failed to open file");
@@ -95,7 +95,7 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
                     cccol_path: Some(self.cccol_path.clone()),
                     path: primary_path,
                 };
-                Ok(fcc)
+                Ok(Box::new(fcc))
             }
             Ok(false) => {
                 let primary_name = "tkt".to_string();
@@ -104,19 +104,18 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
                     cccol_path: Some(self.cccol_path.clone()),
                     path: self.cccol_path.join(primary_name),
                 };
-                Ok(fcc)
+                Ok(Box::new(fcc))
             }
             Err(e) => {
                 error!(?e, ?primary, "Failed to read primary credentials");
                 Err(KrbError::IoError)
             }
-        }?;
-        cc.name()
+        }
     }
 
     fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
         for _ in 1..10 {
-            let new_name = self.gen_random_subsidiary_name();
+            let new_name = Self::gen_random_subsidiary_name();
             let path = self.cccol_path.join(new_name);
             match path.try_exists() {
                 Ok(true) => {
