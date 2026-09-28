@@ -1,5 +1,5 @@
 use super::CredentialCache;
-use crate::ccache::{Credential, CredentialV4, Principal, PrincipalV4};
+use crate::ccache::{Credential, CredentialV4, Principal, PrincipalV4, ResolvedCredentialCache};
 use crate::error::KrbError;
 use crate::proto::{KerberosCredentials, Name};
 use binrw::helpers::until_eof;
@@ -138,16 +138,32 @@ impl fmt::Display for FileCredentialCache {
 }
 
 pub(super) struct FileCredentialCacheContext {
+    pub cccol_path: Option<PathBuf>,
     pub path: PathBuf,
 }
 
 impl CredentialCache for FileCredentialCacheContext {
     fn cc_type(&self) -> String {
-        "FILE".to_string()
+        match &self.cccol_path {
+            Some(_) => "DIR".to_string(),
+            None => "FILE".to_string(),
+        }
     }
 
     fn name(&self) -> Result<String, KrbError> {
-        Ok(self.path.to_string_lossy().to_string())
+        let name = match &self.cccol_path {
+            Some(cccol) => {
+                // This is a subsidiary cache in a DIR collection
+                let file = self
+                    .path
+                    .file_name()
+                    .map(|x| x.to_string_lossy().to_string())
+                    .ok_or(KrbError::CredentialCacheNotFound)?;
+                format!(":{}/{}", cccol.to_string_lossy(), file)
+            }
+            None => self.path.to_string_lossy().to_string(),
+        };
+        Ok(name)
     }
 
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
@@ -295,15 +311,19 @@ impl CredentialCache for FileCredentialCacheContext {
     }
 }
 
-pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
+pub(super) fn resolve(ccache_name: &str) -> Result<ResolvedCredentialCache, KrbError> {
     trace!(?ccache_name, "Resolving file credential cache");
     let path = ccache_name.strip_prefix("FILE:").unwrap_or(ccache_name);
     trace!(?path, "Resolved file credential cache");
 
     let path = PathBuf::from(&path);
 
-    let fcc = FileCredentialCacheContext { path };
-    Ok(Box::new(fcc))
+    let fcc = FileCredentialCacheContext {
+        cccol_path: None,
+        path,
+    };
+    let fcc = Box::new(fcc);
+    Ok(ResolvedCredentialCache::Subsidiary(fcc))
 }
 
 #[cfg(test)]

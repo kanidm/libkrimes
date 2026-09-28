@@ -73,6 +73,7 @@
 
 use super::CredentialCache;
 use super::CredentialCacheCollection;
+use super::ResolvedCredentialCache;
 use crate::ccache::{CredentialV4, PrincipalV4};
 use crate::error::KrbError;
 use crate::proto::{KerberosCredentials, Name};
@@ -86,7 +87,6 @@ use keyutils::SpecialKeyring;
 use keyutils::{Key, Keyring};
 use keyutils_raw::{keyctl_get_keyring_id, keyctl_get_persistent};
 use std::fmt::Display;
-use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 use tracing::{debug, error, trace};
 
@@ -518,20 +518,8 @@ fn get_collection(residual: &Residual) -> Result<Keyring, KrbError> {
     get_or_create_keyring(&mut parent, &collection_name).map_err(|e| e.into())
 }
 
-pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
-    let residual = Residual::parse(ccache_name)?;
-    debug!(?residual, "Parsed residual");
-
-    let collection = get_collection(&residual)?;
-    trace!(?collection, "Resolved collection within anchor");
-
-    let kcc = KeyringCredentialCacheContext { residual };
-    Ok(Box::new(kcc))
-}
-
 struct KeyringCredentialCacheCollection {
     pub residual: Residual,
-    subsidiaries: Vec<Box<dyn CredentialCache>>,
 }
 
 impl CredentialCacheCollection for KeyringCredentialCacheCollection {
@@ -571,61 +559,52 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
         let cc = KeyringCredentialCacheContext { residual };
         Ok(Box::new(cc))
     }
-}
 
-impl Deref for KeyringCredentialCacheCollection {
-    type Target = Vec<Box<dyn CredentialCache>>;
-    fn deref(&self) -> &Self::Target {
-        &self.subsidiaries
-    }
-}
-impl DerefMut for KeyringCredentialCacheCollection {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.subsidiaries
-    }
-}
-
-pub(super) fn resolve_collection(
-    name: &str,
-) -> Result<Box<dyn CredentialCacheCollection<Target = Vec<Box<dyn CredentialCache>>>>, KrbError> {
-    trace!(?name, "Resolving collection");
-
-    let residual = Residual::parse(name)?;
-    debug!(?residual, "Parsed residual");
-
-    let collection = get_collection(&residual)?;
-    trace!(?collection, "Resolved collection within anchor");
-
-    // Now iterate subsidiaries
-    let (_, keyrings) = collection.read().map_err(|e| {
-        error!(?e, "Failed to read collection");
-        KrbError::CredentialCacheError
-    })?;
-    trace!(?keyrings, "Read subsidiaries withing collection");
-
-    let mut col = KeyringCredentialCacheCollection {
-        residual,
-        subsidiaries: vec![],
-    };
-    for k in keyrings {
-        let desc = k.description().map_err(|e| {
-            error!(?e, "Failed to get keyring description");
+    fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError> {
+        let mut subsidiaries: Vec<Box<dyn CredentialCache>> = vec![];
+        let collection = get_collection(&self.residual)?;
+        trace!(?collection, "Resolved collection within anchor");
+        let (_, keyrings) = collection.read().map_err(|e| {
+            error!(?e, "Failed to read collection");
             KrbError::CredentialCacheError
         })?;
-        trace!(?k, ?desc, "Got subsidiary description");
+        trace!(?keyrings, "Read subsidiaries withing collection");
 
-        let subsidiary_name = format!(
-            "KEYRING:{}:{}:{}",
-            col.residual.anchor.as_str(),
-            col.residual.collection.as_str(),
-            desc.description.as_str()
-        );
-        trace!(?subsidiary_name, "Resolving collection subisidiary");
-        if let Ok(c) = super::resolve(Some(&subsidiary_name)) {
-            col.deref_mut().push(c);
+        for k in keyrings {
+            let desc = k.description().map_err(|e| {
+                error!(?e, "Failed to get keyring description");
+                KrbError::CredentialCacheError
+            })?;
+            trace!(?k, ?desc, "Got subsidiary description");
+
+            let cc = KeyringCredentialCacheContext {
+                residual: Residual {
+                    anchor: self.residual.anchor.clone(),
+                    collection: self.residual.collection.clone(),
+                    subsidiary: Some(desc.description.clone()),
+                },
+            };
+            subsidiaries.push(Box::new(cc));
         }
+        Ok(subsidiaries)
     }
-    Ok(Box::new(col))
+}
+
+pub(super) fn resolve(ccache_name: &str) -> Result<ResolvedCredentialCache, KrbError> {
+    let residual = Residual::parse(ccache_name)?;
+    debug!(?residual, "Parsed residual");
+
+    let resolved = match &residual.subsidiary {
+        Some(_) => {
+            let cc = KeyringCredentialCacheContext { residual };
+            ResolvedCredentialCache::Subsidiary(Box::new(cc))
+        }
+        None => {
+            let cccol = KeyringCredentialCacheCollection { residual };
+            ResolvedCredentialCache::Collection(Box::new(cccol))
+        }
+    };
+    Ok(resolved)
 }
 
 #[cfg(test)]
