@@ -77,6 +77,14 @@ impl DirCredentialCacheCollection {
 }
 
 impl CredentialCacheCollection for DirCredentialCacheCollection {
+    fn cc_type(&self) -> String {
+        "DIR".to_string()
+    }
+
+    fn name(&self) -> Result<String, KrbError> {
+        self.primary()?.name()
+    }
+
     fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
         let primary = self.cccol_path.join("primary");
         match std::fs::exists(&primary) {
@@ -136,6 +144,16 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
         }
         error!("Failed to generate a random subsidiary name");
         Err(KrbError::CredentialCacheError)
+    }
+
+    fn switch(&mut self, ccache: &dyn CredentialCache) -> Result<(), KrbError> {
+        let primary_path = ccache.name()?;
+        let primary_path = PathBuf::from(primary_path);
+        let primary_name = primary_path
+            .file_name()
+            .ok_or(KrbError::CredentialCacheNotFound)?;
+        self.store_primary_subsidiary_name(&primary_name.to_string_lossy())?;
+        Ok(())
     }
 
     fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError> {
