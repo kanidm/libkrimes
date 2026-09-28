@@ -20,9 +20,6 @@ use chrono::Utc;
 use crypto_glue::der::{asn1::OctetString, Encode};
 use std::env;
 use std::fmt;
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::path::Path;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -544,7 +541,21 @@ pub trait CredentialCache {
     fn dump(&self) -> Result<(), KrbError>;
 }
 
-pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, KrbError> {
+pub trait CredentialCacheCollection {
+    fn primary(&mut self) -> Result<String, KrbError>;
+    fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError>;
+    fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError>;
+    fn try_iter(&self) -> Result<std::vec::IntoIter<Box<dyn CredentialCache>>, KrbError> {
+        Ok(self.subsidiaries()?.into_iter())
+    }
+}
+
+pub enum ResolvedCredentialCache {
+    Collection(Box<dyn CredentialCacheCollection>),
+    Subsidiary(Box<dyn CredentialCache>),
+}
+
+pub fn resolve(ccache_name: Option<&str>) -> Result<ResolvedCredentialCache, KrbError> {
     let ccache_name = parse_ccache_name(ccache_name)?;
     trace!(?ccache_name, "Resolving credential cache");
 
@@ -559,32 +570,6 @@ pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, Kr
     #[cfg(feature = "keyring")]
     if ccache_name.starts_with("KEYRING:") {
         return cc_keyring::resolve(ccache_name.as_str());
-    }
-
-    debug!(?ccache_name, "Unsupported credential cache type");
-    Err(KrbError::UnsupportedCredentialCacheType)
-}
-
-pub trait CredentialCacheCollection: Deref + DerefMut {
-    fn primary(&mut self) -> Result<String, KrbError>;
-    fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError>;
-}
-
-pub fn resolve_collection(
-    ccache_name: Option<&str>,
-) -> Result<Box<dyn CredentialCacheCollection<Target = Vec<Box<dyn CredentialCache>>>>, KrbError> {
-    let ccache_name = parse_ccache_name(ccache_name)?;
-    trace!(?ccache_name, "Resolving collection");
-
-    if ccache_name.starts_with("DIR:") {
-        let path = ccache_name.strip_prefix("DIR:").unwrap_or(&ccache_name);
-        let path = Path::new(path);
-        return cc_dir::resolve_collection(path);
-    }
-
-    #[cfg(feature = "keyring")]
-    if ccache_name.starts_with("KEYRING:") {
-        return cc_keyring::resolve_collection(ccache_name.as_str());
     }
 
     debug!(?ccache_name, "Unsupported credential cache type");
