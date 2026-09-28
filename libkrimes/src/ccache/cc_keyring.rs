@@ -315,7 +315,7 @@ fn store_primary_subsidiary_name(
     Ok(subsidiary_name.to_string())
 }
 
-pub(super) struct KeyringCredentialCacheContext {
+struct KeyringCredentialCacheContext {
     residual: Residual,
 }
 
@@ -523,8 +523,9 @@ struct KeyringCredentialCacheCollection {
 }
 
 impl CredentialCacheCollection for KeyringCredentialCacheCollection {
-    fn primary(&mut self) -> Result<String, KrbError> {
+    fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
         let mut collection = get_collection(&self.residual)?;
+
         let cc = match get_primary_subsidiary_name(&mut collection)? {
             Some(name) => {
                 let residual = Residual {
@@ -546,7 +547,7 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
             }
         };
 
-        cc.name()
+        Ok(Box::new(cc))
     }
 
     fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
