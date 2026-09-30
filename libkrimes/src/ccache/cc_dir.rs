@@ -4,9 +4,10 @@ use crate::error::KrbError;
 use crypto_glue::rand::{self, distr::Alphanumeric, RngExt};
 use std::fs::{DirBuilder, File, Permissions};
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{debug, error, trace};
 use walkdir::WalkDir;
 
@@ -17,7 +18,7 @@ struct DirCredentialCacheCollection {
 impl DirCredentialCacheCollection {
     fn create_ccache_dir(ccache_dir: &PathBuf) -> Result<Self, KrbError> {
         trace!(?ccache_dir, "Check collection path");
-        match std::fs::exists(ccache_dir) {
+        match ccache_dir.try_exists() {
             Ok(true) => match ccache_dir.is_dir() {
                 false => {
                     error!(?ccache_dir, "Not a directory");
@@ -53,7 +54,10 @@ impl DirCredentialCacheCollection {
         format!("krb{s}")
     }
 
-    fn store_primary_subsidiary_name(&self, subsidiary_name: &str) -> Result<(), KrbError> {
+    fn store_primary_subsidiary_name<P: AsRef<Path>>(
+        &self,
+        subsidiary_name: P,
+    ) -> Result<(), KrbError> {
         let primary_path = self.cccol_path.join("primary");
         let mut f = File::create(&primary_path).map_err(|e| {
             error!(?e, ?primary_path, "Failed to create primary file");
@@ -66,11 +70,12 @@ impl DirCredentialCacheCollection {
             KrbError::IoError
         })?;
 
-        let mut bytes = subsidiary_name.as_bytes().to_vec();
+        let subsidiary_path: &Path = subsidiary_name.as_ref();
+        let mut bytes = subsidiary_path.as_os_str().as_bytes().to_vec();
         bytes.extend("\n".as_bytes());
 
         f.write_all(bytes.as_slice()).map_err(|e| {
-            error!(?e, ?subsidiary_name, "Failed to write primary file");
+            error!(?e, ?subsidiary_path, "Failed to write primary file");
             KrbError::IoError
         })
     }
@@ -87,7 +92,7 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
 
     fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
         let primary = self.cccol_path.join("primary");
-        match std::fs::exists(&primary) {
+        match primary.try_exists() {
             Ok(true) => {
                 let mut f = File::open(&primary).map_err(|e| {
                     error!(?primary, ?e, "Failed to open file");
@@ -147,44 +152,40 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
     }
 
     fn switch(&mut self, ccache: &dyn CredentialCache) -> Result<(), KrbError> {
-        let primary_path = ccache.name()?;
-        let primary_path = PathBuf::from(primary_path);
+        let primary_path = ccache.name().map(PathBuf::from)?;
         let primary_name = primary_path
             .file_name()
             .ok_or(KrbError::CredentialCacheNotFound)?;
-        self.store_primary_subsidiary_name(&primary_name.to_string_lossy())?;
+        self.store_primary_subsidiary_name(primary_name)?;
         Ok(())
     }
 
     fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError> {
-        let mut subsidiaries: Vec<Box<dyn CredentialCache>> = vec![];
-        for entry in WalkDir::new(&self.cccol_path)
+        let subsidiaries: Vec<Box<dyn CredentialCache>> = WalkDir::new(&self.cccol_path)
             .into_iter()
-            .filter_map(|dir_ent| {
+            .map(|dir_ent| {
                 dir_ent
-                    .map_err(|err| {
-                        error!(?err, "Failed to read directory entry");
-                        KrbError::IoError
-                    })
+                    .inspect_err(|err| error!(?err, "Failed to read directory entry"))
                     .and_then(|dir_ent| {
                         dir_ent
                             .metadata()
-                            .map_err(|err| {
-                                error!(?err, "Failed to read directory entry metadata");
-                                KrbError::IoError
+                            .inspect_err(|err| {
+                                error!(?err, "Failed to read directory entry metadata")
                             })
                             .map(|dir_ent_meta| (dir_ent, dir_ent_meta))
                     })
-                    .ok()
+                    .map_err(|_| KrbError::IoError)
             })
-            .filter(|a| a.1.is_file() && a.0.file_name() != "primary")
-        {
-            let fcc = FileCredentialCacheContext {
-                cccol_path: Some(self.cccol_path.clone()),
-                path: entry.0.into_path(),
-            };
-            subsidiaries.push(Box::new(fcc));
-        }
+            .filter_map(|x| x.ok())
+            .filter_map(|entry| {
+                (entry.1.is_file() && entry.0.file_name() != "primary").then(|| {
+                    Box::new(FileCredentialCacheContext {
+                        cccol_path: Some(self.cccol_path.clone()),
+                        path: entry.0.into_path(),
+                    }) as Box<dyn CredentialCache>
+                })
+            })
+            .collect();
         Ok(subsidiaries)
     }
 }
@@ -200,8 +201,8 @@ pub(super) fn resolve(ccache_name: &str) -> Result<ResolvedCredentialCache, KrbE
         trace!(?ccache_name, "Collection with subsidiary");
         let path = ccache_name
             .strip_prefix(":")
-            .ok_or(KrbError::CredentialCacheError)?;
-        let path = PathBuf::from(path);
+            .ok_or(KrbError::CredentialCacheError)
+            .map(PathBuf::from)?;
 
         let collection_path = match path.parent() {
             Some(p) => Ok(PathBuf::from(p)),
@@ -249,10 +250,12 @@ mod tests {
     #[tokio::test]
     async fn test_ccache_dir_name() -> Result<(), KrbError> {
         // Residual without subsidiary -> primary subsidiary
-        let cccol_path = format!(
-            "/tmp/krime_test_cccol_{}",
-            DirCredentialCacheCollection::gen_random_subsidiary_name()
-        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cccol_path = dir
+            .path()
+            .join(DirCredentialCacheCollection::gen_random_subsidiary_name())
+            .to_string_lossy()
+            .to_string();
         let residual = format!("DIR:{}", cccol_path);
 
         let ResolvedCredentialCache::Collection(mut cccol) =
@@ -296,10 +299,12 @@ mod tests {
     /// exclude the `primary` pointer file.
     #[tokio::test]
     async fn test_ccache_dir_find_and_subsidiaries() -> Result<(), KrbError> {
-        let cccol_path = format!(
-            "/tmp/krime_test_find_{}",
-            DirCredentialCacheCollection::gen_random_subsidiary_name()
-        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cccol_path = dir
+            .path()
+            .join(DirCredentialCacheCollection::gen_random_subsidiary_name())
+            .to_string_lossy()
+            .to_string();
         let residual = format!("DIR:{}", cccol_path);
         let ResolvedCredentialCache::Collection(cccol) =
             crate::ccache::resolve(Some(residual.as_str()))?
@@ -354,11 +359,14 @@ mod tests {
 
         let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
 
-        let cccol_path = format!(
-            "/tmp/krime_test_dir_e2e_{}",
-            DirCredentialCacheCollection::gen_random_subsidiary_name()
-        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cccol_path = dir
+            .path()
+            .join(DirCredentialCacheCollection::gen_random_subsidiary_name())
+            .to_string_lossy()
+            .to_string();
         let residual = format!("DIR:{}", cccol_path);
+
         let ResolvedCredentialCache::Collection(cccol) =
             crate::ccache::resolve(Some(residual.as_str()))?
         else {
