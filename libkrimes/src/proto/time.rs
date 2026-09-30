@@ -108,6 +108,7 @@ impl AuthenticationTimeBound {
             start_time,
             end_time,
             auth_req.renew,
+            auth_req.until,
             maximum_renew_lifetime,
             auth_req.kdc_options,
         )?;
@@ -265,6 +266,7 @@ fn as_req_renew_until(
     start_time: SystemTime,
     end_time: SystemTime,
     requested_renew_until: Option<SystemTime>,
+    requested_end_time: SystemTime,
     maximum_renew_lifetime: Option<Duration>,
     kdc_options: KerberosFlags,
 ) -> Result<Option<SystemTime>, TimeBoundError> {
@@ -289,13 +291,28 @@ fn as_req_renew_until(
             // Requested a renew, but it's denied
             Err(TimeBoundError::RenewalNotAllowed)
         }
-        (None, _, false, true) => {
-            // The client has indicated that renewable is okay, but MIT KRB
-            // does not seem to handle this correctly and attempts to bind the
-            // renew time to its requested end time which is invalid.
-            // https://github.com/krb5/krb5/blob/master/src/lib/krb5/krb/get_in_tkt.c#L255
+        (None, None, false, true) => {
+            // Renewable OK requested, but we don't allow it by policy.
             Ok(None)
         }
+        (None, Some(maximum_renew_lifetime), false, true) => {
+            /*
+             * RFC 4120 section 2.9.1 says:
+
+             * The RENEWABLE-OK option indicates that the client will accept a
+             * renewable ticket if a ticket with the requested life cannot otherwise
+             * be provided.  If a ticket with the requested life cannot be provided,
+             * then the KDC MAY issue a renewable ticket with a renew-till equal to
+             * the requested endtime.  The value of the renew-till field MAY still
+             * be adjusted by site-determined limits or limits imposed by the
+             * individual principal or server.
+             */
+            let renew_until = start_time + maximum_renew_lifetime;
+            let renew_until = cmp::min(renew_until, requested_end_time);
+
+            Ok(Some(renew_until))
+        }
+
         (None, Some(maximum_renew_lifetime), true, false)
         | (None, Some(maximum_renew_lifetime), true, true) => {
             let renew_until = start_time + maximum_renew_lifetime;
