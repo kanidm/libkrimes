@@ -14,7 +14,7 @@ use std::fs::Permissions;
 use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, error, trace};
 
@@ -112,19 +112,12 @@ impl FileCredentialCache {
         Ok(ccache)
     }
 
-    pub fn load(path: &PathBuf) -> Result<Self, KrbError> {
-        let f = File::open(path).map_err(|io_err| {
-            error!(?io_err, "Unable to open file at {:#?}", path);
-            KrbError::IoError
-        })?;
-
-        let mut reader = BufReader::new(f);
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).map_err(|e| {
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, KrbError> {
+        let path = path.as_ref();
+        let buffer = std::fs::read(path).map_err(|e| {
             error!(?path, ?e, "Failed to read credential cache");
             KrbError::IoError
         })?;
-
         FileCredentialCache::read(&buffer)
     }
 }
