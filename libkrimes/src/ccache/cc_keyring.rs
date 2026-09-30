@@ -640,13 +640,28 @@ mod tests {
     use super::*;
     use crate::ccache::tests::{klist, klist_all, skip_env};
 
-    fn cleanup_session_collection(collection: &str) -> Result<(), KrbError> {
-        let collection = format!("_krb_{}", collection);
-        let mut col = Keyring::attach_or_create(SpecialKeyring::Session)?;
-        if let Ok(k) = col.search_for_keyring(collection.as_str(), None) {
-            col.unlink_keyring(&k).ok();
+    // Guard to cleanup the collection on drop
+    struct ResidualGuard {
+        residual: Residual,
+    }
+
+    impl ResidualGuard {
+        fn new(residual: &Residual) -> Self {
+            Self {
+                residual: residual.clone(),
+            }
         }
-        Ok(())
+    }
+
+    impl Drop for ResidualGuard {
+        fn drop(&mut self) {
+            get_anchor(&self.residual).ok().and_then(|mut anchor| {
+                anchor
+                    .search_for_keyring(format!("_krb_{}", self.residual.collection).as_str(), None)
+                    .ok()
+                    .and_then(|col| anchor.unlink_keyring(&col).ok())
+            });
+        }
     }
 
     #[tokio::test]
@@ -702,6 +717,7 @@ mod tests {
             collection: "krime_test_skew".to_string(),
             subsidiary: Some("s1".to_string()),
         };
+        let _guard = ResidualGuard::new(&residual);
 
         // Guard against environments without a usable session keyring.
         let Ok(mut subsidiary) = get_subsidiary(&residual) else {
@@ -722,9 +738,6 @@ mod tests {
         assert_eq!(offsets.secs, 7);
         assert_eq!(offsets.usecs, 500);
 
-        subsidiary.clear().ok();
-        cleanup_session_collection(&residual.collection).ok();
-
         Ok(())
     }
 
@@ -737,12 +750,12 @@ mod tests {
         }
 
         let collection = "krime_test_roundtrip";
-        let residual = format!("KEYRING:session:{collection}");
+        let ccache_name = format!("KEYRING:session:{collection}");
+        let residual = Residual::parse(&ccache_name)?;
+        let _guard = ResidualGuard::new(&residual);
 
-        crate::ccache::tests::store_and_verify_roundtrip(&residual).await?;
+        crate::ccache::tests::store_and_verify_roundtrip(&ccache_name).await?;
 
-        // Cleanup the collection keyring.
-        cleanup_session_collection(collection)?;
         Ok(())
     }
 
@@ -758,6 +771,8 @@ mod tests {
 
         let collection = "krime_test_e2e";
         let ccache_name = format!("KEYRING:session:{collection}");
+        let residual = Residual::parse(&ccache_name)?;
+        let _guard = ResidualGuard::new(&residual);
 
         let Ok(resolved) = crate::ccache::resolve(Some(ccache_name.as_str())) else {
             tracing::warn!("Skipping: keyring resolve failed");
@@ -784,15 +799,15 @@ mod tests {
             "{output}"
         );
 
-        // Cleanup the collection keyring.
-        cleanup_session_collection(collection).ok();
         Ok(())
     }
 
     #[tokio::test]
     async fn test_ccache_keyring_primary() -> Result<(), KrbError> {
         // No subsidiary in residual
-        let ccache_name = Some("KEYRING:session:c1");
+        let ccache_name = "KEYRING:session:c1";
+        let residual = Residual::parse(ccache_name)?;
+        let _guard = ResidualGuard::new(&residual);
 
         let p1 = Name::Principal {
             name: "p1".to_string(),
@@ -807,7 +822,7 @@ mod tests {
             realm: "EXAMPLE.COM".to_string(),
         };
 
-        let ResolvedCredentialCache::Collection(cccol) = crate::ccache::resolve(ccache_name)?
+        let ResolvedCredentialCache::Collection(cccol) = crate::ccache::resolve(Some(ccache_name))?
         else {
             panic!("Collection expected");
         };
@@ -884,9 +899,6 @@ mod tests {
         assert!(!output.contains("p1@EXAMPLE.COM"));
         assert!(!output.contains("p2@EXAMPLE.COM"));
         assert!(output.contains("p3@EXAMPLE.COM"));
-
-        // Remove collection keyring
-        cleanup_session_collection("c1").ok();
 
         Ok(())
     }
