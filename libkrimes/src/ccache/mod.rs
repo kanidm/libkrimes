@@ -529,7 +529,7 @@ fn parse_ccache_name(ccache: Option<&str>) -> Result<String, KrbError> {
 }
 
 pub trait CredentialCache {
-    fn cc_type(&self) -> String;
+    fn cc_type(&self) -> &'static str;
     fn name(&self) -> Result<String, KrbError>;
     fn full_name(&self) -> Result<String, KrbError> {
         Ok(format!("{}:{}", self.cc_type(), self.name()?))
@@ -542,7 +542,7 @@ pub trait CredentialCache {
 }
 
 pub trait CredentialCacheCollection {
-    fn cc_type(&self) -> String;
+    fn cc_type(&self) -> &'static str;
     fn name(&self) -> Result<String, KrbError>;
     fn full_name(&self) -> Result<String, KrbError> {
         Ok(format!("{}:{}", self.cc_type(), self.name()?))

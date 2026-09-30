@@ -136,10 +136,10 @@ pub(super) struct FileCredentialCacheContext {
 }
 
 impl CredentialCache for FileCredentialCacheContext {
-    fn cc_type(&self) -> String {
+    fn cc_type(&self) -> &'static str {
         match &self.cccol_path {
-            Some(_) => "DIR".to_string(),
-            None => "FILE".to_string(),
+            Some(_) => "DIR",
+            None => "FILE",
         }
     }
 
