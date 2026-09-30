@@ -82,8 +82,8 @@ impl DirCredentialCacheCollection {
 }
 
 impl CredentialCacheCollection for DirCredentialCacheCollection {
-    fn cc_type(&self) -> String {
-        "DIR".to_string()
+    fn cc_type(&self) -> &'static str {
+        "DIR"
     }
 
     fn name(&self) -> Result<String, KrbError> {

@@ -394,8 +394,8 @@ impl KeyringCredentialCacheContext {
 }
 
 impl CredentialCache for KeyringCredentialCacheContext {
-    fn cc_type(&self) -> String {
-        "KEYRING".to_string()
+    fn cc_type(&self) -> &'static str {
+        "KEYRING"
     }
 
     fn name(&self) -> Result<String, KrbError> {
@@ -533,8 +533,8 @@ impl KeyringCredentialCacheCollection {
 }
 
 impl CredentialCacheCollection for KeyringCredentialCacheCollection {
-    fn cc_type(&self) -> String {
-        "KEYRING".to_string()
+    fn cc_type(&self) -> &'static str {
+        "KEYRING"
     }
 
     fn name(&self) -> Result<String, KrbError> {
