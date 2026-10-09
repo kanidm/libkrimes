@@ -114,8 +114,10 @@ impl Display for Residual {
     }
 }
 
-impl Residual {
-    fn parse(residual: &str) -> Result<Self, KrbError> {
+impl TryFrom<&str> for Residual {
+    type Error = KrbError;
+
+    fn try_from(residual: &str) -> Result<Self, Self::Error> {
         trace!(?residual, "Parsing residual");
 
         if !residual.starts_with("KEYRING:") {
@@ -153,6 +155,20 @@ impl Residual {
             collection: collection.to_string(),
             subsidiary,
         })
+    }
+}
+
+impl TryFrom<OsString> for Residual {
+    type Error = KrbError;
+
+    fn try_from(value: OsString) -> Result<Self, Self::Error> {
+        value
+            .into_string()
+            .map_err(|e| {
+                warn!("{} is not a valid UTF-8 string", e.display());
+                KrbError::CredentialCacheError
+            })
+            .and_then(|x| Residual::try_from(x.as_str()))
     }
 }
 
@@ -322,7 +338,7 @@ fn get_anchor(residual: &Residual) -> Result<Keyring, KrbError> {
             let uid = match residual.collection.parse::<u32>() {
                 Ok(uid) => uid,
                 Err(e) => {
-                    error!(?residual.collection, ?e, "Failed to parse collection name into uid");
+                    error!(?residual.collection, ?e, "Failed to try_from collection name into uid");
                     return Err(KrbError::CredentialCacheError);
                 }
             };
@@ -583,13 +599,7 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
     fn switch(&mut self, ccache: &dyn CredentialCache) -> Result<(), KrbError> {
         let new_primary_name = ccache
             .full_name()
-            .map(|x| {
-                x.into_string().map_err(|e| {
-                    warn!("{} is not a valid UTF-8 string", e.display());
-                    KrbError::CredentialCacheError
-                })
-            })?
-            .and_then(|x| Residual::parse(&x))
+            .and_then(Residual::try_from)
             .map(|x| x.subsidiary)?
             .ok_or(KrbError::CredentialCacheNotFound)?;
         self.store_primary_subsidiary_name(&new_primary_name)
@@ -626,12 +636,8 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
 }
 
 pub(super) fn resolve(ccache_name: &OsString) -> Result<ResolvedCredentialCache, KrbError> {
-    let ccache_name = ccache_name.to_owned().into_string().map_err(|e| {
-        warn!("'{}' is not a valid UTF-8 string", e.display());
-        KrbError::CredentialCacheError
-    })?;
-    let residual = Residual::parse(&ccache_name)?;
-    debug!(?residual, "Parsed residual");
+    let residual = Residual::try_from(ccache_name.to_owned())?;
+    debug!(?residual, "try_fromd residual");
 
     let resolved = match &residual.subsidiary {
         Some(_) => {
@@ -676,14 +682,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ccache_keyring_residual_parse() -> Result<(), KrbError> {
-        assert!(Residual::parse("KEYRING:session").is_err());
-        assert!(Residual::parse("KEYRING:session:").is_err());
+    async fn test_ccache_keyring_residual_try_from() -> Result<(), KrbError> {
+        assert!(Residual::try_from("KEYRING:session").is_err());
+        assert!(Residual::try_from("KEYRING:session:").is_err());
         // Missing/empty anchor
-        assert!(Residual::parse("KEYRING::1000").is_err());
+        assert!(Residual::try_from("KEYRING::1000").is_err());
         // Non-KEYRING prefix
-        assert!(Residual::parse("FILE:/tmp/foo").is_err());
-        let residual = Residual::parse("KEYRING:session:1000")?;
+        assert!(Residual::try_from("FILE:/tmp/foo").is_err());
+        let residual = Residual::try_from("KEYRING:session:1000")?;
         assert_eq!(
             residual,
             Residual {
@@ -692,7 +698,7 @@ mod tests {
                 subsidiary: None
             }
         );
-        let residual = Residual::parse("KEYRING:session:1000:")?;
+        let residual = Residual::try_from("KEYRING:session:1000:")?;
         assert_eq!(
             residual,
             Residual {
@@ -701,7 +707,7 @@ mod tests {
                 subsidiary: None
             }
         );
-        let residual = Residual::parse("KEYRING:session:1000:foo")?;
+        let residual = Residual::try_from("KEYRING:session:1000:foo")?;
         assert_eq!(
             residual,
             Residual {
@@ -710,7 +716,7 @@ mod tests {
                 subsidiary: Some("foo".to_string())
             }
         );
-        // Display round-trips back to the parsed form.
+        // Display round-trips back to the try_fromd form.
         assert_eq!(residual.to_string(), "session:1000:foo");
         Ok(())
     }
@@ -760,11 +766,10 @@ mod tests {
             return Ok(());
         }
 
-        let ccache_name = "KEYRING:session:krime_test_roundtrip";
-        let residual = Residual::parse(&ccache_name)?;
+        let ccache_name = OsString::from("KEYRING:session:krime_test_roundtrip");
+        let residual = Residual::try_from(ccache_name.clone())?;
         let _guard = ResidualGuard::new(&residual);
 
-        let ccache_name = OsString::from(ccache_name);
         crate::ccache::tests::store_and_verify_roundtrip(&ccache_name).await?;
 
         Ok(())
@@ -780,12 +785,10 @@ mod tests {
             return Ok(());
         }
 
-        let collection = "krime_test_e2e";
-        let ccache_name = format!("KEYRING:session:{collection}");
-        let residual = Residual::parse(&ccache_name)?;
+        let ccache_name = OsString::from("KEYRING:session:krime_test_e2e");
+        let residual = Residual::try_from(ccache_name.clone())?;
         let _guard = ResidualGuard::new(&residual);
 
-        let ccache_name = OsString::from(ccache_name);
         let ResolvedCredentialCache::Collection(cccol) =
             crate::ccache::resolve(Some(&ccache_name))?
         else {
@@ -816,7 +819,7 @@ mod tests {
     async fn test_ccache_keyring_primary() -> Result<(), KrbError> {
         // No subsidiary in residual
         let ccache_name = "KEYRING:session:c1";
-        let residual = Residual::parse(ccache_name)?;
+        let residual = Residual::try_from(ccache_name)?;
         let _guard = ResidualGuard::new(&residual);
 
         let p1 = Name::Principal {
