@@ -1,4 +1,5 @@
 use super::CredentialCache;
+use super::OsStringExtensions;
 use crate::ccache::{Credential, CredentialV4, Principal, PrincipalV4, ResolvedCredentialCache};
 use crate::error::KrbError;
 use crate::proto::{KerberosCredentials, Name};
@@ -7,6 +8,7 @@ use binrw::io::TakeSeekExt;
 use binrw::BinReaderExt;
 use binrw::BinWrite;
 use binrw::{binread, binwrite};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::fs::File;
@@ -143,18 +145,20 @@ impl CredentialCache for FileCredentialCacheContext {
         }
     }
 
-    fn name(&self) -> Result<String, KrbError> {
+    fn name(&self) -> Result<OsString, KrbError> {
         let name = match &self.cccol_path {
             Some(cccol) => {
                 // This is a subsidiary cache in a DIR collection
                 let file = self
                     .path
                     .file_name()
-                    .map(|x| x.to_string_lossy().to_string())
                     .ok_or(KrbError::CredentialCacheNotFound)?;
-                format!(":{}/{}", cccol.to_string_lossy(), file)
+                let full = cccol.join(file);
+                let mut prefix = OsString::from(":");
+                prefix.push(full.as_os_str());
+                prefix
             }
-            None => self.path.to_string_lossy().to_string(),
+            None => self.path.as_os_str().to_owned(),
         };
         Ok(name)
     }
@@ -304,9 +308,11 @@ impl CredentialCache for FileCredentialCacheContext {
     }
 }
 
-pub(super) fn resolve(ccache_name: &str) -> Result<ResolvedCredentialCache, KrbError> {
+pub(super) fn resolve(ccache_name: &OsString) -> Result<ResolvedCredentialCache, KrbError> {
     trace!(?ccache_name, "Resolving file credential cache");
-    let path = ccache_name.strip_prefix("FILE:").unwrap_or(ccache_name);
+    let path = ccache_name
+        .strip_prefix_str("FILE:")
+        .ok_or(KrbError::UnsupportedCredentialCacheType)?;
     trace!(?path, "Resolved file credential cache");
 
     let path = PathBuf::from(&path);
@@ -354,7 +360,8 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("krb5cc_rt");
-        let ccache_name = format!("FILE:{}", path.to_string_lossy());
+        let mut ccache_name = OsString::from("FILE:");
+        ccache_name.push(path);
 
         crate::ccache::tests::store_and_verify_roundtrip(&ccache_name).await
     }
@@ -419,10 +426,11 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("krb5cc_e2e");
-        let ccache_name = format!("FILE:{}", path.to_string_lossy());
+        let mut ccache_name = OsString::from("FILE:");
+        ccache_name.push(&path);
 
         let ResolvedCredentialCache::Subsidiary(mut ccache) =
-            crate::ccache::resolve(Some(ccache_name.as_str()))?
+            crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Expected a subsidiary")
         };

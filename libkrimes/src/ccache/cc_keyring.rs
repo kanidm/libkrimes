@@ -85,9 +85,10 @@ use errno::Errno;
 use keyutils::keytypes::user::User;
 use keyutils::{Keyring, SpecialKeyring};
 use keyutils_raw::{keyctl_get_keyring_id, keyctl_get_persistent};
+use std::ffi::OsString;
 use std::fmt::Display;
 use std::time::Duration;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 impl From<errno::Errno> for KrbError {
     fn from(value: errno::Errno) -> Self {
@@ -398,8 +399,8 @@ impl CredentialCache for KeyringCredentialCacheContext {
         "KEYRING"
     }
 
-    fn name(&self) -> Result<String, KrbError> {
-        Ok(self.residual.to_string())
+    fn name(&self) -> Result<OsString, KrbError> {
+        Ok(OsString::from(self.residual.to_string()))
     }
 
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
@@ -537,7 +538,7 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
         "KEYRING"
     }
 
-    fn name(&self) -> Result<String, KrbError> {
+    fn name(&self) -> Result<OsString, KrbError> {
         self.primary()?.name()
     }
 
@@ -582,6 +583,12 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
     fn switch(&mut self, ccache: &dyn CredentialCache) -> Result<(), KrbError> {
         let new_primary_name = ccache
             .full_name()
+            .map(|x| {
+                x.into_string().map_err(|e| {
+                    warn!("{} is not a valid UTF-8 string", e.display());
+                    KrbError::CredentialCacheError
+                })
+            })?
             .and_then(|x| Residual::parse(&x))
             .map(|x| x.subsidiary)?
             .ok_or(KrbError::CredentialCacheNotFound)?;
@@ -618,8 +625,12 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
     }
 }
 
-pub(super) fn resolve(ccache_name: &str) -> Result<ResolvedCredentialCache, KrbError> {
-    let residual = Residual::parse(ccache_name)?;
+pub(super) fn resolve(ccache_name: &OsString) -> Result<ResolvedCredentialCache, KrbError> {
+    let ccache_name = ccache_name.to_owned().into_string().map_err(|e| {
+        warn!("'{}' is not a valid UTF-8 string", e.display());
+        KrbError::CredentialCacheError
+    })?;
+    let residual = Residual::parse(&ccache_name)?;
     debug!(?residual, "Parsed residual");
 
     let resolved = match &residual.subsidiary {
@@ -749,11 +760,11 @@ mod tests {
             return Ok(());
         }
 
-        let collection = "krime_test_roundtrip";
-        let ccache_name = format!("KEYRING:session:{collection}");
+        let ccache_name = "KEYRING:session:krime_test_roundtrip";
         let residual = Residual::parse(&ccache_name)?;
         let _guard = ResidualGuard::new(&residual);
 
+        let ccache_name = OsString::from(ccache_name);
         crate::ccache::tests::store_and_verify_roundtrip(&ccache_name).await?;
 
         Ok(())
@@ -774,11 +785,10 @@ mod tests {
         let residual = Residual::parse(&ccache_name)?;
         let _guard = ResidualGuard::new(&residual);
 
-        let Ok(resolved) = crate::ccache::resolve(Some(ccache_name.as_str())) else {
-            tracing::warn!("Skipping: keyring resolve failed");
-            return Ok(());
-        };
-        let ResolvedCredentialCache::Collection(cccol) = resolved else {
+        let ccache_name = OsString::from(ccache_name);
+        let ResolvedCredentialCache::Collection(cccol) =
+            crate::ccache::resolve(Some(&ccache_name))?
+        else {
             panic!("Collection expected");
         };
 
@@ -822,7 +832,9 @@ mod tests {
             realm: "EXAMPLE.COM".to_string(),
         };
 
-        let ResolvedCredentialCache::Collection(cccol) = crate::ccache::resolve(Some(ccache_name))?
+        let ccache_name = OsString::from(ccache_name);
+        let ResolvedCredentialCache::Collection(cccol) =
+            crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Collection expected");
         };
@@ -848,8 +860,9 @@ mod tests {
         assert_eq!(primary, "c1");
 
         // Subsidiary specified, primary not overrided
-        let ccache_name = Some("KEYRING:session:c1:p3");
-        let ResolvedCredentialCache::Subsidiary(mut p3_cc) = crate::ccache::resolve(ccache_name)?
+        let ccache_name = OsString::from("KEYRING:session:c1:p3");
+        let ResolvedCredentialCache::Subsidiary(mut p3_cc) =
+            crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Subsidiary expected")
         };
@@ -858,22 +871,22 @@ mod tests {
         assert_eq!(primary, "c1");
 
         // At this point, collection has 3 subsidiaries
-        let ccache_name = "KEYRING:session:c1";
-        let output = klist_all(ccache_name);
+        let ccache_name = OsString::from("KEYRING:session:c1");
+        let output = klist_all(&ccache_name);
         assert!(output.contains("p1@EXAMPLE.COM"));
         assert!(output.contains("p2@EXAMPLE.COM"));
         assert!(output.contains("p3@EXAMPLE.COM"));
 
         // Destroy the primary subsidiary
-        let ccache_name = "KEYRING:session:c1:c1";
+        let ccache_name = OsString::from("KEYRING:session:c1:c1");
         let ResolvedCredentialCache::Subsidiary(mut p1_cc) =
-            crate::ccache::resolve(Some(ccache_name))?
+            crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Subsidiary expected")
         };
         p1_cc.destroy()?;
-        let ccache_name = "KEYRING:session:c1";
-        let output = klist_all(ccache_name);
+        let ccache_name = OsString::from("KEYRING:session:c1");
+        let output = klist_all(&ccache_name);
         assert!(!output.contains("p1@EXAMPLE.COM"));
         assert!(output.contains("p2@EXAMPLE.COM"));
         assert!(output.contains("p3@EXAMPLE.COM"));
@@ -883,9 +896,9 @@ mod tests {
         assert_eq!(primary, "c1");
 
         // Swith the primary and destroy without specifying the subsidiary has to delete the primary.
-        let ccache_name = "KEYRING:session:c1";
+        let ccache_name = OsString::from("KEYRING:session:c1");
         let ResolvedCredentialCache::Collection(mut cccol) =
-            crate::ccache::resolve(Some(ccache_name))?
+            crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Collection expected")
         };
@@ -895,7 +908,7 @@ mod tests {
         assert!(primary != "c1");
 
         cccol.destroy()?;
-        let output = klist_all(ccache_name);
+        let output = klist_all(&ccache_name);
         assert!(!output.contains("p1@EXAMPLE.COM"));
         assert!(!output.contains("p2@EXAMPLE.COM"));
         assert!(output.contains("p3@EXAMPLE.COM"));

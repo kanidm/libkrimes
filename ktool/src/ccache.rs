@@ -1,13 +1,23 @@
 use crate::opt::CcacheDumpOpt;
 use libkrimes::ccache::ResolvedCredentialCache;
+use std::ffi::OsString;
 
 pub(crate) fn dump(opt: CcacheDumpOpt) {
-    let ccache = libkrimes::ccache::resolve(opt.common.name.as_deref()).unwrap();
+    let ccache_name = opt.common.name.as_deref().map(OsString::from);
+
+    let Ok(ccache) = libkrimes::ccache::resolve(ccache_name.as_ref()).inspect_err(|e| {
+        print!("Failed to resolve credential cache: {e:?}");
+    }) else {
+        return;
+    };
+
     match ccache {
         ResolvedCredentialCache::Collection(cccol) => {
             if let Ok(primary) = cccol.primary() {
                 match primary.name() {
-                    Ok(name) => print!("Primary credential cache is {name}\n\n"),
+                    Ok(name) => {
+                        print!("Primary credential cache is {}\n\n", name.display())
+                    }
                     Err(e) => print!("Failed to read primary subsidiary name: {:?}\n\n", e),
                 }
             }
@@ -26,5 +36,5 @@ pub(crate) fn dump(opt: CcacheDumpOpt) {
                 println!("Error: {e:?}");
             }
         }
-    }
+    };
 }
