@@ -297,16 +297,16 @@ fn as_req_renew_until(
         }
         (None, Some(maximum_renew_lifetime), false, true) => {
             /*
-             * RFC 4120 section 2.9.1 says:
+            * RFC 4120 section 2.9.1 says:
 
-             * The RENEWABLE-OK option indicates that the client will accept a
-             * renewable ticket if a ticket with the requested life cannot otherwise
-             * be provided.  If a ticket with the requested life cannot be provided,
-             * then the KDC MAY issue a renewable ticket with a renew-till equal to
-             * the requested endtime.  The value of the renew-till field MAY still
-             * be adjusted by site-determined limits or limits imposed by the
-             * individual principal or server.
-             */
+            * The RENEWABLE-OK option indicates that the client will accept a
+            * renewable ticket if a ticket with the requested life cannot otherwise
+            * be provided.  If a ticket with the requested life cannot be provided,
+            * then the KDC MAY issue a renewable ticket with a renew-till equal to
+            * the requested endtime.  The value of the renew-till field MAY still
+            * be adjusted by site-determined limits or limits imposed by the
+            * individual principal or server.
+            */
             let renew_until = start_time + maximum_renew_lifetime;
             let renew_until = cmp::min(renew_until, requested_end_time);
 
