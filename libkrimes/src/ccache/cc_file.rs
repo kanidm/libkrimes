@@ -1,5 +1,6 @@
 use super::CredentialCache;
-use crate::ccache::{Credential, CredentialV4, Principal, PrincipalV4};
+use super::OsStringExtensions;
+use crate::ccache::{Credential, CredentialV4, Principal, PrincipalV4, ResolvedCredentialCache};
 use crate::error::KrbError;
 use crate::proto::{KerberosCredentials, Name};
 use binrw::helpers::until_eof;
@@ -7,6 +8,7 @@ use binrw::io::TakeSeekExt;
 use binrw::BinReaderExt;
 use binrw::BinWrite;
 use binrw::{binread, binwrite};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::fs::File;
@@ -14,7 +16,7 @@ use std::fs::Permissions;
 use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, error, trace};
 
@@ -111,6 +113,15 @@ impl FileCredentialCache {
         })?;
         Ok(ccache)
     }
+
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, KrbError> {
+        let path = path.as_ref();
+        let buffer = std::fs::read(path).map_err(|e| {
+            error!(?path, ?e, "Failed to read credential cache");
+            KrbError::IoError
+        })?;
+        FileCredentialCache::read(&buffer)
+    }
 }
 
 impl fmt::Display for FileCredentialCache {
@@ -122,12 +133,34 @@ impl fmt::Display for FileCredentialCache {
 }
 
 pub(super) struct FileCredentialCacheContext {
+    pub cccol_path: Option<PathBuf>,
     pub path: PathBuf,
 }
 
 impl CredentialCache for FileCredentialCacheContext {
-    fn name(&mut self) -> Result<String, KrbError> {
-        Ok(self.path.to_string_lossy().to_string())
+    fn cc_type(&self) -> &'static str {
+        match &self.cccol_path {
+            Some(_) => "DIR",
+            None => "FILE",
+        }
+    }
+
+    fn name(&self) -> Result<OsString, KrbError> {
+        let name = match &self.cccol_path {
+            Some(cccol) => {
+                // This is a subsidiary cache in a DIR collection
+                let file = self
+                    .path
+                    .file_name()
+                    .ok_or(KrbError::CredentialCacheNotFound)?;
+                let full = cccol.join(file);
+                let mut prefix = OsString::from(":");
+                prefix.push(full.as_os_str());
+                prefix
+            }
+            None => self.path.as_os_str().to_owned(),
+        };
+        Ok(name)
     }
 
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError> {
@@ -257,44 +290,49 @@ impl CredentialCache for FileCredentialCacheContext {
         Ok(())
     }
 
-    fn dump(&mut self) -> Result<(), KrbError> {
-        let f = File::open(&self.path).map_err(|io_err| {
-            error!(?io_err, "Unable to open file at {:#?}", &self.path);
-            KrbError::IoError
-        })?;
-
-        let mut reader = BufReader::new(f);
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).map_err(|e| {
-            error!(?self.path, ?e, "Failed to read credential cache");
-            KrbError::IoError
-        })?;
-
-        let ccache = FileCredentialCache::read(&buffer)?;
-        trace!(?ccache, "Credential cache successfully loaded");
+    fn dump(&self) -> Result<(), KrbError> {
+        let ccache = FileCredentialCache::load(&self.path)?;
 
         println!("{ccache}");
 
         Ok(())
     }
+
+    fn principal(&self) -> Result<Name, KrbError> {
+        let ccache = FileCredentialCache::load(&self.path)?;
+        match &ccache {
+            FileCredentialCache::V4(v4) => match &v4.principal {
+                Principal::V4(pv4) => pv4.try_into(),
+            },
+        }
+    }
 }
 
-pub(super) fn resolve(ccache_name: &str) -> Result<Box<dyn CredentialCache>, KrbError> {
+pub(super) fn resolve(ccache_name: &OsString) -> Result<ResolvedCredentialCache, KrbError> {
     trace!(?ccache_name, "Resolving file credential cache");
-    let path = ccache_name.strip_prefix("FILE:").unwrap_or(ccache_name);
+    let path = ccache_name
+        .strip_prefix_str("FILE:")
+        .ok_or(KrbError::UnsupportedCredentialCacheType)?;
     trace!(?path, "Resolved file credential cache");
 
     let path = PathBuf::from(&path);
 
-    let fcc = FileCredentialCacheContext { path };
-    Ok(Box::new(fcc))
+    let fcc = FileCredentialCacheContext {
+        cccol_path: None,
+        path,
+    };
+    let fcc = Box::new(fcc);
+    Ok(ResolvedCredentialCache::Subsidiary(fcc))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccache::tests::{klist, skip_env};
+    use crate::ccache::ResolvedCredentialCache;
     use binrw::BinWrite;
 
+    // Test name with and without cccol
     #[tokio::test]
     async fn test_ccache_file_read_write() -> Result<(), KrbError> {
         /*
@@ -310,6 +348,121 @@ mod tests {
         let krime_buf = c.into_inner();
 
         assert_eq!(krime_buf, mit_buf);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ccache_file_roundtrip() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+        if skip_env() {
+            return Ok(());
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("krb5cc_rt");
+        let mut ccache_name = OsString::from("FILE:");
+        ccache_name.push(path);
+
+        crate::ccache::tests::store_and_verify_roundtrip(&ccache_name).await
+    }
+
+    /// The clock-skew header (tag 1) must be written as 8 bytes (secs + usecs)
+    /// and survive a reload, matching MIT's KDC-time-offset header semantics.
+    #[tokio::test]
+    async fn test_ccache_file_header_clock_skew() -> Result<(), KrbError> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("krb5cc_skew");
+        let name = Name::Principal {
+            name: "testuser".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+
+        let mut ctx = FileCredentialCacheContext {
+            cccol_path: None,
+            path: path.clone(),
+        };
+        ctx.init(&name, Some(Duration::new(42, 123_000)))?;
+
+        let fcc = FileCredentialCache::load(&path)?;
+        let FileCredentialCache::V4(v4) = fcc;
+        assert_eq!(v4.header.fields.len(), 1);
+        let field = &v4.header.fields[0];
+        assert_eq!(field.tag, 1);
+        assert_eq!(field.value.len(), 8);
+        let secs = u32::from_be_bytes(field.value[0..4].try_into().unwrap());
+        let usecs = u32::from_be_bytes(field.value[4..8].try_into().unwrap());
+        assert_eq!(secs, 42);
+        assert_eq!(usecs, 123);
+
+        // principal round-trips
+        assert_eq!(ctx.principal()?, name);
+        Ok(())
+    }
+
+    /// destroy() on a path that does not exist must be a no-op returning Ok.
+    #[tokio::test]
+    async fn test_ccache_file_destroy_missing_is_noop() -> Result<(), KrbError> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("does_not_exist");
+        let mut ctx = FileCredentialCacheContext {
+            cccol_path: None,
+            path,
+        };
+        ctx.destroy()?;
+        Ok(())
+    }
+
+    /// End-to-end with a real TGT: init -> store -> 0o600 perms -> principal
+    /// matches -> klist reads it -> destroy removes the file. Also verifies
+    /// that a second store() appends a credential rather than overwriting.
+    #[tokio::test]
+    async fn test_ccache_file_store_e2e() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+        if skip_env() {
+            return Ok(());
+        }
+
+        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("krb5cc_e2e");
+        let mut ccache_name = OsString::from("FILE:");
+        ccache_name.push(&path);
+
+        let ResolvedCredentialCache::Subsidiary(mut ccache) =
+            crate::ccache::resolve(Some(&ccache_name))?
+        else {
+            panic!("Expected a subsidiary")
+        };
+
+        ccache.init(&creds.name, None)?;
+        ccache.store(&creds)?;
+
+        assert!(std::fs::exists(&path).expect("exists"));
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "ccache must be mode 0o600");
+
+        assert_eq!(ccache.principal()?, creds.name);
+
+        let output = klist(&ccache_name);
+        assert!(output.contains("testuser@EXAMPLE.COM"), "{output}");
+        assert!(
+            output.contains("krbtgt/EXAMPLE.COM@EXAMPLE.COM"),
+            "{output}"
+        );
+
+        // Storing a second credential appends (count grows to 2).
+        ccache.store(&creds)?;
+        let fcc = FileCredentialCache::load(&path)?;
+        let FileCredentialCache::V4(v4) = fcc;
+        assert_eq!(v4.credentials.len(), 2, "store() must append credentials");
+
+        ccache.destroy()?;
+        assert!(!std::fs::exists(&path).expect("exists"));
         Ok(())
     }
 }

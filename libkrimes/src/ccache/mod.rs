@@ -19,10 +19,8 @@ use chrono::prelude::DateTime;
 use chrono::Utc;
 use crypto_glue::der::{asn1::OctetString, Encode};
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::path::Path;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -499,86 +497,156 @@ impl TryFrom<&SessionKey> for KeyBlockV4 {
 }
 
 #[cfg(feature = "keyring")]
-fn default_ccache_name() -> String {
-    "KEYRING:persistent:%{uid}".to_string()
+fn default_ccache_name() -> OsString {
+    "KEYRING:persistent:%{uid}".into()
 }
 
 #[cfg(not(feature = "keyring"))]
-fn default_ccache_name() -> String {
-    "FILE:/tmp/krb5cc_%{uid}".to_string()
+fn default_ccache_name() -> OsString {
+    "FILE:/tmp/krb5cc_%{uid}".into()
 }
 
-fn parse_ccache_name(ccache: Option<&str>) -> Result<String, KrbError> {
+trait OsStringExtensions {
+    fn starts_with_str(&self, prefix: &str) -> bool;
+    fn strip_prefix_str(&self, prefix: &str) -> Option<OsString>;
+    fn replace(&self, pattern: &str, replacement: OsString) -> OsString;
+}
+
+impl OsStringExtensions for OsString {
+    fn starts_with_str(&self, prefix: &str) -> bool {
+        self.as_encoded_bytes().starts_with(prefix.as_bytes())
+    }
+
+    fn strip_prefix_str(&self, prefix: &str) -> Option<OsString> {
+        let rest = self.as_encoded_bytes().strip_prefix(prefix.as_bytes())?;
+        // SAFETY: `rest` is a suffix of `s.as_encoded_bytes()` split at the end of
+        // `prefix`, which is valid UTF-8, so the split is at a UTF-8 boundary.
+        Some(unsafe { OsString::from_encoded_bytes_unchecked(rest.to_vec()) })
+    }
+
+    /// Replace every occurrence of `pattern` in `input` with `replacement`.
+    /// Platform-independent and preserves non-UTF-8 content.
+    fn replace(&self, pattern: &str, replacement: OsString) -> OsString {
+        let needle = pattern.as_bytes();
+        if needle.is_empty() {
+            return self.to_owned();
+        }
+
+        let haystack = self.as_encoded_bytes();
+        let repl = replacement.as_encoded_bytes();
+
+        let mut out: Vec<u8> = Vec::with_capacity(haystack.len());
+        let mut rest = haystack;
+        while let Some(pos) = rest.windows(needle.len()).position(|w| w == needle) {
+            out.extend_from_slice(&rest[..pos]);
+            out.extend_from_slice(repl);
+            rest = &rest[pos + needle.len()..];
+        }
+
+        if out.is_empty() && rest.len() == haystack.len() {
+            return self.to_owned(); // no match, hand back the original allocation
+        }
+        out.extend_from_slice(rest);
+
+        // SAFETY: `out` is built only from slices of `input.as_encoded_bytes()`
+        // split at occurrences of `pattern`, which is valid UTF-8 (so every split
+        // point is a UTF-8 boundary), interleaved with `replacement.as_encoded_bytes()`.
+        unsafe { OsString::from_encoded_bytes_unchecked(out) }
+    }
+}
+
+fn parse_ccache_name(ccache: Option<&OsString>) -> Result<OsString, KrbError> {
     let uid = get_current_uid().to_string();
 
-    let ccache_name = match ccache {
-        Some(c) => c.to_string(),
+    let ccache_name: OsString = match ccache {
+        Some(c) => c.to_owned(),
         None => match env::var("KRB5CCNAME") {
-            Ok(val) => val,
+            Ok(val) => val.into(),
             _ => {
                 let config = KerberosConfig::from_defaults().map_err(|e| {
                     error!("Failed to read config: {:?}", e);
                     KrbError::ConfigError(e)
                 })?;
                 match config.libdefaults("default_ccache_name") {
-                    Some(v) => v,
+                    Some(v) => OsString::from(&v),
                     _ => default_ccache_name(),
                 }
             }
         },
     }
-    .replace("%{uid}", uid.as_str());
+    .replace("%{uid}", OsString::from(uid.as_str()));
+
     Ok(ccache_name)
 }
 
 pub trait CredentialCache {
-    fn name(&mut self) -> Result<String, KrbError>;
+    fn cc_type(&self) -> &'static str;
+    fn name(&self) -> Result<OsString, KrbError>;
+    fn full_name(&self) -> Result<OsString, KrbError> {
+        let mut full_name: OsString = OsString::from(format!("{}:", self.cc_type()));
+        full_name.push(self.name()?);
+        Ok(full_name)
+    }
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError>;
     fn destroy(&mut self) -> Result<(), KrbError>;
     fn store(&mut self, credentials: &KerberosCredentials) -> Result<(), KrbError>;
-    fn dump(&mut self) -> Result<(), KrbError>;
+    fn principal(&self) -> Result<Name, KrbError>;
+    fn dump(&self) -> Result<(), KrbError>;
 }
 
-pub fn resolve(ccache_name: Option<&str>) -> Result<Box<dyn CredentialCache>, KrbError> {
+pub trait CredentialCacheCollection {
+    fn cc_type(&self) -> &'static str;
+    fn name(&self) -> Result<OsString, KrbError>;
+    fn full_name(&self) -> Result<OsString, KrbError> {
+        let mut full_name: OsString = OsString::from(format!("{}:", self.cc_type()));
+        full_name.push(self.name()?);
+        Ok(full_name)
+    }
+
+    fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError>;
+    fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError>;
+    fn switch(&mut self, ccache: &dyn CredentialCache) -> Result<(), KrbError>;
+    fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError>;
+
+    fn find(&self, name: &Name) -> Result<Box<dyn CredentialCache>, KrbError> {
+        for cc in self.subsidiaries()? {
+            if &cc.principal()? == name {
+                return Ok(cc);
+            }
+        }
+        Err(KrbError::CredentialCacheNotFound)
+    }
+    fn destroy(&mut self) -> Result<(), KrbError> {
+        // Destroy the primary subsidiary. The primary key ramain stale.
+        let mut cc = self.primary()?;
+        cc.destroy()
+    }
+
+    fn try_iter(&self) -> Result<std::vec::IntoIter<Box<dyn CredentialCache>>, KrbError> {
+        Ok(self.subsidiaries()?.into_iter())
+    }
+}
+
+pub enum ResolvedCredentialCache {
+    Collection(Box<dyn CredentialCacheCollection>),
+    Subsidiary(Box<dyn CredentialCache>),
+}
+
+pub fn resolve(ccache_name: Option<&OsString>) -> Result<ResolvedCredentialCache, KrbError> {
     let ccache_name = parse_ccache_name(ccache_name)?;
     trace!(?ccache_name, "Resolving credential cache");
 
-    if ccache_name.starts_with("FILE:") {
-        return cc_file::resolve(ccache_name.as_str());
+    if ccache_name.starts_with_str("FILE:") {
+        return cc_file::resolve(&ccache_name);
     }
 
-    if ccache_name.starts_with("DIR:") {
-        return cc_dir::resolve(ccache_name.as_str());
-    }
-
-    #[cfg(feature = "keyring")]
-    if ccache_name.starts_with("KEYRING:") {
-        return cc_keyring::resolve(ccache_name.as_str());
-    }
-
-    debug!(?ccache_name, "Unsupported credential cache type");
-    Err(KrbError::UnsupportedCredentialCacheType)
-}
-
-pub trait CredentialCacheCollection: Deref + DerefMut {
-    fn primary(&mut self) -> Result<String, KrbError>;
-}
-
-pub fn resolve_collection(
-    ccache_name: Option<&str>,
-) -> Result<Box<dyn CredentialCacheCollection<Target = Vec<Box<dyn CredentialCache>>>>, KrbError> {
-    let ccache_name = parse_ccache_name(ccache_name)?;
-    trace!(?ccache_name, "Resolving collection");
-
-    if ccache_name.starts_with("DIR:") {
-        let path = ccache_name.strip_prefix("DIR:").unwrap_or(&ccache_name);
-        let path = Path::new(path);
-        return cc_dir::resolve_collection(path);
+    if ccache_name.starts_with_str("DIR:") {
+        return cc_dir::resolve(&ccache_name);
     }
 
     #[cfg(feature = "keyring")]
-    if ccache_name.starts_with("KEYRING:") {
-        return cc_keyring::resolve_collection(ccache_name.as_str());
+    if ccache_name.starts_with_str("KEYRING:") {
+        return cc_keyring::resolve(&ccache_name);
     }
 
     debug!(?ccache_name, "Unsupported credential cache type");
@@ -587,85 +655,129 @@ pub fn resolve_collection(
 
 #[cfg(test)]
 mod tests {
-    use tracing::warn;
-
     use super::*;
     use std::process::Command;
-    #[cfg(feature = "keyring")]
-    use std::process::Stdio;
 
-    #[tokio::test]
-    async fn test_ccache_file_store() -> Result<(), KrbError> {
-        let _ = tracing_subscriber::fmt::try_init();
+    /// Returns true when the environment cannot run KDC/MIT-dependent tests, in
+    /// which case tests should early-return Ok(()) to avoid failing in CI or
+    /// minimal environments.
+    pub(super) fn skip_env() -> bool {
         if std::env::var("CI").is_ok() {
-            // Skip this test in CI, as it requires a KDC running on localhost
-            warn!("Skipping test_ccache_file_store in CI");
-            return Ok(());
+            tracing::warn!("Skipping ccache integration test in CI");
+            return true;
         }
-
-        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-
-        let path = "/tmp/krb5cc_krime";
-        let ccache_name = format!("FILE:{path}");
-        let mut ccache = super::resolve(Some(ccache_name.as_str()))?;
-        ccache.init(&creds.name, None)?;
-        ccache.store(&creds)?;
-        assert!(std::fs::exists(path).expect("Unable to check if file exists"));
-
-        // TODO load and compare
-
-        // Test MIT can parse the created ccache
-        let output = Command::new("klist")
-            .arg("-c")
-            .arg(ccache_name.as_str())
-            .output()
-            .expect("Unable to execute command klist");
-        assert!(output.status.success());
-
-        let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
-        assert!(output.contains("testuser@EXAMPLE.COM"));
-
-        ccache.destroy()?;
-        assert!(!std::fs::exists(path).expect("Unable to check if file exists"));
-
-        Ok(())
+        if which::which("klist").is_err() {
+            tracing::warn!("Skipping ccache integration test: klist not on PATH");
+            return true;
+        }
+        false
     }
 
-    #[tokio::test]
-    #[cfg(feature = "keyring")]
-    async fn test_ccache_keyring_store() -> Result<(), KrbError> {
-        if std::env::var("CI").is_ok() {
-            // Skip this test in CI, as it requires a KDC running on localhost
-            warn!("Skipping get_tgt in CI");
-            return Ok(());
-        }
-
-        let ccache_name = "KEYRING:session:abc";
-        let ccname = Some(ccache_name);
-
-        let mut ccache = super::resolve(ccname)?;
-        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
-        ccache.init(&creds.name, None)?;
-        ccache.store(&creds)?;
-
-        let mut ccache = super::resolve(ccname)?;
-        let creds = crate::proto::get_tgt("testuser2", "EXAMPLE.COM", "password").await?;
-        ccache.init(&creds.name, None)?;
-        ccache.store(&creds)?;
-
+    /// Run `klist -c <ccache_name>` and return stdout. Asserts success.
+    pub(super) fn klist(ccache_name: &OsString) -> String {
         let output = Command::new("klist")
-            .stderr(Stdio::null())
+            .arg("-c")
+            .arg(ccache_name)
+            .output()
+            .expect("Unable to execute command klist");
+        assert!(
+            output.status.success(),
+            "klist failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(output.stdout.as_slice()).to_string()
+    }
+
+    #[cfg(feature = "keyring")]
+    pub(super) fn klist_all(ccache_name: &OsString) -> String {
+        let output = Command::new("klist")
             .arg("-c")
             .arg(ccache_name)
             .arg("-A")
             .output()
             .expect("Unable to execute command klist");
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "klist failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
 
-        let output = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
-        assert!(output.contains("testuser@EXAMPLE.COM"));
-        assert!(output.contains("testuser2@EXAMPLE.COM"));
+        String::from_utf8_lossy(output.stdout.as_slice()).to_string()
+    }
 
+    #[tokio::test]
+    async fn test_resolve_file_is_subsidiary() -> Result<(), KrbError> {
+        let ccache_name = "FILE:/tmp/krime_resolve_test";
+        let ccache_name = OsString::from(ccache_name);
+        let ResolvedCredentialCache::Subsidiary(cc) = resolve(Some(&ccache_name))? else {
+            panic!("FILE: must resolve to a Subsidiary");
+        };
+        assert_eq!(cc.cc_type(), "FILE");
+        assert_eq!(cc.name()?, "/tmp/krime_resolve_test");
+        assert_eq!(cc.full_name()?, "FILE:/tmp/krime_resolve_test");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_resolve_dir_collection_vs_subsidiary() -> Result<(), KrbError> {
+        // DIR:<dir> -> collection
+        let dir = format!("/tmp/krime_resolve_dir_{}", std::process::id());
+        let residual = format!("DIR:{}", dir);
+        let ccache_name = OsString::from(residual);
+        let ResolvedCredentialCache::Collection(cccol) = resolve(Some(&ccache_name))? else {
+            panic!("DIR:<dir> must resolve to a Collection");
+        };
+        assert_eq!(cccol.cc_type(), "DIR");
+
+        // DIR::<dir>/<sub> -> subsidiary
+        let residual = format!("DIR::{dir}/s1");
+        let ccache_name = OsString::from(residual);
+        let ResolvedCredentialCache::Subsidiary(cc) = resolve(Some(&ccache_name))? else {
+            panic!("DIR::<dir>/<sub> must resolve to a Subsidiary");
+        };
+        assert_eq!(cc.cc_type(), "DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_resolve_unsupported_type() {
+        let ccache_name = "BOGUS:/tmp/whatever";
+        let ccache_name = OsString::from(ccache_name);
+        let res = resolve(Some(ccache_name).as_ref());
+        if let Err(err) = res {
+            assert!(matches!(err, KrbError::UnsupportedCredentialCacheType));
+        } else {
+            panic!("BOGUS:/tmp/whatever must fail with KrbError::UnsupportedCredentialCacheType")
+        }
+    }
+
+    /// Full round-trip used by every cache type:
+    /// init -> store -> principal() matches -> MIT klist sees the TGT -> destroy.
+    pub(super) async fn store_and_verify_roundtrip(ccache_name: &OsString) -> Result<(), KrbError> {
+        let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
+
+        let mut ccache = match crate::ccache::resolve(Some(ccache_name))? {
+            ResolvedCredentialCache::Subsidiary(ccache) => ccache,
+            ResolvedCredentialCache::Collection(cccol) => cccol.primary()?,
+        };
+
+        ccache.init(&creds.name, None)?;
+        ccache.store(&creds)?;
+
+        assert_eq!(ccache.principal()?, creds.name);
+
+        let output = klist(ccache_name);
+        assert!(
+            output.contains("testuser@EXAMPLE.COM"),
+            "klist output missing default principal: {output}"
+        );
+        assert!(
+            output.contains("krbtgt/EXAMPLE.COM@EXAMPLE.COM"),
+            "klist output missing krbtgt service principal: {output}"
+        );
+
+        ccache.destroy()?;
         Ok(())
     }
 }

@@ -1,33 +1,40 @@
 use crate::opt::CcacheDumpOpt;
+use libkrimes::ccache::ResolvedCredentialCache;
+use std::ffi::OsString;
 
 pub(crate) fn dump(opt: CcacheDumpOpt) {
-    if opt.all {
-        if let Ok(mut col) = libkrimes::ccache::resolve_collection(opt.common.name.as_deref()) {
-            print!(
-                "Collection contains {} credential caches\n\n",
-                col.iter().count()
-            );
+    let ccache_name = opt.common.name.as_deref().map(OsString::from);
 
-            if let Ok(primary) = col.primary() {
-                print!("Primary credential cache is {primary}\n\n");
-            }
+    let Ok(ccache) = libkrimes::ccache::resolve(ccache_name.as_ref()).inspect_err(|e| {
+        print!("Failed to resolve credential cache: {e:?}");
+    }) else {
+        return;
+    };
 
-            for cc in col.deref_mut() {
-                if let Ok(ccname) = cc.name() {
-                    println!("Dumping credential cache {:?}", ccname);
-                    if let Err(e) = cc.dump() {
-                        println!("Failed to dump credential cache: {e:?}");
+    match ccache {
+        ResolvedCredentialCache::Collection(cccol) => {
+            if let Ok(primary) = cccol.primary() {
+                match primary.name() {
+                    Ok(name) => {
+                        print!("Primary credential cache is {}\n\n", name.display())
                     }
-                    println!();
+                    Err(e) => print!("Failed to read primary subsidiary name: {:?}\n\n", e),
                 }
             }
+
+            for cc in cccol
+                .try_iter()
+                .inspect_err(|e| print!("Failed to iterate the collection: {:?}\n\n", e))
+                .unwrap_or_default()
+            {
+                print!("{:?}", cc.dump());
+            }
         }
-    } else if let Ok(mut ccache) = libkrimes::ccache::resolve(opt.common.name.as_deref()) {
-        if let Ok(ccname) = ccache.name() {
-            println!("Dumping credential cache {:?}", ccname);
-            if let Err(e) = ccache.dump() {
+        ResolvedCredentialCache::Subsidiary(cc) => {
+            println!("Dumping credential cache {:?}", cc.name());
+            if let Err(e) = cc.dump() {
                 println!("Error: {e:?}");
             }
         }
-    }
+    };
 }
