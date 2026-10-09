@@ -19,6 +19,7 @@ use chrono::prelude::DateTime;
 use chrono::Utc;
 use crypto_glue::der::{asn1::OctetString, Encode};
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -496,43 +497,95 @@ impl TryFrom<&SessionKey> for KeyBlockV4 {
 }
 
 #[cfg(feature = "keyring")]
-fn default_ccache_name() -> String {
-    "KEYRING:persistent:%{uid}".to_string()
+fn default_ccache_name() -> OsString {
+    "KEYRING:persistent:%{uid}".into()
 }
 
 #[cfg(not(feature = "keyring"))]
-fn default_ccache_name() -> String {
-    "FILE:/tmp/krb5cc_%{uid}".to_string()
+fn default_ccache_name() -> OsString {
+    "FILE:/tmp/krb5cc_%{uid}".into()
 }
 
-fn parse_ccache_name(ccache: Option<&str>) -> Result<String, KrbError> {
+trait OsStringExtensions {
+    fn starts_with_str(&self, prefix: &str) -> bool;
+    fn strip_prefix_str(&self, prefix: &str) -> Option<OsString>;
+    fn replace(&self, pattern: &str, replacement: OsString) -> OsString;
+}
+
+impl OsStringExtensions for OsString {
+    fn starts_with_str(&self, prefix: &str) -> bool {
+        self.as_encoded_bytes().starts_with(prefix.as_bytes())
+    }
+
+    fn strip_prefix_str(&self, prefix: &str) -> Option<OsString> {
+        let rest = self.as_encoded_bytes().strip_prefix(prefix.as_bytes())?;
+        // SAFETY: `rest` is a suffix of `s.as_encoded_bytes()` split at the end of
+        // `prefix`, which is valid UTF-8, so the split is at a UTF-8 boundary.
+        Some(unsafe { OsString::from_encoded_bytes_unchecked(rest.to_vec()) })
+    }
+
+    /// Replace every occurrence of `pattern` in `input` with `replacement`.
+    /// Platform-independent and preserves non-UTF-8 content.
+    fn replace(&self, pattern: &str, replacement: OsString) -> OsString {
+        let needle = pattern.as_bytes();
+        if needle.is_empty() {
+            return self.to_owned();
+        }
+
+        let haystack = self.as_encoded_bytes();
+        let repl = replacement.as_encoded_bytes();
+
+        let mut out: Vec<u8> = Vec::with_capacity(haystack.len());
+        let mut rest = haystack;
+        while let Some(pos) = rest.windows(needle.len()).position(|w| w == needle) {
+            out.extend_from_slice(&rest[..pos]);
+            out.extend_from_slice(repl);
+            rest = &rest[pos + needle.len()..];
+        }
+
+        if out.is_empty() && rest.len() == haystack.len() {
+            return self.to_owned(); // no match, hand back the original allocation
+        }
+        out.extend_from_slice(rest);
+
+        // SAFETY: `out` is built only from slices of `input.as_encoded_bytes()`
+        // split at occurrences of `pattern`, which is valid UTF-8 (so every split
+        // point is a UTF-8 boundary), interleaved with `replacement.as_encoded_bytes()`.
+        unsafe { OsString::from_encoded_bytes_unchecked(out) }
+    }
+}
+
+fn parse_ccache_name(ccache: Option<&OsString>) -> Result<OsString, KrbError> {
     let uid = get_current_uid().to_string();
 
-    let ccache_name = match ccache {
-        Some(c) => c.to_string(),
+    let ccache_name: OsString = match ccache {
+        Some(c) => c.to_owned(),
         None => match env::var("KRB5CCNAME") {
-            Ok(val) => val,
+            Ok(val) => val.into(),
             _ => {
                 let config = KerberosConfig::from_defaults().map_err(|e| {
                     error!("Failed to read config: {:?}", e);
                     KrbError::ConfigError(e)
                 })?;
                 match config.libdefaults("default_ccache_name") {
-                    Some(v) => v,
+                    Some(v) => OsString::from(&v),
                     _ => default_ccache_name(),
                 }
             }
         },
     }
-    .replace("%{uid}", uid.as_str());
+    .replace("%{uid}", OsString::from(uid.as_str()));
+
     Ok(ccache_name)
 }
 
 pub trait CredentialCache {
     fn cc_type(&self) -> &'static str;
-    fn name(&self) -> Result<String, KrbError>;
-    fn full_name(&self) -> Result<String, KrbError> {
-        Ok(format!("{}:{}", self.cc_type(), self.name()?))
+    fn name(&self) -> Result<OsString, KrbError>;
+    fn full_name(&self) -> Result<OsString, KrbError> {
+        let mut full_name: OsString = OsString::from(format!("{}:", self.cc_type()));
+        full_name.push(self.name()?);
+        Ok(full_name)
     }
     fn init(&mut self, name: &Name, clock_skew: Option<Duration>) -> Result<(), KrbError>;
     fn destroy(&mut self) -> Result<(), KrbError>;
@@ -543,9 +596,11 @@ pub trait CredentialCache {
 
 pub trait CredentialCacheCollection {
     fn cc_type(&self) -> &'static str;
-    fn name(&self) -> Result<String, KrbError>;
-    fn full_name(&self) -> Result<String, KrbError> {
-        Ok(format!("{}:{}", self.cc_type(), self.name()?))
+    fn name(&self) -> Result<OsString, KrbError>;
+    fn full_name(&self) -> Result<OsString, KrbError> {
+        let mut full_name: OsString = OsString::from(format!("{}:", self.cc_type()));
+        full_name.push(self.name()?);
+        Ok(full_name)
     }
 
     fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError>;
@@ -577,21 +632,21 @@ pub enum ResolvedCredentialCache {
     Subsidiary(Box<dyn CredentialCache>),
 }
 
-pub fn resolve(ccache_name: Option<&str>) -> Result<ResolvedCredentialCache, KrbError> {
+pub fn resolve(ccache_name: Option<&OsString>) -> Result<ResolvedCredentialCache, KrbError> {
     let ccache_name = parse_ccache_name(ccache_name)?;
     trace!(?ccache_name, "Resolving credential cache");
 
-    if ccache_name.starts_with("FILE:") {
-        return cc_file::resolve(ccache_name.as_str());
+    if ccache_name.starts_with_str("FILE:") {
+        return cc_file::resolve(&ccache_name);
     }
 
-    if ccache_name.starts_with("DIR:") {
-        return cc_dir::resolve(ccache_name.as_str());
+    if ccache_name.starts_with_str("DIR:") {
+        return cc_dir::resolve(&ccache_name);
     }
 
     #[cfg(feature = "keyring")]
-    if ccache_name.starts_with("KEYRING:") {
-        return cc_keyring::resolve(ccache_name.as_str());
+    if ccache_name.starts_with_str("KEYRING:") {
+        return cc_keyring::resolve(&ccache_name);
     }
 
     debug!(?ccache_name, "Unsupported credential cache type");
@@ -619,7 +674,7 @@ mod tests {
     }
 
     /// Run `klist -c <ccache_name>` and return stdout. Asserts success.
-    pub(super) fn klist(ccache_name: &str) -> String {
+    pub(super) fn klist(ccache_name: &OsString) -> String {
         let output = Command::new("klist")
             .arg("-c")
             .arg(ccache_name)
@@ -634,7 +689,7 @@ mod tests {
     }
 
     #[cfg(feature = "keyring")]
-    pub(super) fn klist_all(ccache_name: &str) -> String {
+    pub(super) fn klist_all(ccache_name: &OsString) -> String {
         let output = Command::new("klist")
             .arg("-c")
             .arg(ccache_name)
@@ -652,9 +707,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_file_is_subsidiary() -> Result<(), KrbError> {
-        let ResolvedCredentialCache::Subsidiary(cc) =
-            resolve(Some("FILE:/tmp/krime_resolve_test"))?
-        else {
+        let ccache_name = "FILE:/tmp/krime_resolve_test";
+        let ccache_name = OsString::from(ccache_name);
+        let ResolvedCredentialCache::Subsidiary(cc) = resolve(Some(&ccache_name))? else {
             panic!("FILE: must resolve to a Subsidiary");
         };
         assert_eq!(cc.cc_type(), "FILE");
@@ -667,15 +722,17 @@ mod tests {
     async fn test_resolve_dir_collection_vs_subsidiary() -> Result<(), KrbError> {
         // DIR:<dir> -> collection
         let dir = format!("/tmp/krime_resolve_dir_{}", std::process::id());
-        let residual = format!("DIR:{dir}");
-        let ResolvedCredentialCache::Collection(cccol) = resolve(Some(residual.as_str()))? else {
+        let residual = format!("DIR:{}", dir);
+        let ccache_name = OsString::from(residual);
+        let ResolvedCredentialCache::Collection(cccol) = resolve(Some(&ccache_name))? else {
             panic!("DIR:<dir> must resolve to a Collection");
         };
         assert_eq!(cccol.cc_type(), "DIR");
 
         // DIR::<dir>/<sub> -> subsidiary
         let residual = format!("DIR::{dir}/s1");
-        let ResolvedCredentialCache::Subsidiary(cc) = resolve(Some(residual.as_str()))? else {
+        let ccache_name = OsString::from(residual);
+        let ResolvedCredentialCache::Subsidiary(cc) = resolve(Some(&ccache_name))? else {
             panic!("DIR::<dir>/<sub> must resolve to a Subsidiary");
         };
         assert_eq!(cc.cc_type(), "DIR");
@@ -685,7 +742,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_unsupported_type() {
-        let res = resolve(Some("BOGUS:/tmp/whatever"));
+        let ccache_name = "BOGUS:/tmp/whatever";
+        let ccache_name = OsString::from(ccache_name);
+        let res = resolve(Some(ccache_name).as_ref());
         if let Err(err) = res {
             assert!(matches!(err, KrbError::UnsupportedCredentialCacheType));
         } else {
@@ -695,7 +754,7 @@ mod tests {
 
     /// Full round-trip used by every cache type:
     /// init -> store -> principal() matches -> MIT klist sees the TGT -> destroy.
-    pub(super) async fn store_and_verify_roundtrip(ccache_name: &str) -> Result<(), KrbError> {
+    pub(super) async fn store_and_verify_roundtrip(ccache_name: &OsString) -> Result<(), KrbError> {
         let creds = crate::proto::get_tgt("testuser", "EXAMPLE.COM", "password").await?;
 
         let mut ccache = match crate::ccache::resolve(Some(ccache_name))? {

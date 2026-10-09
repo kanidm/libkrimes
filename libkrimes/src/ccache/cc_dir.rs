@@ -1,7 +1,9 @@
+use super::OsStringExtensions;
 use crate::ccache::cc_file::FileCredentialCacheContext;
 use crate::ccache::{CredentialCache, CredentialCacheCollection, ResolvedCredentialCache};
 use crate::error::KrbError;
 use crypto_glue::rand::{self, distr::Alphanumeric, RngExt};
+use std::ffi::OsString;
 use std::fs::{DirBuilder, File, Permissions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -86,7 +88,7 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
         "DIR"
     }
 
-    fn name(&self) -> Result<String, KrbError> {
+    fn name(&self) -> Result<OsString, KrbError> {
         self.primary()?.name()
     }
 
@@ -98,12 +100,27 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
                     error!(?primary, ?e, "Failed to open file");
                     KrbError::IoError
                 })?;
-                let mut buffer = String::new();
-                f.read_to_string(&mut buffer).map_err(|e| {
+                let mut buffer: Vec<u8> = vec![];
+                f.read_to_end(&mut buffer).map_err(|e| {
                     error!(?primary, ?e, "Filed to read file");
                     KrbError::IoError
                 })?;
-                let primary_path = self.cccol_path.join(buffer.trim());
+                // Trim trailing newline bytes written by MIT or
+                // store_primary_subsidiary_name. The new line is required by
+                // MIT to correctly read the file.
+                let trimmed: &[u8] = {
+                    let end = buffer
+                        .iter()
+                        .rposition(|b| !b.is_ascii_whitespace())
+                        .map_or(0, |i| i + 1);
+                    let start = buffer
+                        .iter()
+                        .position(|b| !b.is_ascii_whitespace())
+                        .unwrap_or(0);
+                    &buffer[start..end]
+                };
+                let subsidiary_name = std::ffi::OsStr::from_bytes(trimmed);
+                let primary_path = self.cccol_path.join(subsidiary_name);
                 let fcc = FileCredentialCacheContext {
                     cccol_path: Some(self.cccol_path.clone()),
                     path: primary_path,
@@ -190,17 +207,17 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
     }
 }
 
-pub(super) fn resolve(ccache_name: &str) -> Result<ResolvedCredentialCache, KrbError> {
+pub(super) fn resolve(ccache_name: &OsString) -> Result<ResolvedCredentialCache, KrbError> {
     trace!(?ccache_name, "Resolving dir credential cache");
 
     let ccache_name = ccache_name
-        .strip_prefix("DIR:")
+        .strip_prefix_str("DIR:")
         .ok_or(KrbError::UnsupportedCredentialCacheType)?;
 
-    let resolved = if ccache_name.starts_with(":") {
+    let resolved = if ccache_name.starts_with_str(":") {
         trace!(?ccache_name, "Collection with subsidiary");
         let path = ccache_name
-            .strip_prefix(":")
+            .strip_prefix_str(":")
             .ok_or(KrbError::CredentialCacheError)
             .map(PathBuf::from)?;
 
@@ -242,7 +259,8 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("krb5cc_rt");
-        let ccache_name = format!("DIR:{}", path.to_string_lossy());
+        let mut ccache_name = OsString::from("DIR:{}");
+        ccache_name.push(path);
 
         crate::ccache::tests::store_and_verify_roundtrip(&ccache_name).await
     }
@@ -257,23 +275,39 @@ mod tests {
             .to_string_lossy()
             .to_string();
         let residual = format!("DIR:{}", cccol_path);
+        let ccache_name = OsString::from(residual);
 
         let ResolvedCredentialCache::Collection(mut cccol) =
-            crate::ccache::resolve(Some(residual.as_str()))?
+            crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Expected a collection")
         };
-        assert_eq!(cccol.name()?, format!(":{}/tkt", cccol_path));
-        assert_eq!(cccol.full_name()?, format!("DIR::{}/tkt", cccol_path));
-        assert_eq!(cccol.name()?, cccol.primary()?.name()?);
         assert_eq!(
-            cccol.full_name()?,
-            format!("DIR:{}", cccol.primary()?.name()?)
+            cccol.name()?.to_string_lossy(),
+            format!(":{}/tkt", cccol_path)
+        );
+        assert_eq!(
+            cccol.full_name()?.to_string_lossy(),
+            format!("DIR::{}/tkt", cccol_path)
+        );
+        assert_eq!(
+            cccol.name()?.to_string_lossy(),
+            cccol.primary()?.name()?.to_string_lossy()
+        );
+        assert_eq!(
+            cccol.full_name()?.to_string_lossy(),
+            format!("DIR:{}", cccol.primary()?.name()?.to_string_lossy())
         );
 
         // Residual without subsidiary -> switch primary -> new primary subsidiary
         let new = cccol.new_unique()?;
-        assert!(new.name()?.split("/").last().unwrap().starts_with("krb"));
+        assert!(new
+            .name()?
+            .to_string_lossy()
+            .split("/")
+            .last()
+            .unwrap()
+            .starts_with("krb"));
         cccol.switch(&*new)?;
         assert_eq!(cccol.name()?, new.name()?);
         assert_eq!(cccol.full_name()?, new.full_name()?);
@@ -282,13 +316,16 @@ mod tests {
         // Residual with subsidiary -> given subsidiary
         let cccol_path = "/tmp/krime_cccol_2".to_string();
         let residual = format!("DIR::{}/s1", cccol_path);
-        let ResolvedCredentialCache::Subsidiary(cc) =
-            crate::ccache::resolve(Some(residual.as_str()))?
+        let ccache_name = OsString::from(residual);
+        let ResolvedCredentialCache::Subsidiary(cc) = crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Expected a subsidiary")
         };
-        assert_eq!(cc.name()?, format!(":{}/s1", cccol_path));
-        assert_eq!(cc.full_name()?, format!("DIR::{}/s1", cccol_path));
+        assert_eq!(cc.name()?.to_string_lossy(), format!(":{}/s1", cccol_path));
+        assert_eq!(
+            cc.full_name()?.to_string_lossy(),
+            format!("DIR::{}/s1", cccol_path)
+        );
         cccol.destroy().ok();
 
         Ok(())
@@ -306,8 +343,9 @@ mod tests {
             .to_string_lossy()
             .to_string();
         let residual = format!("DIR:{}", cccol_path);
+        let ccache_name = OsString::from(residual);
         let ResolvedCredentialCache::Collection(cccol) =
-            crate::ccache::resolve(Some(residual.as_str()))?
+            crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Expected a collection")
         };
@@ -366,9 +404,10 @@ mod tests {
             .to_string_lossy()
             .to_string();
         let residual = format!("DIR:{}", cccol_path);
+        let ccache_name = OsString::from(residual);
 
         let ResolvedCredentialCache::Collection(cccol) =
-            crate::ccache::resolve(Some(residual.as_str()))?
+            crate::ccache::resolve(Some(&ccache_name))?
         else {
             panic!("Expected a collection")
         };
@@ -380,9 +419,9 @@ mod tests {
 
         // The underlying subsidiary file must exist inside the collection dir.
         let sub_residual = primary.full_name()?;
-        assert!(sub_residual.starts_with("DIR::"));
+        assert!(sub_residual.to_string_lossy().starts_with("DIR::"));
 
-        let out = klist(&residual);
+        let out = klist(&ccache_name);
         assert!(out.contains("testuser@EXAMPLE.COM"), "{out}");
         assert!(out.contains("krbtgt/EXAMPLE.COM@EXAMPLE.COM"), "{out}");
 
