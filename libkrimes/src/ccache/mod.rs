@@ -19,8 +19,12 @@ use chrono::prelude::DateTime;
 use chrono::Utc;
 use crypto_glue::der::{asn1::OctetString, Encode};
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -519,9 +523,8 @@ impl OsStringExtensions for OsString {
 
     fn strip_prefix_str(&self, prefix: &str) -> Option<OsString> {
         let rest = self.as_encoded_bytes().strip_prefix(prefix.as_bytes())?;
-        // SAFETY: `rest` is a suffix of `s.as_encoded_bytes()` split at the end of
-        // `prefix`, which is valid UTF-8, so the split is at a UTF-8 boundary.
-        Some(unsafe { OsString::from_encoded_bytes_unchecked(rest.to_vec()) })
+        let rest = OsStr::from_bytes(rest);
+        Some(rest.to_os_string())
     }
 
     /// Replace every occurrence of `pattern` in `input` with `replacement`.
@@ -547,11 +550,7 @@ impl OsStringExtensions for OsString {
             return self.to_owned(); // no match, hand back the original allocation
         }
         out.extend_from_slice(rest);
-
-        // SAFETY: `out` is built only from slices of `input.as_encoded_bytes()`
-        // split at occurrences of `pattern`, which is valid UTF-8 (so every split
-        // point is a UTF-8 boundary), interleaved with `replacement.as_encoded_bytes()`.
-        unsafe { OsString::from_encoded_bytes_unchecked(out) }
+        OsStr::from_bytes(&out).to_os_string()
     }
 }
 
