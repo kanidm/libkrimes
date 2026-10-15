@@ -259,7 +259,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("krb5cc_rt");
-        let mut ccache_name = OsString::from("DIR:{}");
+        let mut ccache_name = OsString::from("DIR:");
         ccache_name.push(path);
 
         crate::ccache::tests::store_and_verify_roundtrip(&ccache_name).await
@@ -314,7 +314,8 @@ mod tests {
         cccol.destroy().ok();
 
         // Residual with subsidiary -> given subsidiary
-        let cccol_path = "/tmp/krime_cccol_2".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cccol_path = dir.path().to_str().expect("Failed to get path");
         let residual = format!("DIR::{}/s1", cccol_path);
         let ccache_name = OsString::from(residual);
         let ResolvedCredentialCache::Subsidiary(cc) = crate::ccache::resolve(Some(&ccache_name))?
