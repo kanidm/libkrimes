@@ -3,7 +3,7 @@ resolver = "3"
 members = ["libkrimes", "kdc", "ktool"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["William Brown <william@blackhats.net.au>"]
 rust-version = "1.87"
@@ -15,7 +15,7 @@ repository = "https://github.com/Firstyear/libkrimes"
 # crypto-glue = { path = "../crypto-glue" }
 
 [workspace.dependencies]
-libkrimes = { path = "./libkrimes", version = "=0.1.0" }
+libkrimes = { path = "./libkrimes", version = "=0.2.0" }
 
 assert_hex = "0.4.1"
 base64 = "0.22.0"
