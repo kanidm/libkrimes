@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "krimedc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "errno",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "ktool"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "libkrimes",
@@ -1049,7 +1049,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libkrimes"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_hex",
  "base64 0.22.1",
