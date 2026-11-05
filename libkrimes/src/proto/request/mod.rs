@@ -3,6 +3,7 @@ mod tgs_req;
 
 use super::{EncryptedData, Name, Preauth};
 use crate::asn1::{
+    OctetString,
     constants::{
         encryption_types::EncryptionType, message_types::KrbMessageType, pa_data_types::PaDataType,
     },
@@ -12,10 +13,9 @@ use crate::asn1::{
     kerberos_time::KerberosTime,
     krb_kdc_req::KrbKdcReq,
     pa_data::PaData,
-    OctetString,
 };
 use crate::error::KrbError;
-use crypto_glue::der::{asn1::Any, Encode};
+use crypto_glue::der::{Encode, asn1::Any};
 use std::time::SystemTime;
 use tracing::trace;
 

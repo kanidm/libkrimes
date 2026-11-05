@@ -4,8 +4,8 @@ use super::microseconds::Microseconds;
 use super::pa_data::PaData;
 use super::principal_name::PrincipalName;
 use super::realm::Realm;
-use der::asn1::OctetString;
 use der::Sequence;
+use der::asn1::OctetString;
 
 /// ```text
 /// KRB-ERROR       ::= [APPLICATION 30] SEQUENCE {

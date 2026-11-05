@@ -54,7 +54,12 @@ pub(crate) async fn create_cldap_server(
 
     if cfg.address().starts_with(":::") {
         let port = cfg.address().replacen(":::", "", 1);
-        error!("Address '{}' looks like an attempt to wildcard bind with IPv6 on port {} - please try using '[::]:{}'", cfg.address(), port, port);
+        error!(
+            "Address '{}' looks like an attempt to wildcard bind with IPv6 on port {} - please try using '[::]:{}'",
+            cfg.address(),
+            port,
+            port
+        );
     }
 
     let address = cfg.address().parse::<SocketAddr>().map_err(|e| {

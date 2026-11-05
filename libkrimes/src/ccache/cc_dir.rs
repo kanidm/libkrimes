@@ -2,7 +2,7 @@ use super::OsStringExtensions;
 use crate::ccache::cc_file::FileCredentialCacheContext;
 use crate::ccache::{CredentialCache, CredentialCacheCollection, ResolvedCredentialCache};
 use crate::error::KrbError;
-use crypto_glue::rand::{self, distr::Alphanumeric, RngExt};
+use crypto_glue::rand::{self, RngExt, distr::Alphanumeric};
 use std::ffi::OsString;
 use std::fs::{DirBuilder, File, Permissions};
 use std::io::{Read, Write};
@@ -301,13 +301,14 @@ mod tests {
 
         // Residual without subsidiary -> switch primary -> new primary subsidiary
         let new = cccol.new_unique()?;
-        assert!(new
-            .name()?
-            .to_string_lossy()
-            .split("/")
-            .last()
-            .unwrap()
-            .starts_with("krb"));
+        assert!(
+            new.name()?
+                .to_string_lossy()
+                .split("/")
+                .last()
+                .unwrap()
+                .starts_with("krb")
+        );
         cccol.switch(&*new)?;
         assert_eq!(cccol.name()?, new.name()?);
         assert_eq!(cccol.full_name()?, new.full_name()?);

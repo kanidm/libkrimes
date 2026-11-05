@@ -4,9 +4,9 @@ members = ["libkrimes", "kdc", "ktool"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["William Brown <william@blackhats.net.au>"]
-rust-version = "1.87"
+rust-version = "1.88"
 license = "MPL-2.0"
 homepage = "https://github.com/Firstyear/libkrimes"
 repository = "https://github.com/Firstyear/libkrimes"
@@ -23,7 +23,7 @@ bitflags = { version = "2.9.1" }
 bitmask-enum = "2.2.5"
 binrw = "0.15.0"
 bytes = { version = "^1.11.1" }
-clap = { version = "4.5.8" }
+clap = { version = "4.6.7" }
 crypto-glue = { version = "0.2.1" }
 c-types = { version = "6.0.0" }
 # Still needed for macros to work.
@@ -44,9 +44,7 @@ serde-binary = { version = "0.5.0" }
 tempfile = "3.19.1"
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
-tokio = { version = "1",
-    default-features = false,
-    features = [
+tokio = { version = "1", default-features = false, features = [
       "macros",
       "rt",
       "net",

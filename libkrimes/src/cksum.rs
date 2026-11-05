@@ -1,9 +1,9 @@
-use crate::asn1::checksum::Checksum as Asn1Checksum;
 use crate::asn1::OctetString;
+use crate::asn1::checksum::Checksum as Asn1Checksum;
 use crate::error::KrbError;
 use crate::proto::SessionKey;
 use crypto_glue::{
-    der::{asn1::Any, Encode},
+    der::{Encode, asn1::Any},
     md5,
 };
 

@@ -7,6 +7,7 @@ use super::{
     TicketGrantRequest, TicketGrantTimeBound, TicketRenewTimeBound,
 };
 use crate::asn1::{
+    Ia5String, OctetString,
     constants::{errors::KrbErrorCode, message_types::KrbMessageType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart,
     etype_info2::ETypeInfo2Entry as KdcETypeInfo2Entry,
@@ -17,7 +18,6 @@ use crate::asn1::{
     krb_kdc_rep::KrbKdcRep,
     pa_data::PaData,
     transited_encoding::TransitedEncoding,
-    Ia5String, OctetString,
 };
 use crate::error::KrbError;
 use crypto_glue::der::{Decode, Encode};

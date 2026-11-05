@@ -7,7 +7,7 @@ use crypto_glue::{
     aes256cts::{Aes256CtsDec, Aes256CtsEnc, Aes256CtsIv, CtsDecrypt, CtsEncrypt, KeyIvInit},
     hmac_s1::HmacSha1,
     pbkdf2::pbkdf2_hmac,
-    rand::{rng, RngExt},
+    rand::{RngExt, rng},
     sha1::Sha1,
     traits::{FixedOutput, KeyInit, Mac},
 };

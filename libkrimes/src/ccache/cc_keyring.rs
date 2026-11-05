@@ -78,9 +78,9 @@ use crate::ccache::{CredentialV4, PrincipalV4};
 use crate::error::KrbError;
 use crate::proto::{KerberosCredentials, Name};
 
-use binrw::{binread, binwrite};
 use binrw::{BinReaderExt, BinWrite};
-use crypto_glue::rand::{self, distr::Alphanumeric, RngExt};
+use binrw::{binread, binwrite};
+use crypto_glue::rand::{self, RngExt, distr::Alphanumeric};
 use errno::Errno;
 use keyutils::keytypes::user::User;
 use keyutils::{Keyring, SpecialKeyring};

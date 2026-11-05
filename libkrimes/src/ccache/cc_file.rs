@@ -3,10 +3,10 @@ use super::OsStringExtensions;
 use crate::ccache::{Credential, CredentialV4, Principal, PrincipalV4, ResolvedCredentialCache};
 use crate::error::KrbError;
 use crate::proto::{KerberosCredentials, Name};
-use binrw::helpers::until_eof;
-use binrw::io::TakeSeekExt;
 use binrw::BinReaderExt;
 use binrw::BinWrite;
+use binrw::helpers::until_eof;
+use binrw::io::TakeSeekExt;
 use binrw::{binread, binwrite};
 use std::ffi::OsString;
 use std::fmt;
@@ -328,8 +328,8 @@ pub(super) fn resolve(ccache_name: &OsString) -> Result<ResolvedCredentialCache,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccache::tests::{klist, skip_env};
     use crate::ccache::ResolvedCredentialCache;
+    use crate::ccache::tests::{klist, skip_env};
     use binrw::BinWrite;
 
     // Test name with and without cccol

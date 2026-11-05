@@ -15,7 +15,7 @@ use crate::proto::{
     KerberosTime, KrbError, Name, Preauth, SessionKey, Ticket,
 };
 use crypto_glue::der::asn1::{Any, OctetString};
-use crypto_glue::rand::{rng, RngExt};
+use crypto_glue::rand::{RngExt, rng};
 use std::time::SystemTime;
 use tracing::trace;
 

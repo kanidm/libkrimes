@@ -22,13 +22,13 @@ mod config;
 use clap::{Parser, Subcommand};
 use config::{Config, CoreAction, ServerState, TaskName};
 use futures::{SinkExt, StreamExt};
+use libkrimes::KdcTcpCodec;
 use libkrimes::error::KrbError;
 use libkrimes::proto::{
     AuthenticationRequest, AuthenticationTimeBound, DerivedKey, KdcPrimaryKey, KerberosReply,
     KerberosRequest, Name, TicketGrantRequest, TicketGrantRequestUnverified, TicketGrantTimeBound,
     TicketRenewTimeBound,
 };
-use libkrimes::KdcTcpCodec;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -154,7 +154,7 @@ async fn process_authentication(
     ) {
         Ok(time_bounds) => time_bounds,
         Err(time_bound_error) => {
-            return Err(time_bound_error.to_kerberos_reply(&auth_req.service_name, stime))
+            return Err(time_bound_error.to_kerberos_reply(&auth_req.service_name, stime));
         }
     };
 
@@ -241,7 +241,7 @@ async fn process_ticket_grant(
     ) {
         Ok(time_bounds) => time_bounds,
         Err(time_bound_error) => {
-            return Err(time_bound_error.to_kerberos_reply(&service_name, stime))
+            return Err(time_bound_error.to_kerberos_reply(&service_name, stime));
         }
     };
 

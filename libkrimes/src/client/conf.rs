@@ -1,5 +1,5 @@
-use pest::iterators::Pair;
 use pest::Parser;
+use pest::iterators::Pair;
 use pest_derive::Parser;
 use std::collections::HashMap;
 use std::env;
@@ -106,7 +106,7 @@ impl KerberosConfig {
                         .ok_or(KerberosConfigError::ParseError)?
                         .value
                     {
-                        Value::String(ref mut items) => items.push(v),
+                        Value::String(items) => items.push(v),
                         Value::Section(_) => return Err(KerberosConfigError::ParseError),
                     };
                 }
@@ -359,8 +359,8 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
-    use tempfile::tempdir;
     use tempfile::NamedTempFile;
+    use tempfile::tempdir;
 
     #[test]
     fn test_config_basic_section_parsing() {

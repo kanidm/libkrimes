@@ -110,9 +110,9 @@ mod tests {
     use crate::asn1::kerberos_time::KerberosTime;
     use crate::asn1::krb_kdc_req::KrbKdcReq;
     use core::iter::zip;
-    use der::asn1::OctetString;
     use der::DateTime;
     use der::Decode;
+    use der::asn1::OctetString;
 
     struct TestPaData {
         padata_type: u32,
