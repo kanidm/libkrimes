@@ -606,35 +606,32 @@ fn do_cldap_ping_internal(
     cfg: &CldapConfig,
     filter: &LdapPingFilter,
 ) -> Result<LdapPingResponse, ()> {
-    if let Some(f_domain_guid) = &filter.domain_guid {
-        if f_domain_guid != &cfg.domain_guid {
+    if let Some(f_domain_guid) = &filter.domain_guid
+        && f_domain_guid != &cfg.domain_guid {
             debug!(
                 "Filter domain GUID {:?} does not match the configured one {:?}",
                 filter.domain_guid, cfg.domain_guid
             );
             return Err(());
         }
-    }
 
-    if let Some(f_domain_sid) = &filter.domain_sid {
-        if f_domain_sid.to_lowercase() != cfg.domain_sid.to_lowercase() {
+    if let Some(f_domain_sid) = &filter.domain_sid
+        && f_domain_sid.to_lowercase() != cfg.domain_sid.to_lowercase() {
             debug!(
                 "Filter domain SID {:?} does not match the configured one {:?}",
                 f_domain_sid, cfg.domain_sid
             );
             return Err(());
         }
-    }
 
-    if let Some(f_domain_name) = &filter.dns_domain {
-        if f_domain_name.to_lowercase() != cfg.dns_domain_name.to_lowercase() {
+    if let Some(f_domain_name) = &filter.dns_domain
+        && f_domain_name.to_lowercase() != cfg.dns_domain_name.to_lowercase() {
             debug!(
                 "Filter domain {:?} does not match the configured one {:?}",
                 filter.dns_domain, cfg.dns_domain_name
             );
             return Err(());
         }
-    }
 
     if let Some(aac) = &filter.aac {
         // TODO
