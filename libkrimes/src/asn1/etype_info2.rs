@@ -1,6 +1,6 @@
 use super::kerberos_string::KerberosString;
-use der::asn1::OctetString;
 use der::Sequence;
+use der::asn1::OctetString;
 
 /// ```text
 /// ETYPE-INFO2-ENTRY       ::= SEQUENCE {

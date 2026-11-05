@@ -11,7 +11,7 @@ use crate::proto::{
     DerivedKey, EncTicket, EncryptedData, KdcPrimaryKey, KerberosTime, KrbError, Name, SessionKey,
     Ticket, TicketFlags,
 };
-use crypto_glue::der::{asn1::OctetString, Encode};
+use crypto_glue::der::{Encode, asn1::OctetString};
 use tracing::trace;
 
 #[derive(Debug)]

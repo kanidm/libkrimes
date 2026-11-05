@@ -1,6 +1,6 @@
 use super::pa_data::PaData;
-use der::asn1::Any;
 use der::Sequence;
+use der::asn1::Any;
 
 /// ```text
 /// KDC-REQ         ::= SEQUENCE {

@@ -19,6 +19,7 @@ use crate::asn1::authenticator::Authenticator;
 use crate::asn1::constants::PrincipalNameType;
 use crate::asn1::ticket_flags::TicketFlags;
 use crate::asn1::{
+    Ia5String, OctetString,
     constants::{encryption_types::EncryptionType, pa_data_types::PaDataType},
     enc_kdc_rep_part::EncKdcRepPart as Asn1EncKdcRepPart,
     enc_ticket_part::{EncTicketPart, TaggedEncTicketPart},
@@ -34,7 +35,6 @@ use crate::asn1::{
     realm::Realm,
     tagged_enc_kdc_rep_part::TaggedEncKdcRepPart,
     tagged_ticket::TaggedTicket as Asn1Ticket,
-    Ia5String, OctetString,
 };
 use crate::constants::{PBKDF2_SHA1_ITER, PBKDF2_SHA1_ITER_MINIMUM, RFC_PBKDF2_SHA1_ITER};
 use crate::crypto::{
@@ -386,7 +386,7 @@ impl SessionKey {
                 SessionKey::Aes256CtsHmacSha196 { k },
             ) => decrypt_aes256_cts_hmac_sha1_96(k, &data, key_usage)?,
             (EncryptedData::Opaque { .. }, SessionKey::Aes256CtsHmacSha196 { .. }) => {
-                return Err(KrbError::UnsupportedEncryption)
+                return Err(KrbError::UnsupportedEncryption);
             }
         };
 
@@ -1287,9 +1287,11 @@ impl TryInto<PrincipalName> for &Name {
     fn try_into(self) -> Result<PrincipalName, KrbError> {
         match self {
             Name::Principal { name, realm: _ } => {
-                let name_string = vec![Ia5String::new(name)
-                    .map(KerberosString)
-                    .map_err(|_| KrbError::DerEncodeKerberosString)?];
+                let name_string = vec![
+                    Ia5String::new(name)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                ];
 
                 Ok(PrincipalName {
                     name_type: PrincipalNameType::NtPrincipal as i32,
@@ -1370,9 +1372,11 @@ impl TryInto<(PrincipalName, Realm)> for &Name {
     fn try_into(self) -> Result<(PrincipalName, Realm), KrbError> {
         match self {
             Name::Principal { name, realm } => {
-                let name_string = vec![Ia5String::new(name)
-                    .map(KerberosString)
-                    .map_err(|_| KrbError::DerEncodeKerberosString)?];
+                let name_string = vec![
+                    Ia5String::new(name)
+                        .map(KerberosString)
+                        .map_err(|_| KrbError::DerEncodeKerberosString)?,
+                ];
 
                 let realm = Ia5String::new(realm)
                     .map(KerberosString)
@@ -1663,7 +1667,7 @@ mod tests {
     use crate::{cksum::ChecksumBuilder, constants::PBKDF2_SHA1_ITER_MINIMUM};
     use assert_hex::assert_eq_hex;
     use crypto_glue::aes256::{self, Aes256Key};
-    use der::{asn1::Any, Decode};
+    use der::{Decode, asn1::Any};
 
     #[tokio::test]
     async fn test_ap_req_authenticator_checksum() {

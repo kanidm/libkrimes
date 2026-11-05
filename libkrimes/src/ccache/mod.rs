@@ -4,8 +4,8 @@ mod cc_file;
 #[cfg(feature = "keyring")]
 mod cc_keyring;
 
-use crate::asn1::constants::encryption_types::EncryptionType as Asn1EncryptionType;
 use crate::asn1::constants::PrincipalNameType;
+use crate::asn1::constants::encryption_types::EncryptionType as Asn1EncryptionType;
 use crate::asn1::encrypted_data::EncryptedData as Asn1EncryptedData;
 use crate::asn1::tagged_ticket::TaggedTicket as Asn1TaggedTicket;
 use crate::asn1::tagged_ticket::Ticket as Asn1Ticket;
@@ -15,9 +15,9 @@ use crate::error::KrbError;
 use crate::proto::KerberosCredentials;
 use crate::proto::{EncTicket, EncryptedData, KdcReplyPart, Name, SessionKey};
 use binrw::{binread, binwrite};
-use chrono::prelude::DateTime;
 use chrono::Utc;
-use crypto_glue::der::{asn1::OctetString, Encode};
+use chrono::prelude::DateTime;
+use crypto_glue::der::{Encode, asn1::OctetString};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;

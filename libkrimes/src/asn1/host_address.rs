@@ -1,5 +1,5 @@
-use der::asn1::OctetString;
 use der::Sequence;
+use der::asn1::OctetString;
 
 /// ```text
 /// HostAddress     ::= SEQUENCE  {

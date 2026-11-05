@@ -1,13 +1,13 @@
 #![allow(unused_assignments)]
-use crate::asn1::constants::encryption_types::EncryptionType;
 use crate::asn1::constants::PrincipalNameType;
+use crate::asn1::constants::encryption_types::EncryptionType;
 use crate::error::KrbError;
 use crate::keytab::{Keytab, KeytabEntry};
 use crate::proto::{DerivedKey, Name};
+use binrw::BinReaderExt;
 use binrw::helpers::until_eof;
 use binrw::io::{SeekFrom, TakeSeekExt};
-use binrw::BinReaderExt;
-use binrw::{binread, binwrite, BinWrite};
+use binrw::{BinWrite, binread, binwrite};
 use crypto_glue::aes256;
 use std::fmt;
 use std::fs::File;
