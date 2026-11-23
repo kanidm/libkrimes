@@ -117,6 +117,12 @@ impl FileCredentialCache {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, KrbError> {
         let path = path.as_ref();
         let buffer = std::fs::read(path).map_err(|e| {
+            if let Some(libc::ENOENT | libc::ENOTDIR | libc::ELOOP | libc::ENAMETOOLONG) =
+                e.raw_os_error()
+            {
+                debug!(?path, ?e, "Credential cache file not found");
+                return KrbError::CredentialCacheNotFound;
+            }
             error!(?path, ?e, "Failed to read credential cache");
             KrbError::IoError
         })?;
@@ -397,6 +403,44 @@ mod tests {
         // principal round-trips
         assert_eq!(ctx.principal()?, name);
         Ok(())
+    }
+
+    /// principal() and dump() on a cache that does not exist must return
+    /// CredentialCacheNotFound, including when a path component is not a directory.
+    #[tokio::test]
+    async fn test_ccache_file_missing_is_not_found() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let not_a_dir = dir.path().join("regular_file");
+        std::fs::write(&not_a_dir, b"").expect("write");
+
+        for path in [
+            dir.path().join("does_not_exist"),
+            not_a_dir.join("does_not_exist"),
+        ] {
+            let ctx = FileCredentialCacheContext {
+                cccol_path: None,
+                path,
+            };
+            assert!(matches!(
+                ctx.principal(),
+                Err(KrbError::CredentialCacheNotFound)
+            ));
+            assert!(matches!(ctx.dump(), Err(KrbError::CredentialCacheNotFound)));
+        }
+    }
+
+    /// An existing but empty cache file is a format error, not a missing cache
+    #[tokio::test]
+    async fn test_ccache_file_empty_is_not_not_found() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("empty");
+        std::fs::write(&path, b"").expect("write");
+
+        let ctx = FileCredentialCacheContext {
+            cccol_path: None,
+            path,
+        };
+        assert!(matches!(ctx.principal(), Err(KrbError::BinRWError)));
     }
 
     /// destroy() on a path that does not exist must be a no-op returning Ok.

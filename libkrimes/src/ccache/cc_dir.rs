@@ -388,6 +388,28 @@ mod tests {
         Ok(())
     }
 
+    /// The primary of a fresh collection points at a file that does not exist
+    /// yet. Reading its principal must report CredentialCacheNotFound, like
+    /// the keyring backend, so callers can tell an uninitialized primary from a failure.
+    #[tokio::test]
+    async fn test_ccache_dir_fresh_primary_is_not_found() -> Result<(), KrbError> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ccache_name = OsString::from(format!("DIR:{}", dir.path().display()));
+        let ResolvedCredentialCache::Collection(cccol) =
+            crate::ccache::resolve(Some(&ccache_name))?
+        else {
+            panic!("Expected a collection")
+        };
+
+        let primary = cccol.primary()?;
+        assert!(matches!(
+            primary.principal(),
+            Err(KrbError::CredentialCacheNotFound)
+        ));
+        assert!(cccol.subsidiaries()?.is_empty());
+        Ok(())
+    }
+
     /// End-to-end with a real TGT stored in a DIR collection; MIT must read it
     /// both as a collection (DIR:<dir>) and as a subsidiary (DIR::<dir>/<sub>).
     #[tokio::test]
