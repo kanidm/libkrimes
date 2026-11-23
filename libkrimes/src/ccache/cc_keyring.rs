@@ -567,6 +567,30 @@ impl KeyringCredentialCacheCollection {
         let mut collection = get_collection(&self.residual)?;
         store_primary_subsidiary_name(&mut collection, subsidiary_name)
     }
+
+    /// Name of the primary subsidiary. If the collection has no primary yet,
+    /// the collection name is stored as the primary.
+    fn primary_name(&self) -> Result<String, KrbError> {
+        let mut collection = get_collection(&self.residual)?;
+        match get_primary_subsidiary_name(&mut collection)? {
+            Some(name) => Ok(name),
+            None => {
+                let name = self.residual.collection.clone();
+                self.store_primary_subsidiary_name(&name)?;
+                Ok(name)
+            }
+        }
+    }
+
+    fn subsidiary(&self, name: String) -> Box<dyn CredentialCache> {
+        Box::new(KeyringCredentialCacheContext {
+            residual: Residual {
+                anchor: self.residual.anchor.clone(),
+                collection: self.residual.collection.clone(),
+                subsidiary: Some(name),
+            },
+        })
+    }
 }
 
 impl CredentialCacheCollection for KeyringCredentialCacheCollection {
@@ -579,30 +603,7 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
     }
 
     fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
-        let mut collection = get_collection(&self.residual)?;
-
-        let cc = match get_primary_subsidiary_name(&mut collection)? {
-            Some(name) => {
-                let residual = Residual {
-                    anchor: self.residual.anchor.clone(),
-                    collection: self.residual.collection.clone(),
-                    subsidiary: Some(name.clone()),
-                };
-                KeyringCredentialCacheContext { residual }
-            }
-            None => {
-                let new_primary_name = self.residual.collection.clone();
-                let residual = Residual {
-                    anchor: self.residual.anchor.clone(),
-                    collection: self.residual.collection.clone(),
-                    subsidiary: Some(new_primary_name.clone()),
-                };
-                self.store_primary_subsidiary_name(&new_primary_name)?;
-                KeyringCredentialCacheContext { residual }
-            }
-        };
-
-        Ok(Box::new(cc))
+        Ok(self.subsidiary(self.primary_name()?))
     }
 
     fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
@@ -625,8 +626,11 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
         self.store_primary_subsidiary_name(&new_primary_name)
     }
 
+    /// List the caches of the collection: the primary first if it exists, then
+    /// the other subsidiaries. Listing the primary first makes lookups by
+    /// principal prefer it over other caches for the same principal.
     fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError> {
-        let mut subsidiaries: Vec<Box<dyn CredentialCache>> = vec![];
+        let primary_name = self.primary_name()?;
         let collection = get_collection(&self.residual)?;
         trace!(?collection, "Resolved collection within anchor");
         let (_, keyrings) = collection.read().map_err(|e| {
@@ -635,23 +639,24 @@ impl CredentialCacheCollection for KeyringCredentialCacheCollection {
         })?;
         trace!(?keyrings, "Read subsidiaries withing collection");
 
-        for k in keyrings {
-            let desc = k.description().map_err(|e| {
-                error!(?e, "Failed to get keyring description");
-                KrbError::CredentialCacheError
-            })?;
-            trace!(?k, ?desc, "Got subsidiary description");
+        let primary = matches!(self.subsidiary_exists(&primary_name), Ok(Some(_)))
+            .then(|| primary_name.clone());
+        // A keyring removed after the collection was read is skipped
+        let others = keyrings
+            .iter()
+            .filter_map(|k| {
+                k.description()
+                    .inspect_err(|e| error!(?k, ?e, "Failed to get keyring description"))
+                    .ok()
+            })
+            .map(|desc| desc.description)
+            .filter(|name| *name != primary_name);
 
-            let cc = KeyringCredentialCacheContext {
-                residual: Residual {
-                    anchor: self.residual.anchor.clone(),
-                    collection: self.residual.collection.clone(),
-                    subsidiary: Some(desc.description.clone()),
-                },
-            };
-            subsidiaries.push(Box::new(cc));
-        }
-        Ok(subsidiaries)
+        Ok(primary
+            .into_iter()
+            .chain(others)
+            .map(|name| self.subsidiary(name))
+            .collect())
     }
 }
 
@@ -822,6 +827,137 @@ mod tests {
         p1_cc.init(&p1, None)?;
         assert_eq!(cccol.subsidiaries()?.len(), 1);
         assert_eq!(cccol.find(&p1)?.principal()?, p1);
+
+        Ok(())
+    }
+
+    fn test_name(name: &str) -> Name {
+        Name::Principal {
+            name: name.to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        }
+    }
+
+    fn resolve_collection(ccache_name: &str) -> Box<dyn CredentialCacheCollection> {
+        let ccache_name = OsString::from(ccache_name);
+        let ResolvedCredentialCache::Collection(cccol) =
+            crate::ccache::resolve(Some(&ccache_name)).expect("resolve")
+        else {
+            panic!("Collection expected");
+        };
+        cccol
+    }
+
+    fn subsidiary_names(cccol: &dyn CredentialCacheCollection) -> Vec<String> {
+        cccol
+            .subsidiaries()
+            .expect("subsidiaries")
+            .iter()
+            .map(|cc| cc.name().expect("name").to_string_lossy().into_owned())
+            .collect()
+    }
+
+    // subsidiaries() must list the primary first, without repeating it, so
+    // find() prefers it over another cache for the same principal. A primary
+    // that does not exist must not be listed nor created.
+    #[cfg(feature = "keyring")]
+    #[tokio::test]
+    async fn test_ccache_keyring_subsidiaries_primary_first() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let residual = Residual::try_from("KEYRING:session:krime_test_order")?;
+        let _guard = ResidualGuard::new(&residual);
+        if get_collection(&residual).is_err() {
+            tracing::warn!("Skipping: no usable session keyring");
+            return Ok(());
+        }
+        let mut cccol = resolve_collection("KEYRING:session:krime_test_order");
+
+        // Link the other caches before the primary
+        let dup = test_name("dup");
+        for name in [test_name("other1"), dup.clone(), test_name("other2")] {
+            cccol.new_unique()?.init(&name, None)?;
+        }
+        let mut primary = cccol.primary()?;
+        primary.init(&dup, None)?;
+
+        let names = subsidiary_names(&*cccol);
+        assert_eq!(names.len(), 4, "{names:?}");
+        assert_eq!(names[0], primary.name()?.to_string_lossy());
+        assert_eq!(cccol.find(&dup)?.name()?, primary.name()?);
+
+        // Point the primary at a subsidiary that does not exist
+        let ghost = OsString::from("KEYRING:session:krime_test_order:ghost");
+        let ResolvedCredentialCache::Subsidiary(ghost) = crate::ccache::resolve(Some(&ghost))?
+        else {
+            panic!("Subsidiary expected");
+        };
+        cccol.switch(&*ghost)?;
+        let names = subsidiary_names(&*cccol);
+        assert_eq!(names.len(), 4, "{names:?}");
+        assert!(!names.iter().any(|n| n.ends_with(":ghost")), "{names:?}");
+        assert!(matches!(
+            ghost.principal(),
+            Err(KrbError::CredentialCacheNotFound)
+        ));
+
+        Ok(())
+    }
+
+    // Replay the cache selection of himmelblau's store_tgt(), which stores a
+    // cloud and an AD TGT on every logon: reuse the cache of the principal,
+    // else the primary if uninitialized, else a new cache. An empty leftover
+    // subsidiary must not lead to duplicate caches across logons.
+    #[cfg(feature = "keyring")]
+    #[tokio::test]
+    async fn test_ccache_keyring_store_per_principal() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let residual = Residual::try_from("KEYRING:session:krime_test_logon")?;
+        let _guard = ResidualGuard::new(&residual);
+        if get_collection(&residual).is_err() {
+            tracing::warn!("Skipping: no usable session keyring");
+            return Ok(());
+        }
+        let cccol = resolve_collection("KEYRING:session:krime_test_logon");
+
+        fn select_and_init(
+            cccol: &dyn CredentialCacheCollection,
+            name: &Name,
+        ) -> Result<(), KrbError> {
+            let mut cc = match cccol.find(name) {
+                Ok(cc) => cc,
+                Err(KrbError::CredentialCacheNotFound) => {
+                    let primary = cccol.primary()?;
+                    match primary.principal() {
+                        Err(KrbError::CredentialCacheNotFound) => primary,
+                        Ok(existing) if &existing == name => primary,
+                        Ok(_) => cccol.new_unique()?,
+                        Err(e) => return Err(e),
+                    }
+                }
+                Err(e) => return Err(e),
+            };
+            cc.init(name, None)
+        }
+
+        // An empty subsidiary, as left by an interrupted init()
+        get_subsidiary(&Residual {
+            subsidiary: Some("leftover".to_string()),
+            ..residual.clone()
+        })?;
+
+        let cloud = test_name("cloud");
+        let ad = test_name("ad");
+        for _ in 0..3 {
+            select_and_init(&*cccol, &cloud)?;
+            select_and_init(&*cccol, &ad)?;
+        }
+
+        let names = subsidiary_names(&*cccol);
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert_eq!(cccol.primary()?.principal()?, cloud);
+        assert_eq!(cccol.find(&ad)?.principal()?, ad);
 
         Ok(())
     }
