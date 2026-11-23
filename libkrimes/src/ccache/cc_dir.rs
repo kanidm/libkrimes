@@ -3,7 +3,7 @@ use crate::ccache::cc_file::FileCredentialCacheContext;
 use crate::ccache::{CredentialCache, CredentialCacheCollection, ResolvedCredentialCache};
 use crate::error::KrbError;
 use crypto_glue::rand::{self, RngExt, distr::Alphanumeric};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{DirBuilder, File, Permissions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -11,7 +11,6 @@ use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, trace};
-use walkdir::WalkDir;
 
 struct DirCredentialCacheCollection {
     cccol_path: PathBuf,
@@ -45,6 +44,13 @@ impl DirCredentialCacheCollection {
         Ok(Self {
             cccol_path: ccache_dir.to_owned(),
         })
+    }
+
+    /// Whether `name` is a cache file name within a collection. This excludes
+    /// the "primary" file.
+    fn is_cache_file_name(name: &OsStr) -> bool {
+        let name = name.as_bytes();
+        name.starts_with(b"tkt") && !name.contains(&b'/') && !name.contains(&b'\\')
     }
 
     /// Generate a subsidiary name. MIT only lists files named "tkt*" as
@@ -83,18 +89,32 @@ impl DirCredentialCacheCollection {
             KrbError::IoError
         })
     }
-}
 
-impl CredentialCacheCollection for DirCredentialCacheCollection {
-    fn cc_type(&self) -> &'static str {
-        "DIR"
+    /// Paths of the regular "tkt*" files directly within the collection
+    /// directory. Like MIT, an unreadable directory has no caches.
+    fn cache_files(&self) -> Vec<PathBuf> {
+        let entries = match std::fs::read_dir(&self.cccol_path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                error!(?e, ?self.cccol_path, "Failed to read collection directory");
+                return vec![];
+            }
+        };
+        entries
+            .filter_map(|entry| {
+                entry
+                    .inspect_err(|e| error!(?e, "Failed to read directory entry"))
+                    .ok()
+            })
+            .filter(|entry| Self::is_cache_file_name(&entry.file_name()))
+            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
+            .map(|entry| entry.path())
+            .collect()
     }
 
-    fn name(&self) -> Result<OsString, KrbError> {
-        self.primary()?.name()
-    }
-
-    fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
+    /// Read the name of the primary subsidiary from the primary file. Returns
+    /// `None`, without creating it, if the primary file does not exist.
+    fn read_primary_name(&self) -> Result<Option<OsString>, KrbError> {
         let primary = self.cccol_path.join("primary");
         match primary.try_exists() {
             Ok(true) => {
@@ -121,28 +141,40 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
                         .unwrap_or(0);
                     &buffer[start..end]
                 };
-                let subsidiary_name = std::ffi::OsStr::from_bytes(trimmed);
-                let primary_path = self.cccol_path.join(subsidiary_name);
-                let fcc = FileCredentialCacheContext {
-                    cccol_path: Some(self.cccol_path.clone()),
-                    path: primary_path,
-                };
-                Ok(Box::new(fcc))
+                Ok(Some(OsStr::from_bytes(trimmed).to_owned()))
             }
-            Ok(false) => {
-                let primary_name = "tkt".to_string();
-                self.store_primary_subsidiary_name(&primary_name)?;
-                let fcc = FileCredentialCacheContext {
-                    cccol_path: Some(self.cccol_path.clone()),
-                    path: self.cccol_path.join(primary_name),
-                };
-                Ok(Box::new(fcc))
-            }
+            Ok(false) => Ok(None),
             Err(e) => {
                 error!(?e, ?primary, "Failed to read primary credentials");
                 Err(KrbError::IoError)
             }
         }
+    }
+}
+
+impl CredentialCacheCollection for DirCredentialCacheCollection {
+    fn cc_type(&self) -> &'static str {
+        "DIR"
+    }
+
+    fn name(&self) -> Result<OsString, KrbError> {
+        self.primary()?.name()
+    }
+
+    fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
+        let subsidiary_name = match self.read_primary_name()? {
+            Some(name) => name,
+            None => {
+                let primary_name = OsString::from("tkt");
+                self.store_primary_subsidiary_name(&primary_name)?;
+                primary_name
+            }
+        };
+        let fcc = FileCredentialCacheContext {
+            cccol_path: Some(self.cccol_path.clone()),
+            path: self.cccol_path.join(subsidiary_name),
+        };
+        Ok(Box::new(fcc))
     }
 
     fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
@@ -179,30 +211,32 @@ impl CredentialCacheCollection for DirCredentialCacheCollection {
         Ok(())
     }
 
+    /// List the caches of the collection: the primary first if its file
+    /// exists, then the other "tkt*" files directly within the collection
+    /// directory.
     fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError> {
-        let subsidiaries: Vec<Box<dyn CredentialCache>> = WalkDir::new(&self.cccol_path)
+        // MIT rejects a primary that is not a "tkt*" file name, and the cursor
+        // then ignores it.
+        let primary = match self.read_primary_name() {
+            Ok(Some(name)) if Self::is_cache_file_name(&name) => {
+                Some(self.cccol_path.join(name)).filter(|path| path.exists())
+            }
+            _ => None,
+        };
+        let others = self
+            .cache_files()
             .into_iter()
-            .map(|dir_ent| {
-                dir_ent
-                    .inspect_err(|err| error!(?err, "Failed to read directory entry"))
-                    .and_then(|dir_ent| {
-                        dir_ent
-                            .metadata()
-                            .inspect_err(|err| {
-                                error!(?err, "Failed to read directory entry metadata")
-                            })
-                            .map(|dir_ent_meta| (dir_ent, dir_ent_meta))
-                    })
-                    .map_err(|_| KrbError::IoError)
-            })
-            .filter_map(|x| x.ok())
-            .filter_map(|entry| {
-                (entry.1.is_file() && entry.0.file_name() != "primary").then(|| {
-                    Box::new(FileCredentialCacheContext {
-                        cccol_path: Some(self.cccol_path.clone()),
-                        path: entry.0.into_path(),
-                    }) as Box<dyn CredentialCache>
-                })
+            .filter(|path| Some(path) != primary.as_ref());
+
+        let subsidiaries = primary
+            .clone()
+            .into_iter()
+            .chain(others)
+            .map(|path| {
+                Box::new(FileCredentialCacheContext {
+                    cccol_path: Some(self.cccol_path.clone()),
+                    path,
+                }) as Box<dyn CredentialCache>
             })
             .collect();
         Ok(subsidiaries)
@@ -384,6 +418,81 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&cccol_path).ok();
+        Ok(())
+    }
+
+    /// subsidiaries() must list the primary first, if it exists, then the other
+    /// "tkt*" files directly within the collection directory. The "primary"
+    /// file, other files, directories and nested files are not caches, and
+    /// neither is a primary file naming something that is not a "tkt*" file.
+    #[tokio::test]
+    async fn test_ccache_dir_subsidiaries_like_mit() -> Result<(), KrbError> {
+        fn sorted(mut v: Vec<String>) -> Vec<String> {
+            v.sort();
+            v
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cccol_path = dir.path().to_str().expect("Failed to get path");
+        let ccache_name = OsString::from(format!("DIR:{cccol_path}"));
+        let ResolvedCredentialCache::Collection(cccol) =
+            crate::ccache::resolve(Some(&ccache_name))?
+        else {
+            panic!("Expected a collection")
+        };
+
+        let principal = Name::Principal {
+            name: "p1".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+        for file in ["tkt", "tktA", "tktB", "custom"] {
+            let ccache_name = OsString::from(format!("DIR::{cccol_path}/{file}"));
+            let ResolvedCredentialCache::Subsidiary(mut cc) =
+                crate::ccache::resolve(Some(&ccache_name))?
+            else {
+                panic!("Expected a subsidiary")
+            };
+            cc.init(&principal, None)?;
+        }
+        std::fs::write(dir.path().join("other"), b"").expect("write");
+        std::fs::create_dir(dir.path().join("tktdir")).expect("mkdir");
+        std::fs::write(dir.path().join("tktdir").join("tktnested"), b"").expect("write");
+
+        let listed = || -> Vec<String> {
+            cccol
+                .subsidiaries()
+                .expect("subsidiaries")
+                .iter()
+                .map(|cc| {
+                    let name = PathBuf::from(cc.name().expect("name"));
+                    name.file_name().unwrap().to_string_lossy().into_owned()
+                })
+                .collect()
+        };
+        let set_primary = |contents: &str| {
+            std::fs::write(dir.path().join("primary"), contents).expect("write");
+        };
+
+        // No primary file. It must not be created.
+        assert_eq!(sorted(listed()), ["tkt", "tktA", "tktB"]);
+        assert!(!dir.path().join("primary").exists());
+
+        // The primary comes first and is not repeated.
+        set_primary("tktB\n");
+        let files = listed();
+        assert_eq!(files[0], "tktB");
+        assert_eq!(sorted(files), ["tkt", "tktA", "tktB"]);
+
+        // Invalid primary names are ignored, including the primary file itself.
+        for invalid in ["custom\n", "primary\n", "tktdir/tktnested\n"] {
+            set_primary(invalid);
+            assert_eq!(sorted(listed()), ["tkt", "tktA", "tktB"], "{invalid}");
+        }
+
+        // A primary whose file does not exist is not listed.
+        set_primary("tktghost\n");
+        assert_eq!(sorted(listed()), ["tkt", "tktA", "tktB"]);
+
         Ok(())
     }
 
