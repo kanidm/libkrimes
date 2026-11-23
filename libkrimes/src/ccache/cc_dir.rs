@@ -47,13 +47,15 @@ impl DirCredentialCacheCollection {
         })
     }
 
+    /// Generate a subsidiary name. MIT only lists files named "tkt*" as
+    /// caches in a collection.
     fn gen_random_subsidiary_name() -> String {
         let s: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(6)
             .map(char::from)
             .collect();
-        format!("krb{s}")
+        format!("tkt{s}")
     }
 
     fn store_primary_subsidiary_name<P: AsRef<Path>>(
@@ -301,14 +303,11 @@ mod tests {
 
         // Residual without subsidiary -> switch primary -> new primary subsidiary
         let new = cccol.new_unique()?;
-        assert!(
-            new.name()?
-                .to_string_lossy()
-                .split("/")
-                .last()
-                .unwrap()
-                .starts_with("krb")
-        );
+        // MIT names new subsidiaries "tktXXXXXX" and only lists "tkt*" files
+        let new_name = new.name()?.to_string_lossy().into_owned();
+        let new_file = new_name.split("/").last().unwrap();
+        assert!(new_file.starts_with("tkt"));
+        assert_eq!(new_file.len(), "tktXXXXXX".len());
         cccol.switch(&*new)?;
         assert_eq!(cccol.name()?, new.name()?);
         assert_eq!(cccol.full_name()?, new.full_name()?);
