@@ -607,10 +607,20 @@ pub trait CredentialCacheCollection {
     fn switch(&mut self, ccache: &dyn CredentialCache) -> Result<(), KrbError>;
     fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError>;
 
+    /// Find the subsidiary cache whose default principal is `name`.
+    ///
+    /// Subsidiaries whose principal can not be read (uninitialized, unreadable or corrupt) are
+    /// skipped, so they can not hide a matching subsidiary that comes later in the collection.
+    ///
+    /// Returns `CredentialCacheNotFound` if no subsidiary matches.
     fn find(&self, name: &Name) -> Result<Box<dyn CredentialCache>, KrbError> {
         for cc in self.subsidiaries()? {
-            if &cc.principal()? == name {
-                return Ok(cc);
+            match cc.principal() {
+                Ok(principal) if &principal == name => return Ok(cc),
+                Ok(_) => {}
+                Err(error) => {
+                    trace!(?error, "Skipping subsidiary without a readable principal");
+                }
             }
         }
         Err(KrbError::CredentialCacheNotFound)
@@ -702,6 +712,113 @@ mod tests {
         );
 
         String::from_utf8_lossy(output.stdout.as_slice()).to_string()
+    }
+
+    /// What a mock subsidiary reports when asked for its principal.
+    #[derive(Clone)]
+    enum MockPrincipal {
+        Principal(Name),
+        NotFound,
+        Io,
+        Format,
+    }
+
+    struct MockCache(MockPrincipal);
+
+    impl CredentialCache for MockCache {
+        fn cc_type(&self) -> &'static str {
+            "MOCK"
+        }
+        fn name(&self) -> Result<OsString, KrbError> {
+            Ok(OsString::from("mock"))
+        }
+        fn init(&mut self, _name: &Name, _clock_skew: Option<Duration>) -> Result<(), KrbError> {
+            Err(KrbError::CredentialCacheError)
+        }
+        fn destroy(&mut self) -> Result<(), KrbError> {
+            Err(KrbError::CredentialCacheError)
+        }
+        fn store(&mut self, _credentials: &KerberosCredentials) -> Result<(), KrbError> {
+            Err(KrbError::CredentialCacheError)
+        }
+        fn principal(&self) -> Result<Name, KrbError> {
+            match &self.0 {
+                MockPrincipal::Principal(name) => Ok(name.clone()),
+                MockPrincipal::NotFound => Err(KrbError::CredentialCacheNotFound),
+                MockPrincipal::Io => Err(KrbError::IoError),
+                MockPrincipal::Format => Err(KrbError::BinRWError),
+            }
+        }
+        fn dump(&self) -> Result<(), KrbError> {
+            Err(KrbError::CredentialCacheError)
+        }
+    }
+
+    /// A collection that only implements `subsidiaries()`, in a fixed order.
+    struct MockCollection(Vec<MockPrincipal>);
+
+    impl CredentialCacheCollection for MockCollection {
+        fn cc_type(&self) -> &'static str {
+            "MOCK"
+        }
+        fn name(&self) -> Result<OsString, KrbError> {
+            Ok(OsString::from("mock"))
+        }
+        fn primary(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
+            Err(KrbError::CredentialCacheError)
+        }
+        fn new_unique(&self) -> Result<Box<dyn CredentialCache>, KrbError> {
+            Err(KrbError::CredentialCacheError)
+        }
+        fn switch(&mut self, _ccache: &dyn CredentialCache) -> Result<(), KrbError> {
+            Err(KrbError::CredentialCacheError)
+        }
+        fn subsidiaries(&self) -> Result<Vec<Box<dyn CredentialCache>>, KrbError> {
+            Ok(self
+                .0
+                .iter()
+                .cloned()
+                .map(|p| Box::new(MockCache(p)) as Box<dyn CredentialCache>)
+                .collect())
+        }
+    }
+
+    fn test_name(name: &str) -> Name {
+        Name::Principal {
+            name: name.to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        }
+    }
+
+    // find() must skip subsidiaries whose principal can not be read, whatever
+    // the error, instead of aborting the scan before reaching the match.
+    #[tokio::test]
+    async fn test_find_skips_unreadable_subsidiaries() -> Result<(), KrbError> {
+        let wanted = test_name("wanted");
+        let cccol = MockCollection(vec![
+            MockPrincipal::NotFound,
+            MockPrincipal::Io,
+            MockPrincipal::Format,
+            MockPrincipal::Principal(test_name("other")),
+            MockPrincipal::Principal(wanted.clone()),
+        ]);
+
+        assert_eq!(cccol.find(&wanted)?.principal()?, wanted);
+        Ok(())
+    }
+
+    // find() must report CredentialCacheNotFound, not the error of an
+    // unreadable subsidiary, when no subsidiary matches.
+    #[tokio::test]
+    async fn test_find_not_found_ignores_unreadable_subsidiaries() {
+        let cccol = MockCollection(vec![
+            MockPrincipal::Io,
+            MockPrincipal::Format,
+            MockPrincipal::Principal(test_name("other")),
+        ]);
+
+        let res = cccol.find(&test_name("absent"));
+        assert!(matches!(res, Err(KrbError::CredentialCacheNotFound)));
     }
 
     #[tokio::test]
