@@ -384,6 +384,22 @@ fn get_subsidiary(residual: &Residual) -> Result<Keyring, KrbError> {
     }
 }
 
+/// Look up the subsidiary keyring without creating it.
+///
+/// Returns `None` if the subsidiary has not been initialized.
+fn find_subsidiary(residual: &Residual) -> Result<Option<Keyring>, KrbError> {
+    let name = residual
+        .subsidiary
+        .as_ref()
+        .ok_or(KrbError::CredentialCacheNotFound)?;
+    let collection = get_collection(residual)?;
+    match collection.search_for_keyring(name.as_str(), None) {
+        Ok(k) => Ok(Some(k)),
+        Err(errno::Errno(libc::ENOKEY)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
 struct KeyringCredentialCacheContext {
     residual: Residual,
 }
@@ -400,8 +416,10 @@ impl KeyringCredentialCacheContext {
     }
 
     fn time_offsets(&self) -> Result<Option<TimeOffsets>, KrbError> {
-        let subsidiary = get_subsidiary(&self.residual)?;
-        get_subsidiary_time_offsets(&subsidiary)
+        match find_subsidiary(&self.residual)? {
+            Some(subsidiary) => get_subsidiary_time_offsets(&subsidiary),
+            None => Ok(None),
+        }
     }
 
     fn clear(&self) -> Result<(), KrbError> {
@@ -475,7 +493,8 @@ impl CredentialCache for KeyringCredentialCacheContext {
         let stored_name = self.principal()?;
         println!("Default principal: {:?}", stored_name);
 
-        let subsidiary = get_subsidiary(&self.residual)?;
+        let subsidiary =
+            find_subsidiary(&self.residual)?.ok_or(KrbError::CredentialCacheNotFound)?;
         let (keys, _) = subsidiary.read().map_err(|e| {
             error!(?e, "Failed to read subsidiary");
             KrbError::CredentialCacheError
@@ -504,7 +523,8 @@ impl CredentialCache for KeyringCredentialCacheContext {
     }
 
     fn principal(&self) -> Result<Name, KrbError> {
-        let subsidiary = get_subsidiary(&self.residual)?;
+        let subsidiary =
+            find_subsidiary(&self.residual)?.ok_or(KrbError::CredentialCacheNotFound)?;
         get_subsidiary_principal(&subsidiary)?.ok_or(KrbError::CredentialCacheNotFound)
     }
 }
@@ -754,6 +774,54 @@ mod tests {
         let offsets = get_subsidiary_time_offsets(&subsidiary)?.expect("offsets");
         assert_eq!(offsets.secs, 7);
         assert_eq!(offsets.usecs, 500);
+
+        Ok(())
+    }
+
+    // Reading the principal or dumping an uninitialized subsidiary must fail
+    // with CredentialCacheNotFound without creating the subsidiary keyring,
+    // otherwise it shows up as an empty entry in subsidiaries().
+    #[cfg(feature = "keyring")]
+    #[tokio::test]
+    async fn test_ccache_keyring_read_does_not_create_subsidiary() -> Result<(), KrbError> {
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let residual = Residual::try_from("KEYRING:session:krime_test_nocreate")?;
+        let _guard = ResidualGuard::new(&residual);
+
+        // Guard against environments without a usable session keyring.
+        if get_collection(&residual).is_err() {
+            tracing::warn!("Skipping: no usable session keyring");
+            return Ok(());
+        }
+
+        let ccache_name = OsString::from("KEYRING:session:krime_test_nocreate");
+        let ResolvedCredentialCache::Collection(cccol) =
+            crate::ccache::resolve(Some(&ccache_name))?
+        else {
+            panic!("Collection expected");
+        };
+
+        let primary = cccol.primary()?;
+        assert!(matches!(
+            primary.principal(),
+            Err(KrbError::CredentialCacheNotFound)
+        ));
+        assert!(matches!(
+            primary.dump(),
+            Err(KrbError::CredentialCacheNotFound)
+        ));
+        assert!(cccol.subsidiaries()?.is_empty());
+
+        // An initialized subsidiary is found, and is the only one listed.
+        let p1 = Name::Principal {
+            name: "p1".to_string(),
+            realm: "EXAMPLE.COM".to_string(),
+        };
+        let mut p1_cc = cccol.new_unique()?;
+        p1_cc.init(&p1, None)?;
+        assert_eq!(cccol.subsidiaries()?.len(), 1);
+        assert_eq!(cccol.find(&p1)?.principal()?, p1);
 
         Ok(())
     }
